@@ -18,6 +18,8 @@ use crate::thunderbird;
 #[derive(Debug, Clone)]
 pub enum ActionResult {
     Success(String),
+    /// Import completed — the main thread should rebuild the tray menu.
+    Imported(String),
     Error(String),
 }
 
@@ -125,7 +127,7 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
     thread::spawn(move || {
         let result = run_import_thunderbird();
         let action_result = match result {
-            Ok(message) => ActionResult::Success(message),
+            Ok(message) => ActionResult::Imported(message),
             Err(e) => ActionResult::Error(format!("Import error: {}", e)),
         };
         let _ = result_sender.send(action_result);

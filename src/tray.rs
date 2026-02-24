@@ -68,6 +68,15 @@ pub fn run_tray() -> Result<()> {
 
         // Handle action results (notifications)
         if let Ok(result) = result_receiver.try_recv() {
+            if let crate::tray_actions::ActionResult::Imported(_) = &result {
+                // Rebuild menu so Export/Sort submenus reflect new accounts
+                if let Some(ref icon) = tray_icon {
+                    match create_menu() {
+                        Ok(new_menu) => icon.set_menu(Some(Box::new(new_menu))),
+                        Err(e) => eprintln!("Failed to rebuild menu: {}", e),
+                    }
+                }
+            }
             show_notification(&result);
         }
 
@@ -98,50 +107,33 @@ fn create_menu() -> Result<Menu> {
 
     // Get account names for submenus
     let accounts = tray_actions::get_account_names().unwrap_or_default();
+    let has_accounts = !accounts.is_empty();
 
-    // Export submenu
-    let export_submenu = Submenu::new("Export compte", true);
     let no_accel: Option<Accelerator> = None;
 
-    if accounts.is_empty() {
+    // Export submenu — disabled until at least one account is configured
+    let export_submenu = Submenu::new("Export compte", has_accounts);
+    for account in &accounts {
+        let id = format!("{}{}", menu_ids::EXPORT_PREFIX, account);
         let _ = export_submenu.append(&MenuItem::with_id(
-            "no_accounts",
-            "(no accounts configured)",
-            false,
+            id,
+            account,
+            true,
             no_accel.clone(),
         ));
-    } else {
-        for account in &accounts {
-            let id = format!("{}{}", menu_ids::EXPORT_PREFIX, account);
-            let _ = export_submenu.append(&MenuItem::with_id(
-                id,
-                account,
-                true,
-                no_accel.clone(),
-            ));
-        }
     }
     menu.append(&export_submenu)?;
 
-    // Sort submenu
-    let sort_submenu = Submenu::new("Trier emails", true);
-    if accounts.is_empty() {
+    // Sort submenu — disabled until at least one account is configured
+    let sort_submenu = Submenu::new("Trier emails", has_accounts);
+    for account in &accounts {
+        let id = format!("{}{}", menu_ids::SORT_PREFIX, account);
         let _ = sort_submenu.append(&MenuItem::with_id(
-            "no_accounts_sort",
-            "(no accounts configured)",
-            false,
+            id,
+            account,
+            true,
             no_accel.clone(),
         ));
-    } else {
-        for account in &accounts {
-            let id = format!("{}{}", menu_ids::SORT_PREFIX, account);
-            let _ = sort_submenu.append(&MenuItem::with_id(
-                id,
-                account,
-                true,
-                no_accel.clone(),
-            ));
-        }
     }
     menu.append(&sort_submenu)?;
 
@@ -253,22 +245,38 @@ fn load_icon_from_file(path: &str) -> Result<tray_icon::Icon> {
         .context("Failed to create icon from image")
 }
 
-/// Create a simple default icon (solid blue square - maximum visibility).
+/// Create a default envelope icon (16x16).
 fn create_default_icon() -> Result<tray_icon::Icon> {
-    // Create a 16x16 icon (standard Windows tray icon size)
     let size = 16u32;
     let mut rgba = vec![0u8; (size * size * 4) as usize];
 
-    // Fill with solid blue color - no transparency
-    for i in 0..(size * size) as usize {
-        let idx = i * 4;
-        rgba[idx] = 30;      // R
-        rgba[idx + 1] = 136; // G
-        rgba[idx + 2] = 229; // B (Material Blue)
-        rgba[idx + 3] = 255; // A (fully opaque)
+    // Blue background
+    for chunk in rgba.chunks_exact_mut(4) {
+        chunk.copy_from_slice(&[30u8, 136, 229, 255]);
     }
 
-    println!("Creating icon: {}x{}, {} bytes", size, size, rgba.len());
+    let set = |buf: &mut Vec<u8>, x: u32, y: u32| {
+        if x < size && y < size {
+            let i = ((y * size + x) * 4) as usize;
+            buf[i..i + 4].copy_from_slice(&[255u8, 255, 255, 255]);
+        }
+    };
+
+    // Envelope rectangle border: (1,2) to (14,13)
+    for x in 1u32..15 {
+        set(&mut rgba, x, 2);
+        set(&mut rgba, x, 13);
+    }
+    for y in 3u32..13 {
+        set(&mut rgba, 1, y);
+        set(&mut rgba, 14, y);
+    }
+
+    // Flap: V shape from top corners down to centre
+    for i in 0u32..6 {
+        set(&mut rgba, 2 + i, 3 + i);   // left diagonal
+        set(&mut rgba, 13 - i, 3 + i);  // right diagonal
+    }
 
     tray_icon::Icon::from_rgba(rgba, size, size).context("Failed to create default icon")
 }
@@ -276,8 +284,7 @@ fn create_default_icon() -> Result<tray_icon::Icon> {
 /// Show a notification to the user.
 fn show_notification(result: &ActionResult) {
     match result {
-        ActionResult::Success(message) => {
-            // Use rfd for cross-platform message dialog
+        ActionResult::Success(message) | ActionResult::Imported(message) => {
             rfd::MessageDialog::new()
                 .set_title("Email to Markdown")
                 .set_description(message)
