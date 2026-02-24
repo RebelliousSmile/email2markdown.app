@@ -58,13 +58,17 @@ pub struct Config {
 impl Config {
     /// Load configuration from YAML file and inject passwords from environment.
     pub fn load(config_path: &Path) -> Result<Self, ConfigError> {
+        if !config_path.exists() {
+            return Ok(Config { accounts: vec![] });
+        }
         let content = fs::read_to_string(config_path)?;
         let mut config: Config = serde_yaml::from_str(&content)?;
 
         // Inject passwords from environment
         for account in &mut config.accounts {
-            let app_password_var = format!("{}_APPLICATION_PASSWORD", account.name.to_uppercase());
-            let password_var = format!("{}_PASSWORD", account.name.to_uppercase());
+            let sanitized_name = account.name.to_uppercase().replace(['@', '.', '-'], "_");
+            let app_password_var = format!("{}_APPLICATION_PASSWORD", sanitized_name);
+            let password_var = format!("{}_PASSWORD", sanitized_name);
 
             account.password = env::var(&app_password_var)
                 .ok()
@@ -79,10 +83,6 @@ impl Config {
 
     /// [6] Validate the configuration
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.accounts.is_empty() {
-            return Err(ConfigError::ValidationError("No accounts configured".into()));
-        }
-
         for account in &self.accounts {
             // Check required fields
             if account.name.is_empty() {

@@ -40,6 +40,15 @@ enum Commands {
         /// Also generate .env template
         #[arg(long)]
         generate_env: bool,
+
+        /// Extract passwords from Thunderbird and write them to .env
+        /// (Thunderbird must be closed during this operation)
+        #[arg(long)]
+        extract_passwords: bool,
+
+        /// Thunderbird Master Password (only needed if you configured one)
+        #[arg(long)]
+        master_password: Option<String>,
     },
 
     /// Export emails from IMAP accounts
@@ -131,6 +140,8 @@ fn main() -> Result<()> {
             list_profiles,
             output,
             generate_env,
+            extract_passwords,
+            master_password,
         } => {
             if list_profiles {
                 println!("Available Thunderbird profiles:");
@@ -166,14 +177,15 @@ fn main() -> Result<()> {
                 let profiles = thunderbird::list_profiles()
                     .context("Could not find Thunderbird profiles")?;
 
+                // Prefer the marked default, but only if it has prefs.js (it may be an empty placeholder)
+                let has_prefs = |p: &thunderbird::ThunderbirdProfile| p.path.join("prefs.js").exists();
+
                 profiles
-                    .into_iter()
-                    .find(|p| p.is_default)
-                    .or_else(|| {
-                        println!("No default profile found, using first available");
-                        None
-                    })
-                    .context("No Thunderbird profiles found")?
+                    .iter()
+                    .find(|p| p.is_default && has_prefs(p))
+                    .or_else(|| profiles.iter().find(|p| has_prefs(p)))
+                    .cloned()
+                    .context("No usable Thunderbird profiles found (no prefs.js)")?
             };
 
             println!("Using Thunderbird profile: {} ({})", tb_profile.name, tb_profile.path.display());
@@ -212,8 +224,39 @@ fn main() -> Result<()> {
                 println!("\nRemember to:");
                 println!("  1. Review and adjust accounts.yaml");
                 println!("  2. Copy .env.template to .env and add passwords");
-            } else {
+            } else if !extract_passwords {
                 println!("\nRemember to add passwords to .env file!");
+            }
+
+            // Extract and write passwords from Thunderbird keystore
+            if extract_passwords {
+                println!("\nExtracting passwords from Thunderbird...");
+                println!("Note: Thunderbird must be closed during this operation.");
+
+                if master_password.is_some() {
+                    println!("Using provided Master Password for authentication.");
+                }
+
+                match thunderbird::extract_passwords(&tb_profile, master_password.as_deref()) {
+                    Ok(passwords) => {
+                        if passwords.is_empty() {
+                            println!("No IMAP passwords found in Thunderbird profile.");
+                        } else {
+                            println!("Decrypted {} password(s).", passwords.len());
+                            let env_path = PathBuf::from(".env");
+                            match thunderbird::write_passwords_to_env(&accounts, &passwords, &env_path) {
+                                Ok(n) => println!("Written {} password(s) to {}", n, env_path.display()),
+                                Err(e) => println!("Warning: Could not write .env: {}", e),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("Could not extract passwords: {}", e);
+                        println!("\nTips:");
+                        println!("  - Close Thunderbird before running this command");
+                        println!("  - If you have a Master Password, pass it with --master-password <PASSWORD>");
+                    }
+                }
             }
         }
 
@@ -256,6 +299,13 @@ fn main() -> Result<()> {
             } else {
                 config.accounts.clone()
             };
+
+            if config.accounts.is_empty() {
+                println!("No accounts configured.");
+                println!("Add your IMAP accounts to config/accounts.yaml");
+                println!("Or import from Thunderbird: cargo run -- import");
+                return Ok(());
+            }
 
             if accounts_to_export.is_empty() {
                 println!("No accounts selected for export");

@@ -1,9 +1,13 @@
 // [1] Import automatique depuis Thunderbird
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use libloading::Library;
 use regex::Regex;
 use std::collections::HashMap;
 use std::env;
+use std::ffi::CString;
 use std::fs;
+use std::os::raw::{c_char, c_void};
 use std::path::{Path, PathBuf};
 
 use crate::config::Account;
@@ -318,6 +322,349 @@ pub fn generate_env_template(accounts: &[Account]) -> String {
     }
 
     env
+}
+
+// ---------------------------------------------------------------------------
+// Password extraction via NSS (Thunderbird logins.json)
+// ---------------------------------------------------------------------------
+
+/// Decrypted IMAP credentials from Thunderbird
+pub struct ThunderbirdPassword {
+    pub imap_server: String,
+    pub username: String,
+    pub password: String,
+}
+
+/// NSS SECItem — must match Mozilla's C layout exactly
+#[repr(C)]
+struct SECItem {
+    item_type: u32,
+    data: *mut u8,
+    len: u32,
+}
+
+/// logins.json top-level structure
+#[derive(serde::Deserialize)]
+struct LoginsJson {
+    logins: Vec<LoginEntry>,
+}
+
+/// One entry in logins.json
+#[derive(serde::Deserialize)]
+struct LoginEntry {
+    hostname: String,
+    #[serde(rename = "encryptedUsername")]
+    encrypted_username: String,
+    #[serde(rename = "encryptedPassword")]
+    encrypted_password: String,
+}
+
+/// Find the nss3 shared library for the current platform.
+pub fn find_nss_library_path(_profile: &ThunderbirdProfile) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let candidates = [
+            r"C:\Program Files\Mozilla Thunderbird\nss3.dll",
+            r"C:\Program Files (x86)\Mozilla Thunderbird\nss3.dll",
+        ];
+        for path in &candidates {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let p = PathBuf::from(
+            "/Applications/Thunderbird.app/Contents/MacOS/libnss3.dylib",
+        );
+        if p.exists() { Some(p) } else { None }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Some(PathBuf::from("libnss3.so"))
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
+}
+
+/// Decrypt a single base64-encoded NSS string using PK11SDR_Decrypt.
+fn decrypt_nss_string(nss: &Library, encrypted_b64: &str) -> Result<String> {
+    let mut encrypted_bytes = STANDARD
+        .decode(encrypted_b64)
+        .context("Failed to decode base64")?;
+
+    let mut input = SECItem {
+        item_type: 0,
+        data: encrypted_bytes.as_mut_ptr(),
+        len: encrypted_bytes.len() as u32,
+    };
+    let mut output = SECItem {
+        item_type: 0,
+        data: std::ptr::null_mut(),
+        len: 0,
+    };
+
+    let status = unsafe {
+        let pk11sdr_decrypt: libloading::Symbol<
+            unsafe extern "C" fn(*mut SECItem, *mut SECItem, *mut c_void) -> i32,
+        > = nss
+            .get(b"PK11SDR_Decrypt\0")
+            .context("PK11SDR_Decrypt not found in NSS library")?;
+        pk11sdr_decrypt(&mut input, &mut output, std::ptr::null_mut())
+    };
+
+    if status != 0 {
+        anyhow::bail!("PK11SDR_Decrypt failed (status {})", status);
+    }
+
+    // Copy decrypted bytes before freeing
+    let result = if output.data.is_null() || output.len == 0 {
+        String::new()
+    } else {
+        let bytes =
+            unsafe { std::slice::from_raw_parts(output.data, output.len as usize) };
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+
+    // Release NSS-allocated memory (best effort)
+    unsafe {
+        if let Ok(secitem_free) =
+            nss.get::<unsafe extern "C" fn(*mut SECItem, i32)>(b"SECITEM_FreeItem\0")
+        {
+            secitem_free(&mut output, 0);
+        }
+    }
+
+    Ok(result)
+}
+
+/// Extract decrypted IMAP passwords from a Thunderbird profile.
+///
+/// `master_password` — pass `Some("...")` if the user has a Thunderbird
+/// Master Password configured; `None` otherwise.
+pub fn extract_passwords(
+    profile: &ThunderbirdProfile,
+    master_password: Option<&str>,
+) -> Result<Vec<ThunderbirdPassword>> {
+    let logins_path = profile.path.join("logins.json");
+
+    if !logins_path.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = fs::read_to_string(&logins_path).context("Failed to read logins.json")?;
+    let logins: LoginsJson =
+        serde_json::from_str(&content).context("Failed to parse logins.json")?;
+
+    let imap_entries: Vec<&LoginEntry> = logins
+        .logins
+        .iter()
+        .filter(|e| e.hostname.starts_with("imap://"))
+        .collect();
+
+    if imap_entries.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Find NSS library
+    let nss_path = find_nss_library_path(profile).context(
+        "NSS library (nss3) not found. Please verify that Thunderbird is installed.",
+    )?;
+
+    // On Windows, prepend Thunderbird's install directory to PATH so that
+    // nss3.dll can locate its own dependencies (mozglue.dll etc.)
+    #[cfg(target_os = "windows")]
+    if let Some(dir) = nss_path.parent() {
+        let current_path = env::var("PATH").unwrap_or_default();
+        env::set_var("PATH", format!("{};{}", dir.display(), current_path));
+    }
+
+    // Load NSS
+    let nss = unsafe { Library::new(&nss_path) }
+        .with_context(|| format!("Failed to load NSS library: {}", nss_path.display()))?;
+
+    // NSS_Init requires the profile path (forward slashes on all platforms)
+    let profile_path_str = profile.path.to_string_lossy().replace('\\', "/");
+    let profile_c =
+        CString::new(profile_path_str).context("Profile path contains null bytes")?;
+
+    let init_status = unsafe {
+        let nss_init: libloading::Symbol<unsafe extern "C" fn(*const c_char) -> i32> = nss
+            .get(b"NSS_Init\0")
+            .context("NSS_Init not found in NSS library")?;
+        nss_init(profile_c.as_ptr())
+    };
+
+    if init_status != 0 {
+        anyhow::bail!(
+            "NSS_Init failed (status {}). \
+             Thunderbird may still be running — close it first, then retry.",
+            init_status
+        );
+    }
+
+    // If the profile has a Master Password, authenticate before decrypting
+    if let Some(mp) = master_password {
+        let mp_c = CString::new(mp).context("Master password contains null bytes")?;
+        let auth_status = unsafe {
+            // PK11_GetInternalKeySlot() → *mut PK11SlotInfo (opaque pointer)
+            let get_slot: libloading::Symbol<unsafe extern "C" fn() -> *mut c_void> = nss
+                .get(b"PK11_GetInternalKeySlot\0")
+                .context("PK11_GetInternalKeySlot not found")?;
+            let slot = get_slot();
+            if slot.is_null() {
+                anyhow::bail!("PK11_GetInternalKeySlot returned null");
+            }
+
+            let check_pw: libloading::Symbol<
+                unsafe extern "C" fn(*mut c_void, *const c_char) -> i32,
+            > = nss
+                .get(b"PK11_CheckUserPassword\0")
+                .context("PK11_CheckUserPassword not found")?;
+            let status = check_pw(slot, mp_c.as_ptr());
+
+            // Free the slot reference
+            if let Ok(free_slot) =
+                nss.get::<unsafe extern "C" fn(*mut c_void)>(b"PK11_FreeSlot\0")
+            {
+                free_slot(slot);
+            }
+
+            status
+        };
+
+        if auth_status != 0 {
+            anyhow::bail!(
+                "Master Password authentication failed (status {}). \
+                 Check that the Master Password is correct.",
+                auth_status
+            );
+        }
+    }
+
+    // Decrypt all IMAP entries
+    let mut passwords = Vec::new();
+    for entry in &imap_entries {
+        // Strip "imap://" prefix and optional port
+        let imap_server = entry
+            .hostname
+            .strip_prefix("imap://")
+            .unwrap_or(&entry.hostname)
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .to_string();
+
+        let username = match decrypt_nss_string(&nss, &entry.encrypted_username) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Could not decrypt username for {}: {}",
+                    imap_server, e
+                );
+                continue;
+            }
+        };
+
+        let password = match decrypt_nss_string(&nss, &entry.encrypted_password) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Could not decrypt password for {}: {}",
+                    imap_server, e
+                );
+                continue;
+            }
+        };
+
+        passwords.push(ThunderbirdPassword {
+            imap_server,
+            username,
+            password,
+        });
+    }
+
+    // Shutdown NSS (best effort)
+    let _ = unsafe {
+        nss.get::<unsafe extern "C" fn() -> i32>(b"NSS_Shutdown\0")
+            .map(|f| f())
+    };
+
+    Ok(passwords)
+}
+
+/// Write extracted passwords to a `.env` file.
+///
+/// For each account in `accounts`, looks for a matching `ThunderbirdPassword`
+/// by comparing `account.server` with `password.imap_server` (case-insensitive).
+/// Returns the number of passwords written.
+pub fn write_passwords_to_env(
+    accounts: &[crate::config::Account],
+    passwords: &[ThunderbirdPassword],
+    env_path: &Path,
+) -> Result<usize> {
+    // Read existing .env lines (if the file already exists)
+    let mut lines: Vec<String> = if env_path.exists() {
+        fs::read_to_string(env_path)
+            .context("Failed to read .env")?
+            .lines()
+            .map(|l| l.to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let mut written = 0;
+
+    for account in accounts {
+        let matching_pw = passwords
+            .iter()
+            .find(|pw| pw.imap_server.eq_ignore_ascii_case(&account.server));
+
+        let pw = match matching_pw {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "Warning: no Thunderbird password found for account '{}' (server: {})",
+                    account.name, account.server
+                );
+                continue;
+            }
+        };
+
+        let env_key = account
+            .name
+            .to_uppercase()
+            .replace(' ', "_")
+            .replace('-', "_");
+        let env_line = format!("{}={}", env_key, pw.password);
+        let key_prefix = format!("{}=", env_key);
+
+        if let Some(pos) = lines.iter().position(|l| l.starts_with(&key_prefix)) {
+            lines[pos] = env_line;
+        } else {
+            lines.push(env_line);
+        }
+
+        written += 1;
+    }
+
+    // Write back (join with newline, ensure trailing newline)
+    let mut content = lines.join("\n");
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    fs::write(env_path, content).context("Failed to write .env")?;
+
+    Ok(written)
 }
 
 #[cfg(test)]

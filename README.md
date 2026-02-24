@@ -8,67 +8,208 @@ Outil Rust pour exporter vos emails IMAP vers des fichiers Markdown avec métado
 # Installer Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Compiler le projet
+# Compiler le projet (debug)
+cargo build
+
+# Compiler en mode release (optimisé)
 cargo build --release
 ```
 
-## Configuration
-
-1. Copier le fichier d'exemple :
+## Configuration rapide
 
 ```bash
+# 1. Importer automatiquement la config depuis Thunderbird (recommandé)
+./target/release/email-to-markdown import --extract-passwords
+
+# 2. Ou configurer manuellement
 cp config/accounts.yaml.example config/accounts.yaml
+# Éditer config/accounts.yaml, puis créer .env avec les mots de passe
 ```
 
-2. Configurer les comptes dans `config/accounts.yaml`
+---
 
-3. Créer le fichier `.env` avec les mots de passe :
+## Référence des commandes
+
+### `import` — Importer depuis Thunderbird
+
+Génère `config/accounts.yaml` à partir des comptes IMAP configurés dans Thunderbird.
+
+```
+email-to-markdown import [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--list-profiles` | Liste les profils Thunderbird disponibles et quitte |
+| `--profile <CHEMIN>` | Utilise un profil spécifique (chemin absolu) ; sinon détection automatique |
+| `--output <CHEMIN>` | Fichier de sortie (défaut : `config/accounts.yaml`) |
+| `--generate-env` | Génère aussi un fichier `.env.template` avec les variables à remplir |
+| `--extract-passwords` | Déchiffre les mots de passe depuis Thunderbird et les écrit dans `.env` (Thunderbird doit être fermé) |
+| `--master-password <MDP>` | Master Password Thunderbird, si vous en avez configuré un |
+
+**Exemples :**
+
 ```bash
-cp .env.example .env
+# Lister les profils disponibles
+email-to-markdown import --list-profiles
+
+# Import automatique (profil par défaut)
+email-to-markdown import
+
+# Import + extraction automatique des mots de passe
+email-to-markdown import --extract-passwords
+
+# Avec Master Password Thunderbird
+email-to-markdown import --extract-passwords --master-password "secret"
+
+# Profil spécifique + template .env
+email-to-markdown import --profile ~/.thunderbird/abc123.default --generate-env
+
+# Fichier de sortie personnalisé
+email-to-markdown import --output /chemin/vers/accounts.yaml
 ```
 
-## Utilisation
+---
+
+### `export` — Exporter les emails
+
+Connecte les comptes IMAP configurés et exporte les emails en fichiers Markdown.
+
+```
+email-to-markdown export [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--list-accounts` | Liste les comptes configurés dans `accounts.yaml` et quitte |
+| `--account <NOM>` | Exporte uniquement le(s) compte(s) indiqué(s) (séparés par virgule) |
+| `--config <CHEMIN>` | Fichier de configuration (défaut : `config/accounts.yaml`) |
+| `--debug` | Active le mode verbeux (sortie IMAP brute) |
+| `--delete-after-export` | Supprime les emails du serveur après export (dangereux !) |
+
+**Exemples :**
 
 ```bash
-# Exporter tous les emails
-./target/release/email-to-markdown export
+# Exporter tous les comptes configurés
+email-to-markdown export
 
-# Exporter un compte spécifique
-./target/release/email-to-markdown export --account Gmail
+# Lister les comptes disponibles
+email-to-markdown export --list-accounts
 
-# Importer la configuration depuis Thunderbird
-./target/release/email-to-markdown import
+# Exporter un seul compte
+email-to-markdown export --account Gmail
 
-# Corriger les fichiers YAML
-./target/release/email-to-markdown fix ./exports/gmail --apply
+# Exporter plusieurs comptes
+email-to-markdown export --account Gmail,Outlook
+
+# Mode debug (verbose IMAP)
+email-to-markdown export --account Gmail --debug
+
+# Config personnalisée
+email-to-markdown export --config /chemin/vers/accounts.yaml
+
+# Supprimer les emails après export
+email-to-markdown export --account Gmail --delete-after-export
 ```
 
-## Fonctionnalités
+---
 
-- Export IMAP vers Markdown avec frontmatter YAML
-- Gestion des pièces jointes et structure de dossiers
-- Import automatique depuis Thunderbird
-- Correction des fichiers YAML malformés
-- Tri et catégorisation des emails
+### `fix` — Corriger le YAML malformé
 
-## Prérequis
+Corrige les fichiers Markdown générés avec des tags YAML Python-spécifiques (hérités de l'ancienne version Python).
 
-- Rust 1.60+
-- Comptes email avec accès IMAP activé
-- Pour Gmail : mot de passe spécifique à l'application (si 2FA activé)
+```
+email-to-markdown fix <DOSSIER> [OPTIONS]
+```
+
+| Argument / Option | Description |
+|--------|-------------|
+| `<DOSSIER>` | Dossier contenant les fichiers email à analyser (obligatoire) |
+| `--dry-run` | Simule les corrections sans modifier les fichiers |
+| `--apply` | Applique réellement les corrections (sans `--apply`, mode dry-run par défaut) |
+
+**Exemples :**
+
+```bash
+# Analyser sans modifier (dry-run)
+email-to-markdown fix ./exports/gmail
+
+# Voir ce qui serait corrigé
+email-to-markdown fix ./exports/gmail --dry-run
+
+# Appliquer les corrections
+email-to-markdown fix ./exports/gmail --apply
+```
+
+---
+
+### `sort` — Trier et catégoriser les emails
+
+Analyse les emails exportés et les classe en catégories : `delete`, `summarize`, `keep`.
+
+```
+email-to-markdown sort [DOSSIER] [OPTIONS]
+```
+
+| Argument / Option | Description |
+|--------|-------------|
+| `[DOSSIER]` | Dossier contenant les fichiers email Markdown |
+| `--account <NOM>` | Trie les emails d'un compte (lit le dossier depuis `accounts.yaml`) |
+| `--config <CHEMIN>` | Fichier de règles de tri (défaut : `config/sort_config.json`) |
+| `--report <NOM>` | Nom du fichier rapport de sortie (défaut : `sort_report.json`) |
+| `--verbose` | Affiche les détails des emails classés |
+| `--dry-run` | Analyse sans créer de rapport |
+| `--list-accounts` | Liste les comptes disponibles dans `accounts.yaml` |
+| `--create-config` | Crée un fichier `sort_config.json` avec les valeurs par défaut |
+
+**Exemples :**
+
+```bash
+# Trier les emails d'un dossier
+email-to-markdown sort ./exports/gmail
+
+# Trier par nom de compte (lit le dossier depuis accounts.yaml)
+email-to-markdown sort --account Gmail
+
+# Simulation sans créer de rapport
+email-to-markdown sort --account Gmail --dry-run
+
+# Avec sortie détaillée
+email-to-markdown sort --account Gmail --verbose
+
+# Rapport personnalisé
+email-to-markdown sort ./exports/gmail --report mon_rapport.json
+
+# Créer la config de tri par défaut
+email-to-markdown sort --create-config
+
+# Config de tri personnalisée
+email-to-markdown sort --account Gmail --config config/mes_regles.json
+
+# Lister les comptes disponibles
+email-to-markdown sort --list-accounts
+```
+
+---
+
+### `tray` — Interface dans la barre système *(optionnel)*
+
+Lance l'application en tant qu'icône dans la barre système (Windows/macOS/Linux).
+
+> Nécessite la compilation avec la feature `tray` :
+> ```bash
+> cargo build --release --features tray
+> ```
+
+```bash
+email-to-markdown tray
+```
+
+---
 
 ## Configuration
 
-### Options principales
-
-- `delete_after_export`: Supprime les emails après export (désactivé par défaut)
-- `ignored_folders`: Liste des dossiers à ignorer
-- `quote_depth`: Profondeur des citations à conserver (par défaut: 1)
-- `skip_existing`: Ignore les emails déjà exportés (activé par défaut)
-- `collect_contacts`: Génère un fichier CSV des contacts
-- `skip_signature_images`: Ignore les images de signature
-
-### Exemple de configuration
+### `config/accounts.yaml`
 
 ```yaml
 accounts:
@@ -80,21 +221,67 @@ accounts:
     ignored_folders:
       - "[Gmail]/Spam"
       - "[Gmail]/Trash"
-    quote_depth: 1
-    skip_existing: true
-    collect_contacts: true
-    skip_signature_images: true
+      - "[Gmail]/All Mail"
+      - "[Gmail]/Drafts"
+    quote_depth: 1          # Profondeur max des citations à conserver
+    skip_existing: true     # Ne pas ré-exporter les emails déjà présents
+    collect_contacts: false # Générer un CSV des contacts
+    skip_signature_images: true  # Ignorer les images de signature/logo
+    delete_after_export: false   # Supprimer du serveur après export
 ```
+
+### `.env`
+
+```bash
+# Mot de passe standard
+GMAIL_PASSWORD=votre_mot_de_passe
+
+# Mot de passe applicatif Gmail (si 2FA activé)
+GMAIL_APPLICATION_PASSWORD=xxxx-xxxx-xxxx-xxxx
+
+OUTLOOK_PASSWORD=votre_mot_de_passe
+```
+
+Le nom de la variable est `{NOM_DU_COMPTE_EN_MAJUSCULES}_PASSWORD`.
+Le suffixe `_APPLICATION_PASSWORD` est prioritaire sur `_PASSWORD`.
+
+---
+
+## Structure des exports
+
+```
+export_directory/
+├── INBOX/
+│   └── email_2024-01-15_AB_to_CD.md
+├── Sent/
+│   └── email_2024-01-15_AB_to_CD.md
+└── attachments/
+    └── INBOX/
+        └── email_2024-01-15_AB_to_CD_a1b2c3_fichier.pdf
+```
+
+---
+
+## Prérequis
+
+- Rust 1.70+
+- Accès IMAP activé sur le serveur email
+- Pour Gmail avec 2FA : [mot de passe spécifique à l'application](https://support.google.com/accounts/answer/185833)
+- Pour `--extract-passwords` : Thunderbird installé et **fermé**
+
+---
 
 ## Dépannage
 
-### Erreurs courantes
+**Mot de passe non trouvé** : Vérifiez que la variable `NOM_PASSWORD` dans `.env` correspond exactement au `name` du compte dans `accounts.yaml`.
 
-**Mot de passe Gmail requis** : Créez un [mot de passe spécifique](https://support.google.com/accounts/answer/185833) pour les comptes avec 2FA.
+**Échec `--extract-passwords`** : Fermez Thunderbird avant de lancer la commande. Si vous avez un Master Password configuré, utilisez `--master-password`.
 
-**Problèmes de connexion** : Vérifiez `.env` et l'accès IMAP sur le serveur.
+**Connexion IMAP refusée** : Vérifiez que l'accès IMAP est activé dans les paramètres du compte email.
 
-**Dossiers invalides** : Le script ignore automatiquement les dossiers problématiques.
+**Dossiers manquants** : Ajustez `ignored_folders` dans `accounts.yaml` ; utilisez `--debug` pour voir les dossiers disponibles.
+
+---
 
 ## Documentation
 

@@ -639,7 +639,7 @@ impl ImapExporter {
         let mut progress = ProgressIndicator::new(folder_name, total_messages);
         let mut stats = ExportStats::default();
 
-        for (idx, uid) in uids_vec.into_iter().enumerate() {
+        for (_idx, uid) in uids_vec.into_iter().enumerate() {
             // [4] Retry logic for fetch
             let fetch_result = with_retry(&self.network_config, "fetch", || {
                 session.fetch(uid.to_string(), "RFC822")
