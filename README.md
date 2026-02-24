@@ -15,6 +15,7 @@ cargo build --release
 ## Configuration
 
 1. Copier le fichier d'exemple :
+
 ```bash
 cp config/accounts.yaml.example config/accounts.yaml
 ```
