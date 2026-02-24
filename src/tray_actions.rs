@@ -18,7 +18,8 @@ use crate::thunderbird;
 /// Result of an action, sent back to the main thread for notification.
 #[derive(Debug, Clone)]
 pub enum ActionResult {
-    Success(String),
+    /// (title, message)
+    Success(String, String),
     /// Import completed — the main thread should rebuild the tray menu.
     Imported(String),
     Error(String),
@@ -31,7 +32,7 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
     thread::spawn(move || {
         let result = run_export(&account_name);
         let action_result = match result {
-            Ok(message) => ActionResult::Success(message),
+            Ok(message) => ActionResult::Success("Export terminé".to_string(), message),
             Err(e) => ActionResult::Error(format!("Export error: {}", e)),
         };
         let _ = result_sender.send(action_result);
@@ -83,7 +84,7 @@ pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
     thread::spawn(move || {
         let result = run_sort(&account_name);
         let action_result = match result {
-            Ok(message) => ActionResult::Success(message),
+            Ok(message) => ActionResult::Success("Tri terminé".to_string(), message),
             Err(e) => ActionResult::Error(format!("Sort error: {}", e)),
         };
         let _ = result_sender.send(action_result);
@@ -215,7 +216,7 @@ pub fn action_choose_export_dir(result_sender: Sender<ActionResult>) {
     thread::spawn(move || {
         let result = set_export_dir(&base_dir);
         let action_result = match result {
-            Ok(msg) => ActionResult::Success(msg),
+            Ok(msg) => ActionResult::Success("Répertoire d'export".to_string(), msg),
             Err(e) => ActionResult::Error(format!("Erreur répertoire d'export : {}", e)),
         };
         let _ = result_sender.send(action_result);

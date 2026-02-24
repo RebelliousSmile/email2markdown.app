@@ -297,8 +297,9 @@ fn create_default_icon() -> Result<tray_icon::Icon> {
 /// Show a notification to the user (spawns a thread to avoid blocking the event loop).
 fn show_notification(result: &ActionResult) {
     let (title, description, level) = match result {
-        ActionResult::Success(m) | ActionResult::Imported(m) => (
-            "Email to Markdown".to_string(),
+        ActionResult::Success(title, m) => (title.clone(), m.clone(), rfd::MessageLevel::Info),
+        ActionResult::Imported(m) => (
+            "Import Thunderbird".to_string(),
             m.clone(),
             rfd::MessageLevel::Info,
         ),
