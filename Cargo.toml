@@ -64,6 +64,9 @@ rfd = { version = "0.15", optional = true }
 # Open files with default application
 open = "5.3"
 
+# Platform-appropriate config/data directories
+dirs = "5.0"
+
 # Image handling for tray icon
 image = { version = "0.25", optional = true }
 

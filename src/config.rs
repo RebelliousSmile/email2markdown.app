@@ -2,8 +2,37 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+// ── Platform-aware config paths ──────────────────────────────────────────────
+
+/// Returns the app config directory, platform-appropriate:
+/// - Windows : `%APPDATA%\email-to-markdown`
+/// - macOS   : `~/Library/Application Support/email-to-markdown`
+/// - Linux   : `~/.config/email-to-markdown`
+///
+/// Falls back to `./config` if the platform directory cannot be determined.
+pub fn app_config_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("email-to-markdown")
+}
+
+/// Path to `accounts.yaml`.
+pub fn accounts_yaml_path() -> PathBuf {
+    app_config_dir().join("accounts.yaml")
+}
+
+/// Path to `.env` (passwords).
+pub fn env_file_path() -> PathBuf {
+    app_config_dir().join(".env")
+}
+
+/// Path to `sort_config.json`.
+pub fn sort_config_path() -> PathBuf {
+    app_config_dir().join("sort_config.json")
+}
 
 #[derive(Error, Debug)]
 pub enum ConfigError {

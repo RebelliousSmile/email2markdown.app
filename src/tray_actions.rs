@@ -10,7 +10,7 @@ use std::thread;
 use anyhow::{Context, Result};
 use rfd;
 
-use crate::config::{Config, SortConfig};
+use crate::config::{self, Config, SortConfig};
 use crate::email_export::ImapExporter;
 use crate::sort_emails::{Category, EmailSorter};
 use crate::thunderbird;
@@ -40,11 +40,9 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
 }
 
 fn run_export(account_name: &str) -> Result<String> {
-    // Load .env for passwords
-    dotenv::dotenv().ok();
+    dotenv::from_path(config::env_file_path()).ok();
 
-    let config_path = PathBuf::from("config/accounts.yaml");
-    let config = Config::load(&config_path).context("Failed to load configuration")?;
+    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
 
     let account = config
         .get_account(account_name)
@@ -53,8 +51,9 @@ fn run_export(account_name: &str) -> Result<String> {
 
     if account.password.is_none() {
         return Err(anyhow::anyhow!(
-            "No password found for {}. Check your .env file.",
-            account_name
+            "No password found for {}. Check {}",
+            account_name,
+            config::env_file_path().display()
         ));
     }
 
@@ -92,10 +91,9 @@ pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
 }
 
 fn run_sort(account_name: &str) -> Result<String> {
-    dotenv::dotenv().ok();
+    dotenv::from_path(config::env_file_path()).ok();
 
-    let config_path = PathBuf::from("config/accounts.yaml");
-    let config = Config::load(&config_path).context("Failed to load configuration")?;
+    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
 
     let account = config
         .get_account(account_name)
@@ -175,7 +173,7 @@ fn run_import_thunderbird(extract_passwords: bool) -> Result<String> {
     }
 
     let yaml_content = thunderbird::generate_accounts_yaml(&accounts);
-    let output_path = PathBuf::from("config/accounts.yaml");
+    let output_path = config::accounts_yaml_path();
 
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -183,14 +181,17 @@ fn run_import_thunderbird(extract_passwords: bool) -> Result<String> {
 
     std::fs::write(&output_path, &yaml_content)?;
 
-    let mut message = format!("Imported {} account(s) to config/accounts.yaml", accounts.len());
+    let mut message = format!("Imported {} account(s)", accounts.len());
 
     if extract_passwords {
         match thunderbird::extract_passwords(&profile, None) {
             Ok(passwords) if !passwords.is_empty() => {
-                let env_path = PathBuf::from(".env");
+                let env_path = config::env_file_path();
+                if let Some(parent) = env_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
                 match thunderbird::write_passwords_to_env(&accounts, &passwords, &env_path) {
-                    Ok(n) => message.push_str(&format!("\n{} mot(s) de passe écrits dans .env", n)),
+                    Ok(n) => message.push_str(&format!("\n{} mot(s) de passe écrits", n)),
                     Err(e) => message.push_str(&format!("\nImpossible d'écrire .env : {}", e)),
                 }
             }
@@ -224,7 +225,7 @@ pub fn action_choose_export_dir(result_sender: Sender<ActionResult>) {
 }
 
 fn set_export_dir(base_dir: &std::path::Path) -> Result<String> {
-    let config_path = PathBuf::from("config/accounts.yaml");
+    let config_path = config::accounts_yaml_path();
 
     if !config_path.exists() {
         return Err(anyhow::anyhow!(
@@ -279,11 +280,13 @@ pub fn action_open_documentation() -> Result<()> {
 
 /// Open the configuration file in the default editor.
 pub fn action_open_config() -> Result<()> {
-    let config_path = PathBuf::from("config/accounts.yaml");
+    let config_path = config::accounts_yaml_path();
 
     if !config_path.exists() {
         // Create a template if it doesn't exist
-        std::fs::create_dir_all("config")?;
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let template = r#"# Email to Markdown - Accounts Configuration
 # Add your IMAP accounts here
 
@@ -312,9 +315,9 @@ accounts:
 
 /// Get the list of configured accounts.
 pub fn get_account_names() -> Result<Vec<String>> {
-    dotenv::dotenv().ok();
+    dotenv::from_path(config::env_file_path()).ok();
 
-    let config_path = PathBuf::from("config/accounts.yaml");
+    let config_path = config::accounts_yaml_path();
 
     if !config_path.exists() {
         return Ok(Vec::new());

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
-use email_to_markdown::config::{Config, SortConfig};
+use email_to_markdown::config::{self, Config, SortConfig};
 use email_to_markdown::email_export::ImapExporter;
 use email_to_markdown::fix_yaml;
 use email_to_markdown::sort_emails::EmailSorter;
@@ -33,9 +33,9 @@ enum Commands {
         #[arg(long)]
         list_profiles: bool,
 
-        /// Output path for accounts.yaml
-        #[arg(short, long, default_value = "config/accounts.yaml")]
-        output: PathBuf,
+        /// Output path for accounts.yaml (default: platform config dir)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
 
         /// Also generate .env template
         #[arg(long)]
@@ -65,9 +65,9 @@ enum Commands {
         #[arg(long)]
         delete_after_export: bool,
 
-        /// Path to config file
-        #[arg(short, long, default_value = "config/accounts.yaml")]
-        config: PathBuf,
+        /// Path to config file (default: platform config dir)
+        #[arg(short, long)]
+        config: Option<PathBuf>,
 
         /// Enable debug mode (verbose IMAP output)
         #[arg(short, long)]
@@ -128,8 +128,8 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    // Load .env file if present
-    dotenv::dotenv().ok();
+    // Load .env from the platform config directory
+    dotenv::from_path(config::env_file_path()).ok();
 
     let cli = Cli::parse();
 
@@ -206,6 +206,7 @@ fn main() -> Result<()> {
 
             // Generate accounts.yaml
             let yaml_content = thunderbird::generate_accounts_yaml(&accounts);
+            let output = output.unwrap_or_else(config::accounts_yaml_path);
 
             // Create output directory if needed
             if let Some(parent) = output.parent() {
@@ -217,15 +218,15 @@ fn main() -> Result<()> {
 
             // Generate .env template if requested
             if generate_env {
-                let env_path = output.parent().unwrap_or(Path::new(".")).join(".env.template");
+                let env_template_path = output.parent().unwrap_or(Path::new(".")).join(".env.template");
                 let env_content = thunderbird::generate_env_template(&accounts);
-                std::fs::write(&env_path, &env_content)?;
-                println!("Generated: {}", env_path.display());
+                std::fs::write(&env_template_path, &env_content)?;
+                println!("Generated: {}", env_template_path.display());
                 println!("\nRemember to:");
                 println!("  1. Review and adjust accounts.yaml");
-                println!("  2. Copy .env.template to .env and add passwords");
+                println!("  2. Copy .env.template to {} and add passwords", config::env_file_path().display());
             } else if !extract_passwords {
-                println!("\nRemember to add passwords to .env file!");
+                println!("\nRemember to add passwords to {}", config::env_file_path().display());
             }
 
             // Extract and write passwords from Thunderbird keystore
@@ -243,7 +244,10 @@ fn main() -> Result<()> {
                             println!("No IMAP passwords found in Thunderbird profile.");
                         } else {
                             println!("Decrypted {} password(s).", passwords.len());
-                            let env_path = PathBuf::from(".env");
+                            let env_path = config::env_file_path();
+                            if let Some(parent) = env_path.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
                             match thunderbird::write_passwords_to_env(&accounts, &passwords, &env_path) {
                                 Ok(n) => println!("Written {} password(s) to {}", n, env_path.display()),
                                 Err(e) => println!("Warning: Could not write .env: {}", e),
@@ -267,7 +271,8 @@ fn main() -> Result<()> {
             config,
             debug,
         } => {
-            let config = Config::load(&config)
+            let config_path = config.unwrap_or_else(config::accounts_yaml_path);
+            let config = Config::load(&config_path)
                 .context("Failed to load configuration")?;
 
             if list_accounts {
@@ -302,7 +307,7 @@ fn main() -> Result<()> {
 
             if config.accounts.is_empty() {
                 println!("No accounts configured.");
-                println!("Add your IMAP accounts to config/accounts.yaml");
+                println!("Add your IMAP accounts to {}", config::accounts_yaml_path().display());
                 println!("Or import from Thunderbird: cargo run -- import");
                 return Ok(());
             }
@@ -392,7 +397,7 @@ fn main() -> Result<()> {
             create_config,
         } => {
             if create_config {
-                let config_path = config.unwrap_or_else(|| PathBuf::from("config/sort_config.json"));
+                let config_path = config.unwrap_or_else(config::sort_config_path);
                 let sort_config = SortConfig::default();
                 sort_config.save(&config_path)?;
                 println!("Configuration file created: {}", config_path.display());
@@ -400,7 +405,7 @@ fn main() -> Result<()> {
             }
 
             if list_accounts {
-                let accounts_config = Config::load(&PathBuf::from("config/accounts.yaml"));
+                let accounts_config = Config::load(&config::accounts_yaml_path());
                 if let Ok(cfg) = accounts_config {
                     println!("Available accounts from accounts.yaml:");
                     for (i, acc) in cfg.accounts.iter().enumerate() {
@@ -419,7 +424,7 @@ fn main() -> Result<()> {
 
             // Determine directory to sort
             let sort_directory = if let Some(acc_name) = account {
-                let accounts_config = Config::load(&PathBuf::from("config/accounts.yaml"))
+                let accounts_config = Config::load(&config::accounts_yaml_path())
                     .context("Failed to load accounts configuration")?;
 
                 let acc = accounts_config
@@ -436,11 +441,7 @@ fn main() -> Result<()> {
             };
 
             // Load sort config
-            let sort_config = if let Some(config_path) = config {
-                SortConfig::load(&config_path)?
-            } else {
-                SortConfig::default()
-            };
+            let sort_config = SortConfig::load(&config.unwrap_or_else(config::sort_config_path))?;
 
             let mut sorter = EmailSorter::new(sort_directory, sort_config);
 
