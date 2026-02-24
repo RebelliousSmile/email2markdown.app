@@ -126,15 +126,23 @@ fn run_sort(account_name: &str) -> Result<String> {
 /// Shows a Yes/No dialog asking whether to also extract passwords,
 /// then runs the import in a background thread.
 pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
-    let extract_passwords = rfd::MessageDialog::new()
+    let dialog_result = rfd::MessageDialog::new()
         .set_title("Import Thunderbird")
         .set_description(
-            "Extraire les mots de passe depuis Thunderbird ?\n\
-             (Thunderbird doit être fermé pendant l'opération)",
+            "Importer les comptes depuis Thunderbird ?\n\n\
+             • Oui    — importer comptes + mots de passe\n\
+             • Non    — importer les comptes uniquement\n\
+             • Annuler — ne rien faire\n\n\
+             (Thunderbird doit être fermé pour extraire les mots de passe)",
         )
-        .set_buttons(rfd::MessageButtons::YesNo)
-        .show()
-        == rfd::MessageDialogResult::Yes;
+        .set_buttons(rfd::MessageButtons::YesNoCancel)
+        .show();
+
+    let extract_passwords = match dialog_result {
+        rfd::MessageDialogResult::Yes => true,
+        rfd::MessageDialogResult::No => false,
+        _ => return, // Annuler
+    };
 
     thread::spawn(move || {
         let result = run_import_thunderbird(extract_passwords);

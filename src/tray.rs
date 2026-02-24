@@ -4,6 +4,7 @@
 //! for easy access to common operations without using the CLI.
 
 use std::sync::mpsc;
+use std::thread;
 
 use anyhow::{Context, Result};
 use tao::event::{Event, StartCause};
@@ -43,7 +44,7 @@ pub fn run_tray() -> Result<()> {
 
     // Run the event loop
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ControlFlow::Poll;
 
         match event {
             Event::NewEvents(StartCause::Init) => {
@@ -281,22 +282,26 @@ fn create_default_icon() -> Result<tray_icon::Icon> {
     tray_icon::Icon::from_rgba(rgba, size, size).context("Failed to create default icon")
 }
 
-/// Show a notification to the user.
+/// Show a notification to the user (spawns a thread to avoid blocking the event loop).
 fn show_notification(result: &ActionResult) {
-    match result {
-        ActionResult::Success(message) | ActionResult::Imported(message) => {
-            rfd::MessageDialog::new()
-                .set_title("Email to Markdown")
-                .set_description(message)
-                .set_level(rfd::MessageLevel::Info)
-                .show();
-        }
-        ActionResult::Error(message) => {
-            rfd::MessageDialog::new()
-                .set_title("Email to Markdown - Error")
-                .set_description(message)
-                .set_level(rfd::MessageLevel::Error)
-                .show();
-        }
-    }
+    let (title, description, level) = match result {
+        ActionResult::Success(m) | ActionResult::Imported(m) => (
+            "Email to Markdown".to_string(),
+            m.clone(),
+            rfd::MessageLevel::Info,
+        ),
+        ActionResult::Error(m) => (
+            "Email to Markdown - Erreur".to_string(),
+            m.clone(),
+            rfd::MessageLevel::Error,
+        ),
+    };
+
+    thread::spawn(move || {
+        rfd::MessageDialog::new()
+            .set_title(&title)
+            .set_description(&description)
+            .set_level(level)
+            .show();
+    });
 }
