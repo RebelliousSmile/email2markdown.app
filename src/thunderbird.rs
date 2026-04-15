@@ -299,7 +299,7 @@ pub fn generate_env_template(accounts: &[Account]) -> String {
     env.push_str("# For Gmail with 2FA, use App Password\n\n");
 
     for account in accounts {
-        let env_var = account.name.to_uppercase().replace(' ', "_").replace('-', "_");
+        let env_var = crate::config::env_var_name(&account.name);
         env.push_str(&format!("{}_PASSWORD=your_password\n", env_var));
         // Also add APPLICATION_PASSWORD variant for Gmail-like accounts
         if account.server.contains("gmail") {
@@ -626,11 +626,7 @@ pub fn write_passwords_to_env(
             }
         };
 
-        let env_key = account
-            .name
-            .to_uppercase()
-            .replace(' ', "_")
-            .replace('-', "_");
+        let env_key = format!("{}_PASSWORD", crate::config::env_var_name(&account.name));
         let env_line = format!("{}={}", env_key, pw.password);
         let key_prefix = format!("{}=", env_key);
 

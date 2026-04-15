@@ -29,6 +29,17 @@ pub fn env_file_path() -> PathBuf {
     app_config_dir().join(".env")
 }
 
+/// Canonical env var name prefix for an account.
+///
+/// Used by the loader to look up `{PREFIX}_PASSWORD` / `{PREFIX}_APPLICATION_PASSWORD`,
+/// and by the template/extract-passwords writers to emit matching names.
+/// Keep this as the single source of truth to avoid mismatches.
+pub fn env_var_name(account_name: &str) -> String {
+    account_name
+        .to_uppercase()
+        .replace([' ', '@', '.', '-'], "_")
+}
+
 /// Path to `settings.yaml` (app behaviour, export dirs).
 pub fn settings_path() -> PathBuf {
     app_config_dir().join("settings.yaml")
@@ -216,7 +227,7 @@ impl Config {
 
         // Inject passwords from environment
         for account in &mut accounts {
-            let sanitized = account.name.to_uppercase().replace(['@', '.', '-'], "_");
+            let sanitized = env_var_name(&account.name);
             account.password = env::var(format!("{}_APPLICATION_PASSWORD", sanitized))
                 .ok()
                 .or_else(|| env::var(format!("{}_PASSWORD", sanitized)).ok());
@@ -459,6 +470,35 @@ mod tests {
         assert!(config.delete_keywords.contains(&"newsletter".to_string()));
         assert!(config.keep_keywords.contains(&"contract".to_string()));
         assert_eq!(config.recent_threshold_days, 30);
+    }
+
+    #[test]
+    fn test_env_var_name_gmail() {
+        assert_eq!(
+            env_var_name("fx.rebellious.smile@gmail.com"),
+            "FX_REBELLIOUS_SMILE_GMAIL_COM"
+        );
+    }
+
+    #[test]
+    fn test_env_var_name_dash_domain() {
+        assert_eq!(
+            env_var_name("compta@cabinet-partage.fr"),
+            "COMPTA_CABINET_PARTAGE_FR"
+        );
+    }
+
+    #[test]
+    fn test_env_var_name_with_space() {
+        assert_eq!(env_var_name("My Work Account"), "MY_WORK_ACCOUNT");
+    }
+
+    #[test]
+    fn test_env_var_name_mixed_punctuation() {
+        assert_eq!(
+            env_var_name("first.last-tag@host.example.com"),
+            "FIRST_LAST_TAG_HOST_EXAMPLE_COM"
+        );
     }
 
     #[test]
