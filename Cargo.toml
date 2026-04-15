@@ -44,6 +44,12 @@ md5 = "0.7"
 # Character encoding
 encoding_rs = "0.8"
 
+# HTML entity decoding (for cleaner pipeline)
+html-escape = "0.2"
+
+# URL parsing and validation (for cleaner pipeline)
+url = "2.5"
+
 # CSV support
 csv = "1.3"
 

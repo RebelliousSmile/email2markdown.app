@@ -366,6 +366,48 @@ mod email_export_tests {
         assert_eq!(stats.skipped, 0);
         assert_eq!(stats.errors, 0);
     }
+
+    #[test]
+    fn test_email_frontmatter_serializes_social_links_when_present() {
+        use std::collections::BTreeMap;
+
+        let mut links: BTreeMap<String, String> = BTreeMap::new();
+        links.insert("instagram".to_string(), "https://www.instagram.com/foo".to_string());
+        links.insert("facebook".to_string(), "https://www.facebook.com/foo".to_string());
+
+        let fm = EmailFrontmatter {
+            from: "a@example.com".to_string(),
+            to: "b@example.com".to_string(),
+            date: "2026-04-15T00:00:00+00:00".to_string(),
+            subject: "Hi".to_string(),
+            subject_hash: "abcdef".to_string(),
+            tags: vec!["inbox".to_string()],
+            attachments: vec![],
+            social_links: Some(links),
+        };
+
+        let yaml = serde_yaml::to_string(&fm).expect("serialize");
+        assert!(yaml.contains("social_links:"), "missing social_links key in:\n{}", yaml);
+        assert!(yaml.contains("instagram: https://www.instagram.com/foo"), "missing instagram entry in:\n{}", yaml);
+        assert!(yaml.contains("facebook: https://www.facebook.com/foo"), "missing facebook entry in:\n{}", yaml);
+    }
+
+    #[test]
+    fn test_email_frontmatter_omits_social_links_when_none() {
+        let fm = EmailFrontmatter {
+            from: "a@example.com".to_string(),
+            to: "b@example.com".to_string(),
+            date: "2026-04-15T00:00:00+00:00".to_string(),
+            subject: "Hi".to_string(),
+            subject_hash: "abcdef".to_string(),
+            tags: vec![],
+            attachments: vec![],
+            social_links: None,
+        };
+
+        let yaml = serde_yaml::to_string(&fm).expect("serialize");
+        assert!(!yaml.contains("social_links"), "social_links should be omitted when None, got:\n{}", yaml);
+    }
 }
 
 mod fix_yaml_tests {
@@ -525,5 +567,261 @@ mod network_tests {
         progress.inc();
         // Verify it updates without panic
         assert!(true);
+    }
+}
+
+mod cleaner_tests {
+    use email_to_markdown::cleaner;
+    use mailparse::MailHeaderMap;
+
+    // Phase 1 — Task 1.1: minimal RFC822 reproducing the =C2=A0 leak.
+    // U+00A0 (no-break space) is encoded in UTF-8 as bytes C2 A0.
+    // In quoted-printable that becomes the literal sequence "=C2=A0".
+    // mailparse should decode this to the actual NBSP character.
+    // This integration test asserts the extracted body string contains
+    // a real NBSP and NOT the raw "=C2=A0" sequence.
+    const LEAK_SAMPLE_FLAT: &[u8] = b"From: sender@example.com\r\n\
+To: recipient@example.com\r\n\
+Subject: Test\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+Content-Transfer-Encoding: quoted-printable\r\n\
+\r\n\
+Bonjour=C2=A0world\r\n";
+
+    const LEAK_SAMPLE_NESTED: &[u8] = b"From: sender@example.com\r\n\
+To: recipient@example.com\r\n\
+Subject: Test\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/alternative; boundary=\"BOUNDARY1\"\r\n\
+\r\n\
+--BOUNDARY1\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+Content-Transfer-Encoding: quoted-printable\r\n\
+\r\n\
+Bonjour=C2=A0world\r\n\
+--BOUNDARY1\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+Content-Transfer-Encoding: quoted-printable\r\n\
+\r\n\
+<p>Bonjour=C2=A0world</p>\r\n\
+--BOUNDARY1--\r\n";
+
+    const LEAK_SAMPLE_DOUBLE_NESTED: &[u8] = b"From: sender@example.com\r\n\
+To: recipient@example.com\r\n\
+Subject: Test\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"OUTER\"\r\n\
+\r\n\
+--OUTER\r\n\
+Content-Type: multipart/alternative; boundary=\"INNER\"\r\n\
+\r\n\
+--INNER\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+Content-Transfer-Encoding: quoted-printable\r\n\
+\r\n\
+Bonjour=C2=A0world\r\n\
+--INNER\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+Content-Transfer-Encoding: quoted-printable\r\n\
+\r\n\
+<p>Bonjour=C2=A0world</p>\r\n\
+--INNER--\r\n\
+--OUTER--\r\n";
+
+    /// Mirror of `email_export::extract_body` so the test exercises the
+    /// exact same extraction path the production code uses.
+    fn extract_body_for_test(mail: &mailparse::ParsedMail) -> String {
+        if mail.subparts.is_empty() {
+            mail.get_body().unwrap_or_default()
+        } else {
+            let mut body = String::new();
+            for part in &mail.subparts {
+                let content_type = part
+                    .headers
+                    .get_first_value("Content-Type")
+                    .unwrap_or_default()
+                    .to_lowercase();
+
+                if content_type.starts_with("text/plain") {
+                    body = part.get_body().unwrap_or_default();
+                    break;
+                } else if content_type.starts_with("text/html") && body.is_empty() {
+                    body = part.get_body().unwrap_or_default();
+                } else if content_type.starts_with("multipart/") {
+                    let nested_body = extract_body_for_test(part);
+                    if !nested_body.is_empty() && body.is_empty() {
+                        body = nested_body;
+                    }
+                }
+            }
+            body
+        }
+    }
+
+    #[test]
+    fn test_qp_leak_flat_text_plain() {
+        let mail = mailparse::parse_mail(LEAK_SAMPLE_FLAT).unwrap();
+        let body = extract_body_for_test(&mail);
+        assert!(
+            !body.contains("=C2=A0"),
+            "flat QP body still contains raw =C2=A0 sequence: {:?}",
+            body
+        );
+        assert!(
+            body.contains('\u{00A0}'),
+            "flat QP body should contain decoded NBSP: {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_qp_leak_nested_multipart_alternative() {
+        let mail = mailparse::parse_mail(LEAK_SAMPLE_NESTED).unwrap();
+        let body = extract_body_for_test(&mail);
+        assert!(
+            !body.contains("=C2=A0"),
+            "nested QP body still contains raw =C2=A0 sequence: {:?}",
+            body
+        );
+        assert!(
+            body.contains('\u{00A0}'),
+            "nested QP body should contain decoded NBSP: {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_qp_leak_double_nested_mixed_alternative() {
+        let mail = mailparse::parse_mail(LEAK_SAMPLE_DOUBLE_NESTED).unwrap();
+        let body = extract_body_for_test(&mail);
+        assert!(
+            !body.contains("=C2=A0"),
+            "double-nested QP body still contains raw =C2=A0 sequence: {:?}",
+            body
+        );
+        assert!(
+            body.contains('\u{00A0}'),
+            "double-nested QP body should contain decoded NBSP: {:?}",
+            body
+        );
+    }
+
+    // Phase 5 — End-to-end pipeline integration test on a realistic body.
+    const JEVEUX_BODY: &str = "Bonjour stVerif SARL,\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\n\nMerci pour votre inscription sur JeVeuxTravailler/JeVeuxRecruter.\n\nVotre compte est créé. Il ne vous reste plus qu'une étape pour accéder\nà votre espace recruteur et découvrir les candidats disponibles dans\nvotre secteur en utilisant notre plateforme de recherche avancée.\n\nCliquez sur le bouton ci-dessous pour confirmer votre adresse email.\n\n[Activer mon compte recruteur](https://jeveuxtravailler.com/api/verify-email?token=eyJ1aWQiOiJaZHNBb3FCeE5UT2hXNVBDQTZzZmR3QW9mb2YxIiwidXNlclR5cGUiOiJyZWNydWl0ZXIiLCJleHAiOjE3NzU5MjI3OTF9.7mIbZQR8d3f2XBkzPmIW42toBN6QZbnbUqoXiDvq7aA&utm_source=onboarding)\n\nSi vous n'êtes pas à l'origine de cette demande, vous pouvez ignorer\ncet email.\n\nÀ très vite,\nL'équipe JeVeuxTravailler !\n\n[instagram](https://www.instagram.com/jeveuxtravailler_fr/)\n[tiktok](https://www.tiktok.com/@jeveuxtravailler.com)\n[facebook](https://www.facebook.com/talentissim/?locale=fr_FR)\n[LinkedIn](https://www.linkedin.com/company/jeveuxtravailler-jeveuxrecruter/)\n";
+
+    #[test]
+    fn test_clean_e2e_jeveuxtravailler_body() {
+        let result = cleaner::clean(JEVEUX_BODY);
+        let body = &result.body;
+
+        // No QP residue
+        assert!(
+            !body.contains("=C2=A0"),
+            "body still contains QP residue: {:?}",
+            body
+        );
+
+        // Runs of nbsp collapsed
+        assert!(
+            !body.contains("\u{00A0}\u{00A0}"),
+            "runs of NBSP not collapsed: {:?}",
+            body
+        );
+
+        // CTA rewritten as numbered reference
+        assert!(
+            body.contains("[Activer mon compte recruteur]["),
+            "CTA not rewritten as numbered reference: {:?}",
+            body
+        );
+
+        // JWT token still present somewhere in the body (in the reference)
+        assert!(
+            body.contains("eyJ1aWQi"),
+            "JWT token lost from reference section: {:?}",
+            body
+        );
+
+        // Find the CTA reference URL line and assert tracker decontamination
+        let cta_ref_line = body
+            .lines()
+            .find(|l| l.starts_with("[1]:") && l.contains("jeveuxtravailler.com"))
+            .expect("expected a [1]: reference line for the CTA URL");
+        assert!(
+            !cta_ref_line.contains("utm_source"),
+            "utm_source not stripped from reference URL: {:?}",
+            cta_ref_line
+        );
+
+        // Wrapped paragraph has been unwrapped (lenient subset check)
+        assert!(
+            body.contains("accéder à votre"),
+            "wrapped paragraph not unwrapped: {:?}",
+            body
+        );
+
+        // Strict prose-continuity check — catches reattach_urls corruption (D1)
+        assert!(
+            body.contains("disponibles dans votre secteur"),
+            "prose wrap corruption — missing space between 'dans' and 'votre': {:?}",
+            body
+        );
+        assert!(
+            !body.contains("dansvotre"),
+            "prose wrap corruption — 'dans' and 'votre' fused without space: {:?}",
+            body
+        );
+
+        // Social footer extracted
+        let links = result
+            .social_links
+            .as_ref()
+            .expect("expected social_links to be Some");
+        assert_eq!(links.len(), 4, "expected exactly 4 social networks");
+        assert!(links.contains_key("instagram"));
+        assert!(links.contains_key("tiktok"));
+        assert!(links.contains_key("facebook"));
+        assert!(links.contains_key("linkedin"));
+
+        // Social lines removed from the body
+        assert!(
+            !body.contains("[instagram]"),
+            "instagram line not removed from body: {:?}",
+            body
+        );
+        assert!(
+            !body.contains("[tiktok]"),
+            "tiktok line not removed from body: {:?}",
+            body
+        );
+        assert!(
+            !body.contains("[facebook]"),
+            "facebook line not removed from body: {:?}",
+            body
+        );
+        assert!(
+            !body.contains("[LinkedIn]"),
+            "LinkedIn line not removed from body: {:?}",
+            body
+        );
+
+        // Ends with exactly one newline
+        assert!(
+            body.ends_with('\n'),
+            "body should end with a newline: {:?}",
+            body
+        );
+        assert!(
+            !body.ends_with("\n\n\n"),
+            "runaway trailing newlines: {:?}",
+            body
+        );
+
+        // Loose unwrap-runaway guard
+        assert!(
+            body.lines().all(|l| l.len() < 2000),
+            "found a line longer than 2000 chars (unwrap runaway?)"
+        );
     }
 }

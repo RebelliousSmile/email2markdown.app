@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Build**: `rtk cargo build --release` — binary at `target/release/email-to-markdown.exe`
 - **Build with tray** (system tray icon, optional feature): `rtk cargo build --release --features tray`
-- **Tests**: `rtk cargo test` — 93 tests across 4 suites, ~0.1s
+- **Tests**: `rtk cargo test` — 208 tests across 4 suites, ~0.1s
 - **Single module**: `rtk cargo test <module_name>` (e.g. `rtk cargo test config_tests`)
 - **Single test case**: `rtk cargo test test_env_var_name_gmail -- --exact`
 - **Lint**: `rtk cargo clippy --all-targets`

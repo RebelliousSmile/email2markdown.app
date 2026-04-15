@@ -10,7 +10,7 @@ use imap::{ImapConnection, Session};
 use imap_proto::NameAttribute;
 use mailparse::{self, MailHeaderMap, ParsedMail};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,8 @@ pub struct EmailFrontmatter {
     pub subject_hash: String,
     pub tags: Vec<String>,
     pub attachments: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub social_links: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -322,6 +324,12 @@ pub fn export_to_markdown(
         &mut attachments,
     )?;
 
+    // Normalize body and add attachments list
+    let body = normalize_line_breaks(&body);
+    let cleaned = crate::cleaner::clean(&body);
+    let mut normalized_body = cleaned.body;
+    let social_links = cleaned.social_links;
+
     // Create frontmatter
     let frontmatter = EmailFrontmatter {
         from: from_field,
@@ -333,10 +341,8 @@ pub fn export_to_markdown(
         subject_hash,
         tags,
         attachments: attachments.clone(),
+        social_links,
     };
-
-    // Normalize body and add attachments list
-    let mut normalized_body = normalize_line_breaks(&body);
 
     if !attachments.is_empty() {
         normalized_body.push_str("\n\n### Pieces jointes :\n");
@@ -660,7 +666,7 @@ impl ImapExporter {
                 Ok(m) => m,
                 Err(e) => {
                     if self.debug_mode {
-                        println!("  Failed to fetch message {}: {}", uid, e);
+                        println!("  Failed to fetch message {}: {:#}", uid, e);
                     }
                     stats.errors += 1;
                     progress.inc();
@@ -684,10 +690,35 @@ impl ImapExporter {
                         Ok(Some(_)) => stats.exported += 1,
                         Ok(None) => stats.skipped += 1,
                         Err(e) => {
+                            // Malformed messages (RFC-invalid MIME, broken headers, etc.)
+                            // are counted as skipped rather than errored: they cannot be
+                            // exported by design and should not contribute to the error
+                            // count that signals transient/recoverable failures.
+                            let is_malformed =
+                                e.downcast_ref::<mailparse::MailParseError>().is_some();
                             if self.debug_mode {
-                                println!("  Error exporting message {}: {}", uid, e);
+                                let label = if is_malformed {
+                                    "Skipping malformed message"
+                                } else {
+                                    "Error exporting message"
+                                };
+                                println!("  {} {}: {:#}", label, uid, e);
+                                let dump_dir = base_export_directory.join("_failed");
+                                if fs::create_dir_all(&dump_dir).is_ok() {
+                                    let dump_path = dump_dir.join(format!(
+                                        "{}_uid_{}.eml",
+                                        sanitize_filename(&folder.display),
+                                        uid
+                                    ));
+                                    let _ = fs::write(&dump_path, body);
+                                    println!("  Raw message dumped to {}", dump_path.display());
+                                }
                             }
-                            stats.errors += 1;
+                            if is_malformed {
+                                stats.skipped += 1;
+                            } else {
+                                stats.errors += 1;
+                            }
                         }
                     }
                 }
