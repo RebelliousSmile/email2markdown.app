@@ -45,9 +45,6 @@ worktrees/
 .vscode/
 # Ignore tout dans .claude/ sauf commands/custom/
 .claude/*
-!.claude/commands/
-.claude/commands/*
-!.claude/commands/custom/
 .github/
 CLAUDE.md
 AGENTS.md
