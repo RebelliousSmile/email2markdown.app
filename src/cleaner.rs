@@ -170,13 +170,24 @@ fn decontaminate_ref_urls(s: &str) -> String {
 /// regex-replaces any surviving `=[0-9A-F]{2}` runs by interpreting them
 /// as UTF-8 byte sequences.
 ///
+/// Also strips **soft line breaks** (RFC 2045 §6.7): a `=` at end of line
+/// means "join with next line without adding a newline". Without this step,
+/// wrapped sequences like `=C2=\n=A0` are seen as two separate `=C2` / `=A0`
+/// matches — each is a lone UTF-8 continuation byte and falls back to
+/// literal, leaking QP into the output.
+///
 /// Two-byte sequences (`=C2=A0`) are matched first to avoid the single-byte
 /// pattern eating their first half. Invalid UTF-8 is left untouched.
 pub fn decode_residual_qp(s: &str) -> String {
+    // Strip soft line breaks first so wrapped `=C2=\n=A0` becomes `=C2=A0`
+    // and the hex-decode regex below sees it as one match.
+    let soft_break_re = Regex::new(r"=\r?\n").expect("static regex");
+    let unwrapped = soft_break_re.replace_all(s, "");
+
     // Match 1..=4 consecutive =XX hex bytes (UTF-8 max 4 bytes per codepoint),
     // longest first thanks to the +-greediness inside a single match.
     let re = Regex::new(r"(?:=[0-9A-Fa-f]{2}){1,4}").expect("static regex");
-    re.replace_all(s, |caps: &regex::Captures| {
+    re.replace_all(&unwrapped, |caps: &regex::Captures| {
         let m = &caps[0];
         // Each =XX is 3 chars, so byte count = m.len() / 3
         let count = m.len() / 3;
@@ -882,6 +893,43 @@ mod tests {
         let input = "Bonjour=c2=a0world";
         let out = decode_residual_qp(input);
         assert_eq!(out, "Bonjour\u{00A0}world");
+    }
+
+    #[test]
+    fn test_decode_residual_qp_soft_line_break_simple() {
+        // QP soft line break: `=` at end of line = "join with next line".
+        // `=C2=\n=A0` should decode to U+00A0, not leak as literal.
+        let input = "Bonjour=C2=\n=A0world";
+        let out = decode_residual_qp(input);
+        assert_eq!(out, "Bonjour\u{00A0}world");
+    }
+
+    #[test]
+    fn test_decode_residual_qp_soft_line_break_crlf() {
+        // Same, but with CRLF line endings (raw RFC822 style).
+        let input = "Bonjour=C2=\r\n=A0world";
+        let out = decode_residual_qp(input);
+        assert_eq!(out, "Bonjour\u{00A0}world");
+    }
+
+    #[test]
+    fn test_decode_residual_qp_soft_line_break_wrapped_repeatedly() {
+        // Reproduces the user-reported pattern: MTA wraps a run of QP bytes
+        // at ~15 chars with `=` soft-breaks between every pair. Note the
+        // trailing space before one `=\n` AND the leading space after it
+        // produce two spaces between the NBSPs after decode — pipeline's
+        // later collapse_whitespace pass will merge them.
+        let input = "Bonjour estVerif SARL, =C2=\n=A0 =\n =C2=\n=A0 ";
+        let out = decode_residual_qp(input);
+        assert_eq!(out, "Bonjour estVerif SARL, \u{00A0}  \u{00A0} ");
+    }
+
+    #[test]
+    fn test_decode_residual_qp_soft_line_break_alone() {
+        // A soft break with no QP bytes on either side just joins the lines.
+        let input = "word=\nnext";
+        let out = decode_residual_qp(input);
+        assert_eq!(out, "wordnext");
     }
 
     #[test]
