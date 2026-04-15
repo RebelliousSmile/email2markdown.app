@@ -2,202 +2,78 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## Build & test
 
-Email to Markdown Exporter - A Rust CLI tool to export emails from IMAP accounts to Markdown files with YAML frontmatter. Handles attachments, nested folders, contact collection, and quote depth limiting.
+- **Build**: `rtk cargo build --release` — binary at `target/release/email-to-markdown.exe`
+- **Build with tray** (system tray icon, optional feature): `rtk cargo build --release --features tray`
+- **Tests**: `rtk cargo test` — 93 tests across 4 suites, ~0.1s
+- **Single module**: `rtk cargo test <module_name>` (e.g. `rtk cargo test config_tests`)
+- **Single test case**: `rtk cargo test test_env_var_name_gmail -- --exact`
+- **Lint**: `rtk cargo clippy --all-targets`
+- **Linux system deps before build**: `sudo apt-get install build-essential pkg-config libssl-dev`
 
-> **Note**: This project was migrated from Python to Rust. Legacy Python code is in `archive/python_src/`.
-
-## Commands
-
-### Building the project
-```bash
-# Debug build
-cargo build
-
-# Release build (optimized)
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run with debug output
-RUST_BACKTRACE=1 cargo run -- export --debug
-```
-
-### Import from Thunderbird [1]
-```bash
-# List available Thunderbird profiles
-cargo run -- import --list-profiles
-
-# Auto-detect and import from default profile
-cargo run -- import
-
-# Import from specific profile path
-cargo run -- import --profile ~/.thunderbird/abc123.default
-
-# Also generate .env template
-cargo run -- import --generate-env
-```
-
-### Running the export
-```bash
-# Export all configured accounts
-cargo run -- export
-
-# Export specific account(s)
-cargo run -- export --account Gmail
-cargo run -- export --account Gmail,Outlook
-
-# List available accounts
-cargo run -- export --list-accounts
-
-# Debug mode (verbose IMAP output)
-cargo run -- export --account Gmail --debug
-```
-
-### Fix malformed YAML
-```bash
-# Dry run - show what would be fixed
-cargo run -- fix ./exports/gmail --dry-run
-
-# Actually fix the files
-cargo run -- fix ./exports/gmail --apply
-```
-
-### Sort emails
-```bash
-# Sort emails for a specific account
-cargo run -- sort --account Gmail
-
-# Sort emails in a directory
-cargo run -- sort ./exports/gmail
-
-# List accounts
-cargo run -- sort --list-accounts
-
-# Create default config
-cargo run -- sort --create-config
-```
-
-### System tray (optional)
-```bash
-# Build with tray support
-cargo build --release --features tray
-
-# Run the tray
-cargo run --features tray -- tray
-```
+Unit tests are inline in each source module (`#[cfg(test)] mod tests`), integration tests live in `tests/rust_tests.rs` grouped by `mod`. Conventions: `.claude/rules/05-testing/5-rust-tests.md`.
 
 ## Architecture
 
-### Core Modules (src/)
+### CLI dispatcher
 
-- **`main.rs`**: CLI entry point using clap
-- **`lib.rs`**: Module exports
-- **`config.rs`**: Configuration loading and merging (accounts.yaml + settings.yaml → Account)
-  - `RawAccount`, `Settings`, `AccountBehavior`, `Account`, `Config`, `SortConfig`
-  - `app_config_dir()`, `accounts_yaml_path()`, `env_file_path()`, `settings_path()`
-- **`email_export.rs`**: IMAP client and email export logic
-  - `ImapExporter`: IMAP connection and folder iteration
-  - `export_to_markdown()`: Converts email to Markdown with frontmatter
-  - `analyze_email_type()`: Classifies emails (direct, group, newsletter, mailing_list)
-  - `ContactsCollector`: Collects and exports contacts to CSV
-- **`fix_yaml.rs`**: YAML frontmatter correction
-  - `fix_complex_yaml_tags()`: Removes Python-specific YAML tags
-  - `scan_and_fix_directory()`: Batch fix operation
-- **`sort_emails.rs`**: Email categorization
-  - `EmailSorter`: Analyzes and categorizes emails
-  - Categories: delete, summarize, keep
-- **`utils.rs`**: Shared utilities
-  - `limit_quote_depth()`: Reduces citation depth
-  - `get_short_name()`: Extracts initials from email addresses
-  - `is_signature_image()`: Detects signature images
-  - `decode_imap_utf7()`: Decodes IMAP folder names
-- **`thunderbird.rs`**: Thunderbird profile import [1]
-  - `list_profiles()`: Lists available Thunderbird profiles
-  - `extract_accounts()`: Extracts IMAP accounts from `prefs.js`
-  - `extract_passwords()`: Decrypts passwords via NSS (requires Thunderbird closed)
-  - `generate_accounts_yaml()`: Generates accounts.yaml (connection info only)
-- **`tray.rs`** *(feature `tray`)*: System tray icon and event loop (`tao` + `tray-icon`)
-  - Builds context menu dynamically from configured accounts
-  - Rebuilds menu after import (`ActionResult::Imported`)
-- **`tray_actions.rs`** *(feature `tray`)*: Action handlers for tray menu items
-  - Export, sort, import from Thunderbird, choose export directory, open settings
+`main.rs` is a clap dispatcher routing to 5 subcommands: `import`, `export`, `fix`, `sort`, `tray`. Each subcommand uses named-field structs with `#[derive(Subcommand)]`. See `.claude/rules/03-frameworks-and-libraries/3-clap.md`.
 
-### Configuration
+### 3-file config split
 
-Config files are stored in the platform-appropriate directory (via `dirs` crate):
-- **Windows**: `%APPDATA%\email-to-markdown\`
-- **macOS**: `~/Library/Application Support/email-to-markdown/`
-- **Linux**: `~/.config/email-to-markdown/`
+Config lives in a platform-aware directory (`%APPDATA%\email-to-markdown\` on Windows, `~/.config/email-to-markdown/` on Linux, `~/Library/Application Support/email-to-markdown/` on macOS) resolved by `config::app_config_dir()`. Never build these paths with string concatenation — always `PathBuf::join`.
 
-Three files:
-- **`accounts.yaml`**: IMAP connection info only (name, server, port, username, ignored_folders). Generated by `import`.
-- **`settings.yaml`**: App behaviour — `export_base_dir`, default options, per-account overrides. Edited via "Paramètres…" in tray.
-- **`.env`**: Passwords as `{ACCOUNT_NAME}_PASSWORD` or `{ACCOUNT_NAME}_APPLICATION_PASSWORD`. Written by `import --extract-passwords`.
-- **`sort_config.json`**: Sorting rules and thresholds (generated by `sort --create-config`).
+- `accounts.yaml` — pure IMAP connection info (server/port/username/ignored_folders)
+- `settings.yaml` — behaviour (`export_base_dir`, defaults, per-account overrides)
+- `.env` — passwords. Variables are `{SANITIZED_NAME}_PASSWORD` or `_APPLICATION_PASSWORD` (APPLICATION takes priority). The canonical sanitizer is `config::env_var_name()` — always reuse it, never reimplement the rule elsewhere (this was the source of a past bug).
 
-### Key Options (in settings.yaml)
+`RawAccount` (read from YAML) is merged with `Settings` via `merge_account()` to produce resolved `Account` structs (concrete fields, not `Option<T>`). Details in `docs/memory-bank/configuration.md`.
 
-Under `defaults:` (applies to all accounts) or `accounts.<Name>:` (per-account override):
-
-- `quote_depth`: Max citation depth to preserve (default: 1)
-- `skip_existing`: Skip already exported emails (default: true)
-- `collect_contacts`: Generate CSV contact file (default: false)
-- `skip_signature_images`: Filter signature/logo images (default: false)
-- `delete_after_export`: Remove emails after export (default: false)
-- `folder_name`: Custom subdirectory name inside `export_base_dir` (default: account name)
-
-### Output Structure
+### Modules and dependencies
 
 ```
-export_directory/
-├── INBOX/
-│   └── email_YYYY-MM-DD_SENDER_to_RECIPIENT.md
-├── Sent/
-│   └── ...
-└── attachments/
-    └── INBOX/
-        └── email_YYYY-MM-DD_SENDER_to_RECIPIENT_hash_filename.ext
+main.rs — clap dispatcher
+ ├─ config.rs         — paths, Settings, Account, merge, validation
+ ├─ email_export.rs   — ImapExporter, YAML frontmatter, ContactsCollector
+ ├─ thunderbird.rs    — profiles, prefs.js, NSS password extraction, generate_*
+ ├─ fix_yaml.rs       — Python-tag frontmatter repair (migration legacy)
+ ├─ sort_emails.rs    — Delete/Summarize/Keep categorisation
+ ├─ tray.rs           — tao event loop + dynamic menu       [feature: tray]
+ └─ tray_actions.rs   — menu actions, spawned on threads    [feature: tray]
 ```
 
-## Dependencies (Cargo.toml)
+Module-level detail in `docs/memory-bank/module_structure.md`.
 
-Key crates:
-- `imap`: IMAP client
-- `mailparse`: Email parsing
-- `serde`, `serde_yaml`, `serde_json`: Serialization
-- `clap`: CLI argument parsing
-- `chrono`: Date/time handling
-- `regex`: Pattern matching
-- `encoding_rs`: Character encoding
-- `walkdir`: Directory traversal
+### Feature-gated tray
 
-## Directory Structure
+All tray code (`tray.rs`, `tray_actions.rs`) sits behind `#[cfg(feature = "tray")]`. Tray actions return an `ActionResult` (`Success(title, message)`, `Imported(message)`, `Error(message)`) — **never** propagate `Result` to the event loop or it panics. The menu rebuilds automatically after an import to reflect newly-added accounts.
 
-### `src/`
-Rust source code
+### Error handling
 
-### `tests/`
-Rust integration tests
+- `thiserror` only for typed domain errors exported from a module (`ConfigError`)
+- `anyhow::Result<T>` everywhere else, with `.context("…")` on every `?` at module boundaries
+- No `.unwrap()` in `src/` outside test code
+- Tray actions convert `Err` to `ActionResult::Error(String)` — never propagate
 
-### `archive/python_src/`
-Legacy Python code (for reference)
+See `.claude/rules/02-programming-languages/2-rust-errors.md`.
 
-### `archive/python_tests/`
-Legacy Python tests (for reference)
+## Reference documentation
 
-### `docs/`
-Project documentation and AI workflow support
+- `docs/memory-bank/` — detailed architecture (module_structure, configuration, cross_platform, error_handling, testing_strategy) — **human-facing, French**
+- `.claude/rules/` — active code rules (Rust errors/types, clap, serde, tests, mermaid, project-specific rules under `custom/`)
+- `README.md` — user-facing CLI reference (French)
 
-### `config/`
-Example configuration files (accounts.yaml.example, settings.yaml.example)
+## Language convention
 
-## Technical Notes
+- LLM working files (this file, plans in `aidd_docs/tasks/`, rules) — **English**
+- Human documentation (README, memory-bank, CHANGELOG) — **French**
 
-- IMAP modified UTF-7 encoding handled for folder names with special characters
-- Folder names with spaces require quoting in IMAP SELECT commands
-- Email filenames use sender/recipient initials for readability
-- Attachments stored in mirrored folder structure under `attachments/`
-- Cross-platform support (Windows, Linux, macOS)
+## Project rules
+
+All files under `.claude/rules/` are active:
+
+- Rules with a `paths:` frontmatter auto-load when Claude Code opens matching files
+- Rules without `paths:` are always loaded (see `.claude/rules/04-tooling/ide-mapping.md`)
+
+Add new rules under `.claude/rules/custom/` — no CLAUDE.md edit required.
