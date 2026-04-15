@@ -70,6 +70,8 @@ pub struct AccountBehavior {
     pub skip_signature_images: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_after_export: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_empty_dirs: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -152,6 +154,7 @@ fn merge_account(raw: &RawAccount, settings: &Settings) -> Account {
         collect_contacts: per.and_then(|a| a.collect_contacts).or(def.collect_contacts).unwrap_or(false),
         skip_signature_images: per.and_then(|a| a.skip_signature_images).or(def.skip_signature_images).unwrap_or(false),
         delete_after_export: per.and_then(|a| a.delete_after_export).or(def.delete_after_export).unwrap_or(false),
+        cleanup_empty_dirs: per.and_then(|a| a.cleanup_empty_dirs).or(def.cleanup_empty_dirs).unwrap_or(true),
     }
 }
 
@@ -188,6 +191,7 @@ pub struct Account {
     pub collect_contacts: bool,
     pub skip_signature_images: bool,
     pub delete_after_export: bool,
+    pub cleanup_empty_dirs: bool,
 }
 
 fn default_true() -> bool {
@@ -499,6 +503,66 @@ mod tests {
             env_var_name("first.last-tag@host.example.com"),
             "FIRST_LAST_TAG_HOST_EXAMPLE_COM"
         );
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_default_true() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let accounts_path = temp.path().join("accounts.yaml");
+        let settings_path = temp.path().join("settings.yaml");
+        std::fs::write(
+            &accounts_path,
+            "accounts:\n  - name: Test\n    server: imap.example.com\n    port: 993\n    username: test@example.com\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &settings_path,
+            "export_base_dir: /tmp/exports\n",
+        )
+        .unwrap();
+
+        let config = Config::load_with_settings(&accounts_path, &settings_path).unwrap();
+        assert!(config.accounts[0].cleanup_empty_dirs);
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_defaults_false() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let accounts_path = temp.path().join("accounts.yaml");
+        let settings_path = temp.path().join("settings.yaml");
+        std::fs::write(
+            &accounts_path,
+            "accounts:\n  - name: Test\n    server: imap.example.com\n    port: 993\n    username: test@example.com\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &settings_path,
+            "export_base_dir: /tmp/exports\ndefaults:\n  cleanup_empty_dirs: false\n",
+        )
+        .unwrap();
+
+        let config = Config::load_with_settings(&accounts_path, &settings_path).unwrap();
+        assert!(!config.accounts[0].cleanup_empty_dirs);
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_per_account_override() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let accounts_path = temp.path().join("accounts.yaml");
+        let settings_path = temp.path().join("settings.yaml");
+        std::fs::write(
+            &accounts_path,
+            "accounts:\n  - name: Test\n    server: imap.example.com\n    port: 993\n    username: test@example.com\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &settings_path,
+            "export_base_dir: /tmp/exports\ndefaults:\n  cleanup_empty_dirs: false\naccounts:\n  Test:\n    cleanup_empty_dirs: true\n",
+        )
+        .unwrap();
+
+        let config = Config::load_with_settings(&accounts_path, &settings_path).unwrap();
+        assert!(config.accounts[0].cleanup_empty_dirs);
     }
 
     #[test]

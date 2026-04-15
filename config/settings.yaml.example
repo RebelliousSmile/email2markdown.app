@@ -14,6 +14,7 @@ defaults:
   collect_contacts: false    # Generate a CSV of contacts
   skip_signature_images: true  # Ignore signature/logo images
   delete_after_export: false   # Delete from server after export
+  cleanup_empty_dirs: true     # Silently prune empty directories after each account export
 
 # Per-account overrides (optional)
 # accounts:
@@ -23,3 +24,4 @@ defaults:
 #   Outlook:
 #     collect_contacts: true
 #     quote_depth: 2
+#     cleanup_empty_dirs: false  # Keep empty folders for this account only

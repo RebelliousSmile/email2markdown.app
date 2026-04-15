@@ -749,41 +749,52 @@ impl ImapExporter {
 
     /// Export all folders for the account.
     pub fn export_account(&mut self) -> Result<HashMap<String, ExportStats>> {
-        let mut results = HashMap::new();
-        let mut contacts_collector = if self.account.collect_contacts {
-            Some(ContactsCollector::new())
-        } else {
-            None
-        };
+        // Run the existing body in an IIFE so cleanup can run on every exit path.
+        let run_result: Result<HashMap<String, ExportStats>> = (|| {
+            let mut results = HashMap::new();
+            let mut contacts_collector = if self.account.collect_contacts {
+                Some(ContactsCollector::new())
+            } else {
+                None
+            };
 
-        let folders = self.list_folders()?;
+            let folders = self.list_folders()?;
 
-        for folder in folders {
-            // Skip ignored folders (matched against the decoded display name)
-            if self.account.ignored_folders.contains(&folder.display) {
-                println!("Ignored folder: {}", folder.display);
-                continue;
+            for folder in folders {
+                // Skip ignored folders (matched against the decoded display name)
+                if self.account.ignored_folders.contains(&folder.display) {
+                    println!("Ignored folder: {}", folder.display);
+                    continue;
+                }
+
+                println!("Exporting {} ...", folder.display);
+
+                let stats = self.export_folder(&folder, contacts_collector.as_mut())?;
+                println!(
+                    "  {} exported, {} skipped, {} errors",
+                    stats.exported, stats.skipped, stats.errors
+                );
+
+                results.insert(folder.display, stats);
             }
 
-            println!("Exporting {} ...", folder.display);
+            // Generate contacts file if enabled
+            if let Some(collector) = contacts_collector {
+                let base_dir = PathBuf::from(&self.account.export_directory);
+                let filepath = collector.generate_csv(&base_dir, &self.account.name)?;
+                println!("Generated contacts file: {}", filepath.display());
+            }
 
-            let stats = self.export_folder(&folder, contacts_collector.as_mut())?;
-            println!(
-                "  {} exported, {} skipped, {} errors",
-                stats.exported, stats.skipped, stats.errors
+            Ok(results)
+        })();
+
+        if self.account.cleanup_empty_dirs {
+            let _ = crate::utils::cleanup_empty_dirs(
+                &PathBuf::from(&self.account.export_directory),
             );
-
-            results.insert(folder.display, stats);
         }
 
-        // Generate contacts file if enabled
-        if let Some(collector) = contacts_collector {
-            let base_dir = PathBuf::from(&self.account.export_directory);
-            let filepath = collector.generate_csv(&base_dir, &self.account.name)?;
-            println!("Generated contacts file: {}", filepath.display());
-        }
-
-        Ok(results)
+        run_result
     }
 
     /// Disconnect from the server.
