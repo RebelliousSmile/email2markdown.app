@@ -7,6 +7,7 @@ use crate::utils::{
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Utc};
 use imap::{ImapConnection, Session};
+use imap_proto::NameAttribute;
 use mailparse::{self, MailHeaderMap, ParsedMail};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -591,7 +592,12 @@ impl ImapExporter {
     }
 
     /// List all folders.
-    pub fn list_folders(&mut self) -> Result<Vec<String>> {
+    ///
+    /// Returns the raw IMAP name (modified UTF-7, used for `SELECT`) and a decoded
+    /// display name (used for local paths, `ignored_folders` matching and logging).
+    /// Folders with the `\Noselect` attribute (e.g. Gmail's `[Gmail]` parent) are
+    /// filtered out because they cannot be opened with `SELECT`.
+    pub fn list_folders(&mut self) -> Result<Vec<FolderName>> {
         let session = self.session.as_mut().context("Not connected")?;
 
         if self.debug_mode {
@@ -599,9 +605,14 @@ impl ImapExporter {
         }
 
         let folders = session.list(None, Some("*"))?;
-        let folder_names: Vec<String> = folders
+        let folder_names: Vec<FolderName> = folders
             .iter()
-            .map(|f| decode_imap_utf7(f.name()))
+            .filter(|f| !f.attributes().contains(&NameAttribute::NoSelect))
+            .map(|f| {
+                let raw = f.name().to_string();
+                let display = decode_imap_utf7(f.name());
+                FolderName { raw, display }
+            })
             .collect();
 
         if self.debug_mode {
@@ -614,16 +625,16 @@ impl ImapExporter {
     /// Export a single folder.
     pub fn export_folder(
         &mut self,
-        folder_name: &str,
+        folder: &FolderName,
         mut contacts_collector: Option<&mut ContactsCollector>,
     ) -> Result<ExportStats> {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
-        let export_directory = base_export_directory.join(folder_name.replace('.', "/"));
+        let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
 
         let session = self.session.as_mut().context("Not connected")?;
 
-        // Select folder
-        let mailbox = session.select(folder_name)?;
+        // Select folder using the raw IMAP name (modified UTF-7)
+        let mailbox = session.select(&folder.raw)?;
         let message_count = mailbox.exists as usize;
 
         if self.debug_mode {
@@ -636,7 +647,7 @@ impl ImapExporter {
         let total_messages = uids_vec.len();
 
         // [3] Progress indicator
-        let mut progress = ProgressIndicator::new(folder_name, total_messages);
+        let mut progress = ProgressIndicator::new(&folder.display, total_messages);
         let mut stats = ExportStats::default();
 
         for (_idx, uid) in uids_vec.into_iter().enumerate() {
@@ -663,7 +674,7 @@ impl ImapExporter {
                         body,
                         &export_directory,
                         &base_export_directory,
-                        vec![folder_name.to_string()],
+                        vec![folder.display.clone()],
                         &self.account,
                         contacts_collector.as_deref_mut(),
                         self.debug_mode,
@@ -717,13 +728,13 @@ impl ImapExporter {
         let folders = self.list_folders()?;
 
         for folder in folders {
-            // Skip ignored folders
-            if self.account.ignored_folders.contains(&folder) {
-                println!("Ignored folder: {}", folder);
+            // Skip ignored folders (matched against the decoded display name)
+            if self.account.ignored_folders.contains(&folder.display) {
+                println!("Ignored folder: {}", folder.display);
                 continue;
             }
 
-            println!("Exporting {} ...", folder);
+            println!("Exporting {} ...", folder.display);
 
             let stats = self.export_folder(&folder, contacts_collector.as_mut())?;
             println!(
@@ -731,7 +742,7 @@ impl ImapExporter {
                 stats.exported, stats.skipped, stats.errors
             );
 
-            results.insert(folder, stats);
+            results.insert(folder.display, stats);
         }
 
         // Generate contacts file if enabled
@@ -758,6 +769,17 @@ pub struct ExportStats {
     pub exported: usize,
     pub skipped: usize,
     pub errors: usize,
+}
+
+/// A mailbox name as returned by the IMAP `LIST` response.
+///
+/// `raw` is the modified UTF-7 name as sent by the server and must be used
+/// for IMAP commands like `SELECT`. `display` is the decoded UTF-8 form used
+/// for local paths, logging and matching against `ignored_folders`.
+#[derive(Debug, Clone)]
+pub struct FolderName {
+    pub raw: String,
+    pub display: String,
 }
 
 #[cfg(test)]

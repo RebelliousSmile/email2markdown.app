@@ -11,6 +11,7 @@ categories = ["command-line-utilities"]
 [dependencies]
 # IMAP client
 imap = "3.0.0-alpha.15"
+imap-proto = "0.16"
 native-tls = "0.2"
 
 # Email parsing
