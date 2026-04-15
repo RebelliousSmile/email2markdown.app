@@ -232,6 +232,7 @@ fn parse_prefs_js(content: &str) -> Result<Vec<Account>> {
             collect_contacts: false,
             skip_signature_images: true,
             delete_after_export: false,
+            cleanup_empty_dirs: true,
         });
     }
 

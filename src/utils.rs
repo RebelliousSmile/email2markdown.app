@@ -1,4 +1,6 @@
+use anyhow::Context;
 use regex::Regex;
+use std::fs;
 use std::path::Path;
 
 /// Limit the depth of quoted messages to reduce redundancy.
@@ -379,6 +381,95 @@ pub fn get_relative_path(from: &Path, to: &Path) -> String {
     }
 }
 
+/// Check whether a file name is considered OS junk (case-insensitive).
+fn is_junk_file_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("Thumbs.db")
+        || name.eq_ignore_ascii_case(".DS_Store")
+        || name.eq_ignore_ascii_case("desktop.ini")
+}
+
+/// Bottom-up prune of empty directories under `root`.
+///
+/// A directory is considered empty when it contains nothing but OS junk files
+/// (`Thumbs.db`, `.DS_Store`, `desktop.ini`, case-insensitive) and/or
+/// subdirectories that were themselves pruned by the recursive pass. Junk
+/// files are never deleted on their own — they are only removed together with
+/// their parent directory.
+///
+/// Symlinks (both file and directory) are always treated as content: they are
+/// never followed and never deleted, even if the target looks empty.
+pub fn cleanup_empty_dirs(root: &Path) -> anyhow::Result<()> {
+    // Defensive early-returns: empty path, missing target, or non-directory.
+    if root.as_os_str().is_empty() {
+        return Ok(());
+    }
+    if !root.exists() {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        return Ok(());
+    }
+
+    // First pass: recurse into every real subdirectory, bottom-up.
+    let entries = fs::read_dir(root).context("failed to read directory")?;
+    for entry in entries {
+        let entry = entry.context("failed to read directory entry")?;
+        let file_type = entry
+            .file_type()
+            .context("failed to read entry file type")?;
+        if file_type.is_dir() && !file_type.is_symlink() {
+            cleanup_empty_dirs(&entry.path())?;
+        }
+    }
+
+    // Second pass: classify what remains after the recursion.
+    let mut junk_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut has_content = false;
+    let remaining = fs::read_dir(root).context("failed to re-read directory")?;
+    for entry in remaining {
+        let entry = entry.context("failed to read directory entry")?;
+        let file_type = entry
+            .file_type()
+            .context("failed to read entry file type")?;
+        let path = entry.path();
+
+        if file_type.is_symlink() {
+            // Symlinks always count as content — never follow, never delete.
+            has_content = true;
+            continue;
+        }
+        if file_type.is_dir() {
+            // Subdir survived recursion → real content.
+            has_content = true;
+            continue;
+        }
+        if file_type.is_file() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if is_junk_file_name(&name_str) {
+                junk_files.push(path);
+            } else {
+                has_content = true;
+            }
+            continue;
+        }
+        // Unknown entry kind (e.g. block device): treat as content to stay safe.
+        has_content = true;
+    }
+
+    if has_content {
+        return Ok(());
+    }
+
+    // Only junk (or nothing) remains: delete junk, then the directory itself.
+    for junk in junk_files {
+        fs::remove_file(&junk).context("failed to remove junk file")?;
+    }
+    fs::remove_dir(root).context("failed to remove empty directory")?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,5 +557,134 @@ mod tests {
         // Test folder name with accented characters
         let result = decode_imap_utf7("INBOX.Envoy&AOk-s");
         assert_eq!(result, "INBOX.Envoyés");
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_removes_leaf() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let leaf = temp.path().join("leaf");
+        std::fs::create_dir(&leaf).unwrap();
+
+        cleanup_empty_dirs(temp.path()).unwrap();
+
+        assert!(!leaf.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_nested_empty_tree() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let a = temp.path().join("a");
+        let c = a.join("b").join("c");
+        std::fs::create_dir_all(&c).unwrap();
+
+        cleanup_empty_dirs(temp.path()).unwrap();
+
+        assert!(!a.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_directory_with_junk_only() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join("junk_only");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("Thumbs.db"), b"junk").unwrap();
+
+        cleanup_empty_dirs(temp.path()).unwrap();
+
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_directory_with_real_content() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join("real");
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("note.md");
+        std::fs::write(&file, b"content").unwrap();
+
+        cleanup_empty_dirs(temp.path()).unwrap();
+
+        assert!(dir.exists());
+        assert!(file.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_mixed_real_and_junk() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join("mixed");
+        std::fs::create_dir(&dir).unwrap();
+        let real = dir.join("note.md");
+        let junk = dir.join("Thumbs.db");
+        std::fs::write(&real, b"content").unwrap();
+        std::fs::write(&junk, b"junk").unwrap();
+
+        cleanup_empty_dirs(temp.path()).unwrap();
+
+        assert!(dir.exists());
+        assert!(real.exists());
+        assert!(junk.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_partial_tree() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let populated = temp.path().join("populated");
+        let empty_branch = temp.path().join("empty_branch");
+        std::fs::create_dir(&populated).unwrap();
+        std::fs::create_dir_all(empty_branch.join("child")).unwrap();
+        let file = populated.join("note.md");
+        std::fs::write(&file, b"content").unwrap();
+
+        cleanup_empty_dirs(temp.path()).unwrap();
+
+        assert!(populated.exists());
+        assert!(file.exists());
+        assert!(!empty_branch.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_nonexistent_root() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let missing = temp.path().join("does_not_exist");
+
+        let result = cleanup_empty_dirs(&missing);
+
+        assert!(result.is_ok());
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_junk_case_insensitive() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join("lowercase_junk");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("thumbs.db"), b"junk").unwrap();
+        std::fs::write(dir.join(".ds_store"), b"junk").unwrap();
+
+        cleanup_empty_dirs(temp.path()).unwrap();
+
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_real_content_with_empty_subdir() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let parent = temp.path().join("parent");
+        let empty_child = parent.join("empty_child");
+        std::fs::create_dir_all(&empty_child).unwrap();
+        let real = parent.join("note.md");
+        std::fs::write(&real, b"content").unwrap();
+
+        cleanup_empty_dirs(temp.path()).unwrap();
+
+        assert!(parent.exists());
+        assert!(real.exists());
+        assert!(!empty_child.exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs_empty_root_arg() {
+        let result = cleanup_empty_dirs(Path::new(""));
+        assert!(result.is_ok());
     }
 }
