@@ -357,6 +357,30 @@ pub fn is_signature_image(
     false
 }
 
+/// Extract a CamelCase subject snippet for use in filenames.
+///
+/// Splits the subject on non-alphabetic characters, keeps only tokens
+/// strictly longer than 3 letters, CamelCases each token, concatenates
+/// them, and hard-truncates the result to 12 characters.
+/// Returns an empty string when no qualifying tokens remain.
+pub fn subject_extract(subject: &str) -> String {
+    let result: String = subject
+        .split(|c: char| !c.is_alphabetic())
+        .filter(|token| token.len() > 3)
+        .map(|token| {
+            let mut chars = token.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    let upper: String = first.to_uppercase().collect();
+                    upper + &chars.as_str().to_lowercase()
+                }
+            }
+        })
+        .collect();
+    result.chars().take(12).collect()
+}
+
 /// Generate MD5 hash prefix for uniqueness.
 pub fn hash_md5_prefix(text: &str, length: usize) -> String {
     let digest = md5::compute(text.as_bytes());
@@ -523,6 +547,47 @@ mod tests {
         assert!(is_signature_image(Some("logo.jpg"), "image/jpeg", 5120, Some("attachment")));
         assert!(!is_signature_image(Some("contract.pdf"), "application/pdf", 102400, Some("attachment")));
         assert!(!is_signature_image(Some("photo_vacation.jpg"), "image/jpeg", 2048000, Some("attachment")));
+    }
+
+    #[test]
+    fn test_subject_extract_normal() {
+        // "Contract" (8) and "project" (7) qualify; "for", "the", "new" do not (≤3)
+        // "ContractProject" truncated to 12 = "ContractProj"
+        assert_eq!(subject_extract("Re: Contract for the new project"), "ContractProj");
+    }
+
+    #[test]
+    fn test_subject_extract_truncates_to_12() {
+        let result = subject_extract("Information about enterprise restructuring");
+        assert_eq!(result.chars().count(), 12);
+    }
+
+    #[test]
+    fn test_subject_extract_no_long_words() {
+        assert_eq!(subject_extract("Hi ok"), "");
+    }
+
+    #[test]
+    fn test_subject_extract_empty() {
+        assert_eq!(subject_extract(""), "");
+    }
+
+    #[test]
+    fn test_subject_extract_exact_12() {
+        // "Contract" (8) + "Proj" = 12 chars — should not be cut further
+        let result = subject_extract("Contract Proj");
+        assert_eq!(result, "ContractProj");
+    }
+
+    #[test]
+    fn test_subject_extract_under_12() {
+        // "Hello" (5) qualifies; "ok" (2) does not
+        assert_eq!(subject_extract("Hello ok"), "Hello");
+    }
+
+    #[test]
+    fn test_subject_extract_camel_case() {
+        assert_eq!(subject_extract("HELLO WORLD"), "HelloWorld");
     }
 
     #[test]

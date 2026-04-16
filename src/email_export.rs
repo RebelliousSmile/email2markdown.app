@@ -2,7 +2,7 @@ use crate::config::Account;
 use crate::network::{NetworkConfig, ProgressIndicator, with_retry};  // [3][4]
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
-    is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename,
+    is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename, subject_extract,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Utc};
@@ -289,7 +289,12 @@ pub fn export_to_markdown(
     fs::create_dir_all(export_directory)?;
 
     // Generate unique filename
-    let base_filename = format!("email_{}_{}*to_{}", date_str, sender_short, recipient_short);
+    let extract = subject_extract(&subject);
+    let base_filename = if extract.is_empty() {
+        format!("email_{}_{}*to_{}", date_str, sender_short, recipient_short)
+    } else {
+        format!("email_{}_{}_{}*to_{}", date_str, sender_short, extract, recipient_short)
+    };
     let mut counter = 1;
     let mut filename = format!("{}.md", base_filename.replace('*', "_"));
     while export_directory.join(&filename).exists() {
