@@ -159,7 +159,7 @@ fn merge_account(raw: &RawAccount, settings: &Settings) -> Account {
         skip_signature_images: per.and_then(|a| a.skip_signature_images).or(def.skip_signature_images).unwrap_or(false),
         delete_after_export: per.and_then(|a| a.delete_after_export).or(def.delete_after_export).unwrap_or(false),
         cleanup_empty_dirs: per.and_then(|a| a.cleanup_empty_dirs).or(def.cleanup_empty_dirs).unwrap_or(true),
-        organize_by_type: per.and_then(|a| a.organize_by_type).or(def.organize_by_type).unwrap_or(false),
+        organize_by_type: per.and_then(|a| a.organize_by_type).or(def.organize_by_type).unwrap_or(true),
     }
 }
 
@@ -451,7 +451,7 @@ impl Default for SortConfig {
             use_type_weights: true,
             delete_newsletters: false,
             penalize_recurring: false,
-            organize_by_type: false,
+            organize_by_type: true,
         }
     }
 }
