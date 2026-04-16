@@ -11,8 +11,9 @@ use anyhow::{Context, Result};
 use rfd;
 
 use crate::config::{self, Config, SortConfig};
-use crate::email_export::ImapExporter;
-use crate::sort_emails::{Category, EmailSorter};
+use crate::email_export::{self, ImapExporter};
+use crate::fix_yaml;
+use crate::sort_emails::EmailSorter;
 use crate::thunderbird;
 
 /// Result of an action, sent back to the main thread for notification.
@@ -23,6 +24,11 @@ pub enum ActionResult {
     /// Import completed — the main thread should rebuild the tray menu.
     Imported(String),
     Error(String),
+    /// Sort completed — the main thread should open the review window.
+    SortCompleted {
+        account: String,
+        report_path: std::path::PathBuf,
+    },
 }
 
 /// Export emails for a specific account.
@@ -83,14 +89,17 @@ pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
     thread::spawn(move || {
         let result = run_sort(&account_name);
         let action_result = match result {
-            Ok(message) => ActionResult::Success("Tri terminé".to_string(), message),
+            Ok(report_path) => ActionResult::SortCompleted {
+                account: account_name.clone(),
+                report_path,
+            },
             Err(e) => ActionResult::Error(format!("Sort error: {}", e)),
         };
         let _ = result_sender.send(action_result);
     });
 }
 
-fn run_sort(account_name: &str) -> Result<String> {
+fn run_sort(account_name: &str) -> Result<PathBuf> {
     dotenv::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
@@ -107,17 +116,10 @@ fn run_sort(account_name: &str) -> Result<String> {
 
     let report = sorter.generate_report();
     let report_path = sort_directory.join("sort_report.json");
-    sorter.save_report(&report, report_path.to_str().unwrap_or("sort_report.json"))?;
+    sorter.save_report(&report, report_path.to_str().unwrap_or("sort_report.json"))
+        .context("failed to save sort report")?;
 
-    let categories = sorter.categories();
-    let delete_count = categories.get(&Category::Delete).map(|v| v.len()).unwrap_or(0);
-    let summarize_count = categories.get(&Category::Summarize).map(|v| v.len()).unwrap_or(0);
-    let keep_count = categories.get(&Category::Keep).map(|v| v.len()).unwrap_or(0);
-
-    Ok(format!(
-        "{}: {} delete, {} summarize, {} keep",
-        account_name, delete_count, summarize_count, keep_count
-    ))
+    Ok(report_path)
 }
 
 /// Import accounts from Thunderbird.
@@ -292,6 +294,70 @@ defaults:
 
     open::that(&settings_path).context("Failed to open settings file")?;
     Ok(())
+}
+
+/// Fix YAML frontmatter for a specific account's export directory.
+pub fn action_fix_yaml(account_name: String, result_sender: Sender<ActionResult>) {
+    thread::spawn(move || {
+        let result = run_fix_yaml(&account_name);
+        let action_result = match result {
+            Ok(message) => ActionResult::Success("Fix YAML terminé".to_string(), message),
+            Err(e) => ActionResult::Error(format!("Fix YAML error: {}", e)),
+        };
+        let _ = result_sender.send(action_result);
+    });
+}
+
+fn run_fix_yaml(account_name: &str) -> Result<String> {
+    dotenv::from_path(config::env_file_path()).ok();
+
+    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+
+    let account = config
+        .get_account(account_name)
+        .context(format!("Account '{}' not found", account_name))?;
+
+    let dir = PathBuf::from(&account.export_directory);
+
+    let stats = fix_yaml::scan_and_fix_directory(&dir, false)
+        .context("Failed to fix YAML frontmatter")?;
+
+    Ok(format!(
+        "{}: {} fixed, {} rewritten, {} errors",
+        account_name, stats.files_fixed, stats.files_rewritten, stats.errors
+    ))
+}
+
+/// Fix HTML bodies to Markdown for a specific account's export directory.
+pub fn action_fix_html(account_name: String, result_sender: Sender<ActionResult>) {
+    thread::spawn(move || {
+        let result = run_fix_html(&account_name);
+        let action_result = match result {
+            Ok(message) => ActionResult::Success("Fix HTML→Markdown terminé".to_string(), message),
+            Err(e) => ActionResult::Error(format!("Fix HTML error: {}", e)),
+        };
+        let _ = result_sender.send(action_result);
+    });
+}
+
+fn run_fix_html(account_name: &str) -> Result<String> {
+    dotenv::from_path(config::env_file_path()).ok();
+
+    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+
+    let account = config
+        .get_account(account_name)
+        .context(format!("Account '{}' not found", account_name))?;
+
+    let dir = PathBuf::from(&account.export_directory);
+
+    let stats = email_export::fix_html_bodies(&dir, false)
+        .context("Failed to fix HTML bodies")?;
+
+    Ok(format!(
+        "{}: {} fixed, {} skipped, {} errors",
+        account_name, stats.fixed, stats.skipped, stats.errors
+    ))
 }
 
 /// Get the list of configured accounts.

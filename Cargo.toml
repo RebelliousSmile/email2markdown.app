@@ -69,6 +69,7 @@ base64 = "0.22"
 # System tray (optional)
 tray-icon = { version = "0.19", optional = true }
 tao = { version = "0.30", optional = true }
+wry = { version = "0.44", optional = true }
 rfd = { version = "0.15", optional = true }
 
 # Move emails to trash
@@ -85,7 +86,7 @@ image = { version = "0.25", optional = true }
 
 [features]
 default = []
-tray = ["tray-icon", "tao", "rfd", "image"]
+tray = ["tray-icon", "tao", "wry", "rfd", "image"]
 
 [dev-dependencies]
 tempfile = "3.10"
