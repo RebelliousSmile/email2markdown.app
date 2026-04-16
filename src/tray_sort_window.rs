@@ -13,6 +13,7 @@ use tao::{
     dpi::LogicalSize,
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder},
+    platform::run_return::EventLoopExtRunReturn,
     window::WindowBuilder,
 };
 use wry::WebViewBuilder;
@@ -63,7 +64,7 @@ fn run_window(report_path: PathBuf, account: String, sender: Sender<ActionResult
     let report_path_ipc = report_path.clone();
     let account_ipc = account.clone();
 
-    let event_loop = {
+    let mut event_loop = {
         let mut builder = EventLoopBuilder::<()>::new();
         #[cfg(target_os = "windows")]
         {
@@ -97,7 +98,7 @@ fn run_window(report_path: PathBuf, account: String, sender: Sender<ActionResult
         .build()
         .context("failed to create webview")?;
 
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run_return(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
         match event {
@@ -105,16 +106,18 @@ fn run_window(report_path: PathBuf, account: String, sender: Sender<ActionResult
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
-                *control_flow = ControlFlow::Exit;
+                *control_flow = ControlFlow::ExitWithCode(0);
             }
             Event::MainEventsCleared => {
                 if should_exit.load(Ordering::Acquire) {
-                    *control_flow = ControlFlow::Exit;
+                    *control_flow = ControlFlow::ExitWithCode(0);
                 }
             }
             _ => {}
         }
     });
+
+    Ok(())
 }
 
 /// Parse the IPC JSON, update the report, write it back, and apply it.
