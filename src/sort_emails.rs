@@ -100,6 +100,8 @@ pub struct SortStats {
 pub struct SortReport {
     #[serde(default)]
     pub base_directory: String,
+    #[serde(default)]
+    pub organize_by_type: bool,
     pub summary: SortSummary,
     pub details: SortDetails,
     pub categories: HashMap<String, Vec<EmailSummary>>,
@@ -638,6 +640,7 @@ impl EmailSorter {
 
         SortReport {
             base_directory: self.base_directory.to_string_lossy().to_string(),
+            organize_by_type: self.config.organize_by_type,
             summary: SortSummary {
                 total_emails: self.stats.total_emails,
                 categories: self.stats.by_category.clone(),
@@ -1043,12 +1046,41 @@ pub fn apply_report(report: &SortReport) -> anyhow::Result<ApplyStats> {
     }
 
     // --- KEEP ---
-    let keep_entries: Vec<EmailSummary> = report
-        .categories
-        .get("keep")
-        .cloned()
-        .unwrap_or_default();
-    skipped += keep_entries.len();
+    let keep_entries: Vec<EmailSummary> = report.categories.get("keep").cloned().unwrap_or_default();
+
+    if !report.organize_by_type {
+        skipped += keep_entries.len();
+    } else {
+        for email in &keep_entries {
+            let md_path = base.join(&email.file);
+            if !md_path.exists() {
+                continue;
+            }
+            let type_name = if email.email_type.is_empty() {
+                "unknown"
+            } else {
+                email.email_type.as_str()
+            };
+            let type_dir = base.join(type_name);
+
+            // Skip if already in the correct subfolder
+            if md_path.parent().is_some_and(|p| p == type_dir) {
+                skipped += 1;
+                continue;
+            }
+
+            fs::create_dir_all(&type_dir)
+                .with_context(|| format!("failed to create {}/", type_name))?;
+            let dest = type_dir.join(md_path.file_name().unwrap_or_default());
+            if fs::rename(&md_path, &dest).is_err() {
+                fs::copy(&md_path, &dest)
+                    .with_context(|| format!("failed to copy {} to {}/", email.file, type_name))?;
+                fs::remove_file(&md_path)
+                    .with_context(|| format!("failed to remove {} after copy", email.file))?;
+            }
+            moved += 1;
+        }
+    }
 
     Ok(ApplyStats { deleted, moved, skipped })
 }
@@ -1493,6 +1525,7 @@ mod tests {
         }
         SortReport {
             base_directory: "/tmp".to_string(),
+            organize_by_type: false,
             summary: SortSummary {
                 total_emails: 0,
                 categories: HashMap::new(),

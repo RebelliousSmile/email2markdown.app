@@ -444,6 +444,7 @@ fn main() -> Result<()> {
 
             // Determine directory to sort and per-account override
             let mut per_account_sort: Option<SortConfig> = None;
+            let mut account_organize_by_type: Option<bool> = None;
             let sort_directory = if let Some(acc_name) = account {
                 let accounts_config = Config::load(&config::accounts_yaml_path())
                     .context("Failed to load accounts configuration")?;
@@ -451,6 +452,8 @@ fn main() -> Result<()> {
                 let acc = accounts_config
                     .get_account(&acc_name)
                     .context(format!("Account '{}' not found", acc_name))?;
+
+                account_organize_by_type = Some(acc.organize_by_type);
 
                 // Check for per-account sort config in settings.yaml
                 let settings = config::Settings::load(&config::settings_path()).unwrap_or_default();
@@ -471,11 +474,16 @@ fn main() -> Result<()> {
             };
 
             // Load sort config: per-account override takes precedence over global
-            let sort_config = if let Some(cfg) = per_account_sort {
+            let mut sort_config = if let Some(cfg) = per_account_sort {
                 cfg
             } else {
                 SortConfig::load(&config.unwrap_or_else(config::sort_config_path))?
             };
+
+            // Apply account-level organize_by_type if set
+            if let Some(obt) = account_organize_by_type {
+                sort_config.organize_by_type = obt;
+            }
 
             let mut sorter = EmailSorter::new(sort_directory, sort_config);
 

@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailFrontmatter {
@@ -206,18 +207,20 @@ pub fn email_already_exported(
 
     let search_pattern = format!("email_{}_{}*to_{}*.md", date_str, sender_short, recipient_short);
 
-    if let Ok(entries) = fs::read_dir(export_directory) {
-        for entry in entries.flatten() {
-            let filename = entry.file_name().to_string_lossy().to_string();
-            if glob::Pattern::new(&search_pattern)
-                .map(|p| p.matches(&filename))
-                .unwrap_or(false)
-            {
-                // Check if file contains the subject hash
-                if let Ok(content) = fs::read_to_string(entry.path()) {
-                    if content.contains(subject_hash) {
-                        return true;
-                    }
+    for entry in WalkDir::new(export_directory)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+    {
+        let filename = entry.file_name().to_string_lossy();
+        if glob::Pattern::new(&search_pattern)
+            .map(|p| p.matches(filename.as_ref()))
+            .unwrap_or(false)
+        {
+            if let Ok(content) = fs::read_to_string(entry.path()) {
+                if content.contains(subject_hash) {
+                    return true;
                 }
             }
         }
@@ -924,6 +927,26 @@ mod tests {
         let analysis = analyze_email_type(&mail);
 
         assert_eq!(analysis.email_type, EmailType::Group);
+    }
+
+    #[test]
+    fn test_email_already_exported_in_subfolder() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let subfolder = temp.path().join("direct");
+        fs::create_dir_all(&subfolder).unwrap();
+
+        let md_content = "---\nsubject_hash: abc123\ndate: 2024-01-15\n---\nBody";
+        fs::write(subfolder.join("email_2024-01-15_alice_to_bob_abc123.md"), md_content).unwrap();
+
+        assert!(email_already_exported(
+            "2024-01-15",
+            "alice",
+            "bob",
+            "abc123",
+            temp.path(),
+        ));
     }
 
     #[test]

@@ -73,6 +73,8 @@ pub struct AccountBehavior {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cleanup_empty_dirs: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub organize_by_type: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sort: Option<SortConfig>,
 }
 
@@ -157,6 +159,7 @@ fn merge_account(raw: &RawAccount, settings: &Settings) -> Account {
         skip_signature_images: per.and_then(|a| a.skip_signature_images).or(def.skip_signature_images).unwrap_or(false),
         delete_after_export: per.and_then(|a| a.delete_after_export).or(def.delete_after_export).unwrap_or(false),
         cleanup_empty_dirs: per.and_then(|a| a.cleanup_empty_dirs).or(def.cleanup_empty_dirs).unwrap_or(true),
+        organize_by_type: per.and_then(|a| a.organize_by_type).or(def.organize_by_type).unwrap_or(false),
     }
 }
 
@@ -194,6 +197,7 @@ pub struct Account {
     pub skip_signature_images: bool,
     pub delete_after_export: bool,
     pub cleanup_empty_dirs: bool,
+    pub organize_by_type: bool,
 }
 
 fn default_true() -> bool {
@@ -359,6 +363,8 @@ pub struct SortConfig {
     pub delete_newsletters: bool,
     #[serde(default)]
     pub penalize_recurring: bool,
+    #[serde(default)]
+    pub organize_by_type: bool,
 }
 
 fn default_delete_keywords() -> Vec<String> {
@@ -445,6 +451,7 @@ impl Default for SortConfig {
             use_type_weights: true,
             delete_newsletters: false,
             penalize_recurring: false,
+            organize_by_type: false,
         }
     }
 }

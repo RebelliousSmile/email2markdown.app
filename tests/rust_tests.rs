@@ -916,6 +916,7 @@ mod sort_apply_tests {
         }
         SortReport {
             base_directory: base_directory.to_string(),
+            organize_by_type: false,
             summary: SortSummary {
                 total_emails: 0,
                 categories: HashMap::new(),
@@ -989,5 +990,91 @@ mod sort_apply_tests {
         // Missing files are silently skipped — deleted count stays 0
         let stats = apply_report(&report).unwrap();
         assert_eq!(stats.deleted, 0);
+    }
+
+    #[test]
+    fn test_apply_report_organize_by_type_moves_count() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("email_test.md"), "---\nsubject: Test\n---\nBody").unwrap();
+        let mut summary = make_email_summary("email_test.md", "sender@example.com");
+        summary.email_type = "newsletter".to_string();
+        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
+        categories.insert("keep".to_string(), vec![summary]);
+        let report = SortReport {
+            base_directory: base.to_string_lossy().to_string(),
+            organize_by_type: true,
+            summary: SortSummary { total_emails: 1, categories: HashMap::new(), recommendations: HashMap::new() },
+            details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
+            categories,
+        };
+        let stats = apply_report(&report).unwrap();
+        assert_eq!(stats.moved, 1);
+    }
+
+    #[test]
+    fn test_apply_report_organize_by_type_moves_to_subfolder() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("email_test.md"), "---\nsubject: Test\n---\nBody").unwrap();
+        let mut summary = make_email_summary("email_test.md", "sender@example.com");
+        summary.email_type = "newsletter".to_string();
+        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
+        categories.insert("keep".to_string(), vec![summary]);
+        let report = SortReport {
+            base_directory: base.to_string_lossy().to_string(),
+            organize_by_type: true,
+            summary: SortSummary { total_emails: 1, categories: HashMap::new(), recommendations: HashMap::new() },
+            details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
+            categories,
+        };
+        apply_report(&report).unwrap();
+        assert!(base.join("newsletter").join("email_test.md").exists());
+    }
+
+    #[test]
+    fn test_apply_report_organize_by_type_already_in_subfolder_skipped() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        let newsletter_dir = base.join("newsletter");
+        fs::create_dir_all(&newsletter_dir).unwrap();
+        fs::write(newsletter_dir.join("email_test.md"), "---\nsubject: Test\n---\nBody").unwrap();
+        let mut summary = make_email_summary("newsletter/email_test.md", "sender@example.com");
+        summary.email_type = "newsletter".to_string();
+        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
+        categories.insert("keep".to_string(), vec![summary]);
+        let report = SortReport {
+            base_directory: base.to_string_lossy().to_string(),
+            organize_by_type: true,
+            summary: SortSummary { total_emails: 1, categories: HashMap::new(), recommendations: HashMap::new() },
+            details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
+            categories,
+        };
+        let stats = apply_report(&report).unwrap();
+        assert_eq!(stats.skipped, 1);
+    }
+
+    #[test]
+    fn test_apply_report_organize_by_type_already_in_subfolder_location() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        let newsletter_dir = base.join("newsletter");
+        fs::create_dir_all(&newsletter_dir).unwrap();
+        fs::write(newsletter_dir.join("email_test.md"), "---\nsubject: Test\n---\nBody").unwrap();
+        let mut summary = make_email_summary("newsletter/email_test.md", "sender@example.com");
+        summary.email_type = "newsletter".to_string();
+        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
+        categories.insert("keep".to_string(), vec![summary]);
+        let report = SortReport {
+            base_directory: base.to_string_lossy().to_string(),
+            organize_by_type: true,
+            summary: SortSummary { total_emails: 1, categories: HashMap::new(), recommendations: HashMap::new() },
+            details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
+            categories,
+        };
+        apply_report(&report).unwrap();
+        assert!(newsletter_dir.join("email_test.md").exists());
     }
 }
