@@ -550,12 +550,18 @@ fn extract_filename_from_header(header: &str) -> Option<String> {
     None
 }
 
+fn is_gmail_server(host: &str) -> bool {
+    let lower = host.to_lowercase();
+    lower.contains("gmail.com") || lower.contains("googlemail.com")
+}
+
 /// IMAP client for exporting emails.
 pub struct ImapExporter {
     session: Option<Session<Box<dyn ImapConnection>>>,
     account: Account,
     debug_mode: bool,
     network_config: NetworkConfig,  // [4][5]
+    is_gmail: bool,
 }
 
 impl ImapExporter {
@@ -565,6 +571,7 @@ impl ImapExporter {
             account,
             debug_mode,
             network_config: NetworkConfig::default(),  // [4][5]
+            is_gmail: false,
         }
     }
 
@@ -590,7 +597,10 @@ impl ImapExporter {
         }
 
         let client = imap::ClientBuilder::new(&self.account.server, self.account.port)
-            .connect()?;
+            .connect()
+            .context("connect to imap server")?;
+
+        self.is_gmail = is_gmail_server(&self.account.server);
 
         if self.debug_mode {
             println!("Authenticating as {}...", self.account.username);
@@ -603,6 +613,13 @@ impl ImapExporter {
         }
 
         self.session = Some(session);
+        Ok(())
+    }
+
+    fn expunge_gmail_all_mail(&mut self) -> Result<()> {
+        let session = self.session.as_mut().context("Not connected")?;
+        session.select("[Gmail]/All Mail").context("select [Gmail]/All Mail")?;
+        session.expunge().context("expunge [Gmail]/All Mail")?;
         Ok(())
     }
 
@@ -646,111 +663,123 @@ impl ImapExporter {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
         let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
 
-        let session = self.session.as_mut().context("Not connected")?;
+        // Session borrow is scoped to a block so it ends before the gmail expunge dispatch,
+        // which needs to re-borrow self.session via expunge_gmail_all_mail().
+        let stats = {
+            let session = self.session.as_mut().context("Not connected")?;
 
-        // Select folder using the raw IMAP name (modified UTF-7)
-        let mailbox = session.select(&folder.raw)?;
-        let message_count = mailbox.exists as usize;
+            // Select folder using the raw IMAP name (modified UTF-7)
+            let mailbox = session.select(&folder.raw)?;
+            let message_count = mailbox.exists as usize;
 
-        if self.debug_mode {
-            println!("  {} messages in folder", message_count);
-        }
+            if self.debug_mode {
+                println!("  {} messages in folder", message_count);
+            }
 
-        // Search for all messages
-        let uids = session.search("ALL")?;
-        let uids_vec: Vec<_> = uids.into_iter().collect();
-        let total_messages = uids_vec.len();
+            // Search for all messages
+            let uids = session.search("ALL")?;
+            let uids_vec: Vec<_> = uids.into_iter().collect();
+            let total_messages = uids_vec.len();
 
-        // [3] Progress indicator
-        let mut progress = ProgressIndicator::new(&folder.display, total_messages);
-        let mut stats = ExportStats::default();
+            // [3] Progress indicator
+            let mut progress = ProgressIndicator::new(&folder.display, total_messages);
+            let mut stats = ExportStats::default();
 
-        for (_idx, uid) in uids_vec.into_iter().enumerate() {
-            // [4] Retry logic for fetch
-            let fetch_result = with_retry(&self.network_config, "fetch", || {
-                session.fetch(uid.to_string(), "RFC822")
-            });
+            for (_idx, uid) in uids_vec.into_iter().enumerate() {
+                // [4] Retry logic for fetch
+                let fetch_result = with_retry(&self.network_config, "fetch", || {
+                    session.fetch(uid.to_string(), "RFC822")
+                });
 
-            let messages = match fetch_result {
-                Ok(m) => m,
-                Err(e) => {
-                    if self.debug_mode {
-                        println!("  Failed to fetch message {}: {:#}", uid, e);
+                let messages = match fetch_result {
+                    Ok(m) => m,
+                    Err(e) => {
+                        if self.debug_mode {
+                            println!("  Failed to fetch message {}: {:#}", uid, e);
+                        }
+                        stats.errors += 1;
+                        progress.inc();
+                        continue;
                     }
-                    stats.errors += 1;
-                    progress.inc();
-                    continue;
-                }
-            };
+                };
 
-            for message in messages.iter() {
-                if let Some(body) = message.body() {
-                    let result = export_to_markdown(
-                        body,
-                        &export_directory,
-                        &base_export_directory,
-                        vec![folder.display.clone()],
-                        &self.account,
-                        contacts_collector.as_deref_mut(),
-                        self.debug_mode,
-                    );
+                for message in messages.iter() {
+                    if let Some(body) = message.body() {
+                        let result = export_to_markdown(
+                            body,
+                            &export_directory,
+                            &base_export_directory,
+                            vec![folder.display.clone()],
+                            &self.account,
+                            contacts_collector.as_deref_mut(),
+                            self.debug_mode,
+                        );
 
-                    match result {
-                        Ok(Some(_)) => stats.exported += 1,
-                        Ok(None) => stats.skipped += 1,
-                        Err(e) => {
-                            // Malformed messages (RFC-invalid MIME, broken headers, etc.)
-                            // are counted as skipped rather than errored: they cannot be
-                            // exported by design and should not contribute to the error
-                            // count that signals transient/recoverable failures.
-                            let is_malformed =
-                                e.downcast_ref::<mailparse::MailParseError>().is_some();
-                            if self.debug_mode {
-                                let label = if is_malformed {
-                                    "Skipping malformed message"
-                                } else {
-                                    "Error exporting message"
-                                };
-                                println!("  {} {}: {:#}", label, uid, e);
-                                let dump_dir = base_export_directory.join("_failed");
-                                if fs::create_dir_all(&dump_dir).is_ok() {
-                                    let dump_path = dump_dir.join(format!(
-                                        "{}_uid_{}.eml",
-                                        sanitize_filename(&folder.display),
-                                        uid
-                                    ));
-                                    let _ = fs::write(&dump_path, body);
-                                    println!("  Raw message dumped to {}", dump_path.display());
+                        match result {
+                            Ok(Some(_)) => stats.exported += 1,
+                            Ok(None) => stats.skipped += 1,
+                            Err(e) => {
+                                // Malformed messages (RFC-invalid MIME, broken headers, etc.)
+                                // are counted as skipped rather than errored: they cannot be
+                                // exported by design and should not contribute to the error
+                                // count that signals transient/recoverable failures.
+                                let is_malformed =
+                                    e.downcast_ref::<mailparse::MailParseError>().is_some();
+                                if self.debug_mode {
+                                    let label = if is_malformed {
+                                        "Skipping malformed message"
+                                    } else {
+                                        "Error exporting message"
+                                    };
+                                    println!("  {} {}: {:#}", label, uid, e);
+                                    let dump_dir = base_export_directory.join("_failed");
+                                    if fs::create_dir_all(&dump_dir).is_ok() {
+                                        let dump_path = dump_dir.join(format!(
+                                            "{}_uid_{}.eml",
+                                            sanitize_filename(&folder.display),
+                                            uid
+                                        ));
+                                        let _ = fs::write(&dump_path, body);
+                                        println!("  Raw message dumped to {}", dump_path.display());
+                                    }
                                 }
-                            }
-                            if is_malformed {
-                                stats.skipped += 1;
-                            } else {
-                                stats.errors += 1;
+                                if is_malformed {
+                                    stats.skipped += 1;
+                                } else {
+                                    stats.errors += 1;
+                                }
                             }
                         }
                     }
                 }
+
+                // Delete after export if requested
+                if self.account.delete_after_export {
+                    session.store(uid.to_string(), "+FLAGS (\\Deleted)")?;
+                }
+
+                // [3] Update progress
+                progress.inc();
             }
 
-            // Delete after export if requested
-            if self.account.delete_after_export {
-                session.store(uid.to_string(), "+FLAGS (\\Deleted)")?;
-            }
+            // [3] Finish progress indicator
+            progress.finish_with_message(&format!(
+                "{} exported, {} skipped, {} errors",
+                stats.exported, stats.skipped, stats.errors
+            ));
 
-            // [3] Update progress
-            progress.inc();
-        }
-
-        // [3] Finish progress indicator
-        progress.finish_with_message(&format!(
-            "{} exported, {} skipped, {} errors",
-            stats.exported, stats.skipped, stats.errors
-        ));
+            stats
+            // session borrow ends here
+        };
 
         // Expunge deleted messages
         if self.account.delete_after_export {
-            session.expunge()?;
+            if self.is_gmail {
+                self.expunge_gmail_all_mail().context("gmail all mail expunge")?;
+            } else {
+                let session = self.session.as_mut().context("Not connected")?;
+                session.expunge().context("expunge folder")?;
+            }
         }
 
         Ok(stats)
@@ -836,6 +865,31 @@ pub struct FolderName {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_gmail_server_gmail() {
+        assert!(is_gmail_server("imap.gmail.com"));
+    }
+
+    #[test]
+    fn test_is_gmail_server_googlemail() {
+        assert!(is_gmail_server("imap.googlemail.com"));
+    }
+
+    #[test]
+    fn test_is_gmail_server_non_gmail() {
+        assert!(!is_gmail_server("mail.example.com"));
+    }
+
+    #[test]
+    fn test_is_gmail_server_outlook() {
+        assert!(!is_gmail_server("imap.outlook.com"));
+    }
+
+    #[test]
+    fn test_is_gmail_server_uppercase() {
+        assert!(is_gmail_server("IMAP.GMAIL.COM"));
+    }
 
     #[test]
     fn test_analyze_email_type() {
