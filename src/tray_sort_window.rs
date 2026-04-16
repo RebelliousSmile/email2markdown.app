@@ -12,7 +12,7 @@ use anyhow::Context;
 use tao::{
     dpi::LogicalSize,
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::{ControlFlow, EventLoopBuilder},
     window::WindowBuilder,
 };
 use wry::WebViewBuilder;
@@ -63,7 +63,15 @@ fn run_window(report_path: PathBuf, account: String, sender: Sender<ActionResult
     let report_path_ipc = report_path.clone();
     let account_ipc = account.clone();
 
-    let event_loop = EventLoop::<()>::new();
+    let event_loop = {
+        let mut builder = EventLoopBuilder::<()>::new();
+        #[cfg(target_os = "windows")]
+        {
+            use tao::platform::windows::EventLoopBuilderExtWindows;
+            builder.with_any_thread(true);
+        }
+        builder.build()
+    };
 
     let window = WindowBuilder::new()
         .with_title(format!("Révision du tri — {}", account))
