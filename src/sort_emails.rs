@@ -960,13 +960,107 @@ pub struct ApplyStats {
     pub skipped: usize,
 }
 
+/// Compute the relative path from `from_dir` to `to` using only stdlib.
+/// Both paths must be absolute for a correct result.
+fn relative_path_from(from_dir: &Path, to: &Path) -> PathBuf {
+    let mut from_parts: Vec<_> = from_dir.components().collect();
+    let mut to_parts: Vec<_> = to.components().collect();
+
+    // Strip common prefix
+    let common = from_parts
+        .iter()
+        .zip(to_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    from_parts.drain(..common);
+    to_parts.drain(..common);
+
+    let mut result = PathBuf::new();
+    for _ in &from_parts {
+        result.push("..");
+    }
+    for part in to_parts {
+        result.push(part);
+    }
+    result
+}
+
+/// Rewrite attachment paths in a .md file's YAML frontmatter so they are
+/// relative to `new_parent_dir` instead of `base_dir`.
+/// Both `base_dir` and `new_parent_dir` must be absolute paths.
+fn rewrite_attachment_paths(
+    md_path: &Path,
+    base_dir: &Path,
+    new_parent_dir: &Path,
+) -> anyhow::Result<()> {
+    let content = std::fs::read_to_string(md_path)
+        .with_context(|| format!("failed to read {}", md_path.display()))?;
+
+    // Only process files that have a YAML frontmatter block.
+    let Some(rest) = content.strip_prefix("---\n") else {
+        return Ok(());
+    };
+    let Some(end) = rest.find("\n---") else {
+        return Ok(());
+    };
+    let frontmatter = &rest[..end];
+    let after_frontmatter = &rest[end + 4..]; // skip "\n---"
+
+    // Rewrite each line that is an attachment list item: "  - <path>"
+    // We look for lines inside an `attachments:` block.
+    let mut in_attachments = false;
+    let mut new_frontmatter = String::with_capacity(frontmatter.len());
+
+    for line in frontmatter.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("attachments:") {
+            in_attachments = true;
+            new_frontmatter.push_str(line);
+            new_frontmatter.push('\n');
+            continue;
+        }
+        if in_attachments && trimmed.starts_with("- ") {
+            // Extract the path after "- "
+            let path_str = trimmed.trim_start_matches("- ");
+            // Absolute attachment path from base_dir
+            let abs = base_dir.join(path_str.replace('/', std::path::MAIN_SEPARATOR_STR));
+            // Relative path from new_parent_dir to abs
+            let rel = relative_path_from(new_parent_dir, &abs);
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            // Preserve original indentation
+            let indent: String = line.chars().take_while(|c| *c == ' ').collect();
+            new_frontmatter.push_str(&format!("{}- {}\n", indent, rel_str));
+            continue;
+        }
+        // A non-list line ends the attachments block
+        if in_attachments && !trimmed.starts_with('-') {
+            in_attachments = false;
+        }
+        new_frontmatter.push_str(line);
+        new_frontmatter.push('\n');
+    }
+
+    let new_content = format!("---\n{}---{}", new_frontmatter, after_frontmatter);
+    std::fs::write(md_path, new_content)
+        .with_context(|| format!("failed to write updated frontmatter to {}", md_path.display()))?;
+    Ok(())
+}
+
 /// Apply the decisions from a `SortReport`: trash deletes, move summarize, count keeps.
 pub fn apply_report(report: &SortReport) -> anyhow::Result<ApplyStats> {
     let mut deleted = 0usize;
     let mut moved = 0usize;
     let mut skipped = 0usize;
 
-    let base = PathBuf::from(&report.base_directory);
+    let raw_base = PathBuf::from(&report.base_directory);
+    // Canonicalize so that relative_path_from works correctly with absolute components.
+    let base = if raw_base.is_absolute() {
+        raw_base.clone()
+    } else {
+        raw_base
+            .canonicalize()
+            .unwrap_or_else(|_| raw_base.clone())
+    };
 
     // --- DELETE ---
     let delete_entries: Vec<EmailSummary> = report
@@ -1042,6 +1136,10 @@ pub fn apply_report(report: &SortReport) -> anyhow::Result<ApplyStats> {
             fs::remove_file(&md_path)
                 .with_context(|| format!("failed to remove {} after copy", email.file))?;
         }
+        // Rewrite attachment paths relative to new location
+        if let Err(e) = rewrite_attachment_paths(&dest, &base, &to_summarize_dir) {
+            eprintln!("warning: could not update attachment paths in {}: {}", dest.display(), e);
+        }
         moved += 1;
     }
 
@@ -1077,6 +1175,10 @@ pub fn apply_report(report: &SortReport) -> anyhow::Result<ApplyStats> {
                     .with_context(|| format!("failed to copy {} to {}/", email.file, type_name))?;
                 fs::remove_file(&md_path)
                     .with_context(|| format!("failed to remove {} after copy", email.file))?;
+            }
+            // Rewrite attachment paths relative to new location
+            if let Err(e) = rewrite_attachment_paths(&dest, &base, &type_dir) {
+                eprintln!("warning: could not update attachment paths in {}: {}", dest.display(), e);
             }
             moved += 1;
         }
@@ -1570,5 +1672,95 @@ mod tests {
         let mut report = make_test_report(vec![("delete", "email1.md", "alice@example.com")]);
         let result = apply_category_change(&mut report, "missing.md", "keep", CategoryScope::Single);
         assert!(result.is_err());
+    }
+
+    // --- relative_path_from tests ---
+
+    #[test]
+    fn test_relative_path_from_sibling_dir() {
+        // /base/emails -> /base/attachments/file.pdf => ../attachments/file.pdf
+        let from = Path::new("/base/emails");
+        let to = Path::new("/base/attachments/file.pdf");
+        let rel = relative_path_from(from, to);
+        assert_eq!(rel, PathBuf::from("../attachments/file.pdf"));
+    }
+
+    #[test]
+    fn test_relative_path_from_same_parent() {
+        // /base/to-summarize -> /base/attachments/INBOX/doc.pdf => ../attachments/INBOX/doc.pdf
+        let from = Path::new("/base/to-summarize");
+        let to = Path::new("/base/attachments/INBOX/doc.pdf");
+        let rel = relative_path_from(from, to);
+        assert_eq!(rel, PathBuf::from("../attachments/INBOX/doc.pdf"));
+    }
+
+    #[test]
+    fn test_relative_path_from_deeply_nested() {
+        // /a/b/c -> /a/x/y.txt => ../../x/y.txt
+        let from = Path::new("/a/b/c");
+        let to = Path::new("/a/x/y.txt");
+        let rel = relative_path_from(from, to);
+        assert_eq!(rel, PathBuf::from("../../x/y.txt"));
+    }
+
+    // --- rewrite_attachment_paths tests ---
+
+    #[test]
+    fn test_rewrite_attachment_paths_no_frontmatter() {
+        use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let md = temp.path().join("email.md");
+        std::fs::write(&md, "No frontmatter here").unwrap();
+        // Should succeed silently (no frontmatter block)
+        rewrite_attachment_paths(&md, temp.path(), temp.path()).unwrap();
+        let content = std::fs::read_to_string(&md).unwrap();
+        assert_eq!(content, "No frontmatter here");
+    }
+
+    #[test]
+    fn test_rewrite_attachment_paths_no_attachments() {
+        use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let md = temp.path().join("email.md");
+        std::fs::write(&md, "---\nsubject: Hello\n---\nBody").unwrap();
+        // No attachments: content should be preserved as-is (no modification needed)
+        rewrite_attachment_paths(&md, temp.path(), temp.path()).unwrap();
+        let content = std::fs::read_to_string(&md).unwrap();
+        assert!(content.contains("subject: Hello"));
+    }
+
+    #[test]
+    fn test_rewrite_attachment_paths_updates_path() {
+        use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        // Simulate: base_dir = temp/emails, file moved to temp/emails/to-summarize/
+        let base_dir = temp.path().join("emails");
+        let new_parent = base_dir.join("to-summarize");
+        std::fs::create_dir_all(&new_parent).unwrap();
+        // Create a dummy attachment path that would be referenced from base_dir
+        let att_dir = base_dir.join("attachments").join("INBOX");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        std::fs::write(att_dir.join("file.pdf"), b"dummy").unwrap();
+
+        let md = new_parent.join("email.md");
+        std::fs::write(
+            &md,
+            "---\nsubject: Hello\nattachments:\n  - attachments/INBOX/file.pdf\n---\nBody",
+        )
+        .unwrap();
+
+        rewrite_attachment_paths(&md, &base_dir, &new_parent).unwrap();
+
+        let content = std::fs::read_to_string(&md).unwrap();
+        // Path should now be relative from to-summarize/ back up to attachments/
+        assert!(
+            content.contains("../attachments/INBOX/file.pdf"),
+            "expected ../attachments/INBOX/file.pdf, got: {content}"
+        );
+        // Old path must be gone
+        assert!(
+            !content.contains("  - attachments/INBOX/file.pdf"),
+            "old path should have been replaced, got: {content}"
+        );
     }
 }
