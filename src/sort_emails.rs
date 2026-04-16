@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
@@ -30,6 +31,13 @@ impl std::fmt::Display for Category {
             Category::Keep => write!(f, "keep"),
         }
     }
+}
+
+/// Scope for a category change: single email or all emails from the same sender.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CategoryScope {
+    Single,
+    BySender,
 }
 
 /// Email type classification.
@@ -88,28 +96,30 @@ pub struct SortStats {
 }
 
 /// Sorting report.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SortReport {
+    #[serde(default)]
+    pub base_directory: String,
     pub summary: SortSummary,
     pub details: SortDetails,
     pub categories: HashMap<String, Vec<EmailSummary>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SortSummary {
     pub total_emails: usize,
     pub categories: HashMap<String, usize>,
     pub recommendations: HashMap<String, String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SortDetails {
     pub by_type: HashMap<String, usize>,
     pub by_sender: Vec<(String, usize)>,
     pub by_date: HashMap<String, usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailSummary {
     pub file: String,
     pub subject: String,
@@ -120,7 +130,7 @@ pub struct EmailSummary {
     pub email_type: String,
     pub size: u64,
     pub attachments: usize,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub breakdown: Vec<(String, i32)>,
 }
 
@@ -627,6 +637,7 @@ impl EmailSorter {
         }
 
         SortReport {
+            base_directory: self.base_directory.to_string_lossy().to_string(),
             summary: SortSummary {
                 total_emails: self.stats.total_emails,
                 categories: self.stats.by_category.clone(),
@@ -757,6 +768,283 @@ pub fn is_base_folder(tag: &str) -> bool {
     let leaf = strip_provider_prefix(tag);
     let lower = leaf.to_lowercase();
     BASE_FOLDERS.contains(&lower.as_str())
+}
+
+/// Move an email (or all emails from the same sender) to a new category in the report.
+pub fn apply_category_change(
+    report: &mut SortReport,
+    file: &str,
+    new_category: &str,
+    scope: CategoryScope,
+) -> anyhow::Result<()> {
+    // Locate the entry and capture its current category and sender.
+    let mut found_category: Option<String> = None;
+    let mut found_sender: Option<String> = None;
+
+    'outer: for (cat_key, entries) in report.categories.iter() {
+        for entry in entries.iter() {
+            if entry.file == file {
+                found_category = Some(cat_key.clone());
+                found_sender = Some(entry.sender.clone());
+                break 'outer;
+            }
+        }
+    }
+
+    let current_category = found_category
+        .ok_or_else(|| anyhow::anyhow!("email not found: {file}"))?;
+    let sender = found_sender.unwrap_or_default();
+
+    match scope {
+        CategoryScope::Single => {
+            // Remove from current category.
+            let entry = {
+                let entries = report.categories.entry(current_category.clone()).or_default();
+                let pos = entries.iter().position(|e| e.file == file)
+                    .ok_or_else(|| anyhow::anyhow!("email not found: {file}"))?;
+                entries.remove(pos)
+            };
+            // Insert into target category.
+            report.categories.entry(new_category.to_string()).or_default().push(entry);
+        }
+        CategoryScope::BySender => {
+            // Collect all entries matching the sender across all categories.
+            let mut to_move: Vec<(String, usize)> = Vec::new(); // (category_key, index)
+
+            for (cat_key, entries) in report.categories.iter() {
+                for (idx, entry) in entries.iter().enumerate() {
+                    if entry.sender == sender {
+                        to_move.push((cat_key.clone(), idx));
+                    }
+                }
+            }
+
+            // Remove in reverse-index order per category to keep indices valid.
+            let mut by_category: HashMap<String, Vec<usize>> = HashMap::new();
+            for (cat_key, idx) in to_move {
+                by_category.entry(cat_key).or_default().push(idx);
+            }
+
+            let mut moved_entries: Vec<EmailSummary> = Vec::new();
+            for (cat_key, mut indices) in by_category {
+                indices.sort_unstable_by(|a, b| b.cmp(a)); // descending
+                let entries = report.categories.entry(cat_key).or_default();
+                for idx in indices {
+                    moved_entries.push(entries.remove(idx));
+                }
+            }
+
+            report
+                .categories
+                .entry(new_category.to_string())
+                .or_default()
+                .extend(moved_entries);
+        }
+    }
+
+    Ok(())
+}
+
+/// Interactively review the delete/summarize buckets and let the user reassign entries.
+/// Returns `Ok(true)` when the user confirms with "apply", `Ok(false)` on quit.
+pub fn review_report(report: &mut SortReport) -> anyhow::Result<bool> {
+    // Clone entries for display (avoid borrow issues while mutating later).
+    let delete_entries: Vec<EmailSummary> = report
+        .categories
+        .get("delete")
+        .cloned()
+        .unwrap_or_default();
+    let summarize_entries: Vec<EmailSummary> = report
+        .categories
+        .get("summarize")
+        .cloned()
+        .unwrap_or_default();
+
+    if delete_entries.is_empty() && summarize_entries.is_empty() {
+        println!("Nothing to apply.");
+        return Ok(false);
+    }
+
+    let print_list = |del: &[EmailSummary], sum: &[EmailSummary]| {
+        println!("=== DELETE ({}) ===", del.len());
+        for (i, e) in del.iter().enumerate() {
+            println!("[{i}] {} | {} | score: {}", e.sender, e.subject, e.score);
+        }
+        println!("=== SUMMARIZE ({}) ===", sum.len());
+        for (i, e) in sum.iter().enumerate() {
+            println!("[{}] {} | {} | score: {}", i + del.len(), e.sender, e.subject, e.score);
+        }
+    };
+
+    print_list(&delete_entries, &summarize_entries);
+
+    // Build flat index: (file, current_category).
+    // Rebuilt on each iteration after mutations.
+    let build_index = |report: &SortReport| -> Vec<(String, String)> {
+        let del = report.categories.get("delete").cloned().unwrap_or_default();
+        let sum = report.categories.get("summarize").cloned().unwrap_or_default();
+        let mut idx: Vec<(String, String)> = del
+            .into_iter()
+            .map(|e| (e.file, "delete".to_string()))
+            .collect();
+        idx.extend(sum.into_iter().map(|e| (e.file, "summarize".to_string())));
+        idx
+    };
+
+    let stdin = io::stdin();
+    loop {
+        print!("> ");
+        io::stdout().flush().context("failed to flush stdout")?;
+
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line).context("failed to read stdin")?;
+        let input = line.trim();
+
+        if input == "apply" {
+            return Ok(true);
+        }
+
+        if input == "q" || input == "quit" {
+            return Ok(false);
+        }
+
+        if let Ok(n) = input.parse::<usize>() {
+            let index = build_index(report);
+            if n < index.len() {
+                let (file, _current_cat) = &index[n];
+                // Show the entry.
+                let all: Vec<&EmailSummary> = report.categories.values().flatten().collect();
+                if let Some(entry) = all.iter().find(|e| &e.file == file) {
+                    println!("{} | {} | score: {}", entry.sender, entry.subject, entry.score);
+                }
+                // Prompt new category.
+                print!("New category (delete/summarize/keep): ");
+                io::stdout().flush().context("failed to flush stdout")?;
+                let mut cat_line = String::new();
+                stdin.lock().read_line(&mut cat_line).context("failed to read stdin")?;
+                let new_cat = cat_line.trim().to_string();
+
+                // Prompt scope.
+                print!("Scope ([e]mail / [s]ender): ");
+                io::stdout().flush().context("failed to flush stdout")?;
+                let mut scope_line = String::new();
+                stdin.lock().read_line(&mut scope_line).context("failed to read stdin")?;
+                let scope = match scope_line.trim() {
+                    "s" | "sender" => CategoryScope::BySender,
+                    _ => CategoryScope::Single,
+                };
+
+                apply_category_change(report, file, &new_cat, scope)
+                    .context("failed to apply category change")?;
+
+                // Reprint updated lists.
+                let del = report.categories.get("delete").cloned().unwrap_or_default();
+                let sum = report.categories.get("summarize").cloned().unwrap_or_default();
+                print_list(&del, &sum);
+            } else {
+                println!("Index out of range.");
+            }
+        } else {
+            println!("Unknown command. Enter a number, 'apply', or 'q'.");
+        }
+    }
+}
+
+/// Statistics produced by `apply_report`.
+pub struct ApplyStats {
+    pub deleted: usize,
+    pub moved: usize,
+    pub skipped: usize,
+}
+
+/// Apply the decisions from a `SortReport`: trash deletes, move summarize, count keeps.
+pub fn apply_report(report: &SortReport) -> anyhow::Result<ApplyStats> {
+    let mut deleted = 0usize;
+    let mut moved = 0usize;
+    let mut skipped = 0usize;
+
+    let base = PathBuf::from(&report.base_directory);
+
+    // --- DELETE ---
+    let delete_entries: Vec<EmailSummary> = report
+        .categories
+        .get("delete")
+        .cloned()
+        .unwrap_or_default();
+
+    for email in &delete_entries {
+        let md_path = base.join(&email.file);
+        trash::delete(&md_path)
+            .with_context(|| format!("failed to trash {}", email.file))?;
+
+        // Check for attachments directory
+        let stem = md_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let attachments_dir = md_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("{}_attachments", stem));
+
+        if attachments_dir.exists() {
+            print!(
+                "Trash attachments for \"{}\"? [y/N]: ",
+                email.subject
+            );
+            io::stdout().flush().context("failed to flush stdout")?;
+            let mut answer = String::new();
+            io::stdin()
+                .lock()
+                .read_line(&mut answer)
+                .context("failed to read stdin")?;
+            if answer.trim().starts_with(['y', 'Y']) {
+                trash::delete(&attachments_dir).with_context(|| {
+                    format!("failed to trash attachments for {}", email.file)
+                })?;
+            }
+        }
+
+        deleted += 1;
+    }
+
+    // --- SUMMARIZE ---
+    let summarize_entries: Vec<EmailSummary> = report
+        .categories
+        .get("summarize")
+        .cloned()
+        .unwrap_or_default();
+
+    for email in &summarize_entries {
+        let md_path = base.join(&email.file);
+        let to_summarize_dir = base
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("to-summarize");
+        fs::create_dir_all(&to_summarize_dir)
+            .context("failed to create to-summarize directory")?;
+        let dest = to_summarize_dir.join(
+            md_path.file_name().unwrap_or_default(),
+        );
+        if fs::rename(&md_path, &dest).is_err() {
+            fs::copy(&md_path, &dest)
+                .with_context(|| format!("failed to copy {} to to-summarize/", email.file))?;
+            fs::remove_file(&md_path)
+                .with_context(|| format!("failed to remove {} after copy", email.file))?;
+        }
+        moved += 1;
+    }
+
+    // --- KEEP ---
+    let keep_entries: Vec<EmailSummary> = report
+        .categories
+        .get("keep")
+        .cloned()
+        .unwrap_or_default();
+    skipped += keep_entries.len();
+
+    Ok(ApplyStats { deleted, moved, skipped })
 }
 
 /// Extract frontmatter and body from markdown content.
@@ -1175,5 +1463,73 @@ mod tests {
         let category = sorter.determine_category(&email, "body");
         // Without delete_newsletters, newsletter still goes through normal flow
         assert_ne!(category, Category::Keep);
+    }
+
+    // --- apply_category_change / review_report tests ---
+
+    fn make_test_report(entries: Vec<(&str, &str, &str)>) -> SortReport {
+        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
+        for (category, file, sender) in entries {
+            categories
+                .entry(category.to_string())
+                .or_default()
+                .push(EmailSummary {
+                    file: file.to_string(),
+                    subject: "Subject".to_string(),
+                    sender: sender.to_string(),
+                    date: "2024-01-01".to_string(),
+                    score: 0,
+                    email_type: "direct".to_string(),
+                    size: 1000,
+                    attachments: 0,
+                    breakdown: vec![],
+                });
+        }
+        SortReport {
+            base_directory: "/tmp".to_string(),
+            summary: SortSummary {
+                total_emails: 0,
+                categories: HashMap::new(),
+                recommendations: HashMap::new(),
+            },
+            details: SortDetails {
+                by_type: HashMap::new(),
+                by_sender: vec![],
+                by_date: HashMap::new(),
+            },
+            categories,
+        }
+    }
+
+    #[test]
+    fn test_apply_category_change_single() {
+        let mut report = make_test_report(vec![("delete", "email1.md", "alice@example.com")]);
+        apply_category_change(&mut report, "email1.md", "keep", CategoryScope::Single).unwrap();
+        assert!(report.categories.get("keep").is_some_and(|v| v.iter().any(|e| e.file == "email1.md")));
+    }
+
+    #[test]
+    fn test_apply_category_change_single_removed_from_source() {
+        let mut report = make_test_report(vec![("delete", "email1.md", "alice@example.com")]);
+        apply_category_change(&mut report, "email1.md", "keep", CategoryScope::Single).unwrap();
+        assert!(!report.categories.get("delete").is_some_and(|v| v.iter().any(|e| e.file == "email1.md")));
+    }
+
+    #[test]
+    fn test_apply_category_change_by_sender() {
+        let mut report = make_test_report(vec![
+            ("delete", "email1.md", "bob@example.com"),
+            ("delete", "email2.md", "bob@example.com"),
+        ]);
+        apply_category_change(&mut report, "email1.md", "keep", CategoryScope::BySender).unwrap();
+        let keep = report.categories.get("keep").cloned().unwrap_or_default();
+        assert!(keep.iter().any(|e| e.file == "email2.md"));
+    }
+
+    #[test]
+    fn test_apply_category_change_not_found() {
+        let mut report = make_test_report(vec![("delete", "email1.md", "alice@example.com")]);
+        let result = apply_category_change(&mut report, "missing.md", "keep", CategoryScope::Single);
+        assert!(result.is_err());
     }
 }

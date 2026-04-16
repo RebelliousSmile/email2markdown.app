@@ -68,6 +68,9 @@ tray-icon = { version = "0.19", optional = true }
 tao = { version = "0.30", optional = true }
 rfd = { version = "0.15", optional = true }
 
+# Move emails to trash
+trash = "3"
+
 # Open files with default application
 open = "5.3"
 

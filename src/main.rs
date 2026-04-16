@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use email_to_markdown::config::{self, Config, SortConfig};
 use email_to_markdown::email_export::ImapExporter;
 use email_to_markdown::fix_yaml;
-use email_to_markdown::sort_emails::EmailSorter;
+use email_to_markdown::sort_emails::{apply_report, review_report, EmailSorter, SortReport};
+use std::fs;
 use email_to_markdown::thunderbird;  // [1] Import Thunderbird
 
 #[cfg(feature = "tray")]
@@ -120,6 +121,19 @@ enum Commands {
         /// Create a default configuration file
         #[arg(long)]
         create_config: bool,
+    },
+
+    /// Apply sorting decisions from a sort report
+    SortApply {
+        /// Path to sort report JSON file
+        #[arg(short, long, default_value = "sort_report.json")]
+        report: String,
+        /// Print resolved paths and per-email actions
+        #[arg(short, long)]
+        verbose: bool,
+        /// Preview actions without executing (no trash, no move)
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Run as system tray application (requires --features tray)
@@ -511,6 +525,43 @@ fn main() -> Result<()> {
                 println!("\nDRY RUN COMPLETE");
                 println!("No files were modified. To apply these changes, run without --dry-run");
             }
+        }
+
+        Commands::SortApply {
+            report,
+            verbose,
+            dry_run,
+        } => {
+            let report_path = PathBuf::from(&report);
+            let json = fs::read_to_string(&report_path)
+                .with_context(|| format!("failed to read report: {}", report))?;
+            let mut sort_report: SortReport = serde_json::from_str(&json)
+                .context("failed to parse sort report JSON")?;
+
+            let confirmed = review_report(&mut sort_report)?;
+            if !confirmed {
+                println!("Aborted.");
+                return Ok(());
+            }
+
+            if dry_run {
+                for email in sort_report.categories.get("delete").unwrap_or(&vec![]) {
+                    println!("[dry-run] would trash: {}", email.file);
+                }
+                for email in sort_report.categories.get("summarize").unwrap_or(&vec![]) {
+                    println!("[dry-run] would move to to-summarize/: {}", email.file);
+                }
+                return Ok(());
+            }
+
+            let stats = apply_report(&sort_report)?;
+            if verbose {
+                // per-email actions are printed inside apply_report
+            }
+            println!(
+                "Deleted: {} | Moved to to-summarize: {} | Kept: {}",
+                stats.deleted, stats.moved, stats.skipped
+            );
         }
 
         #[cfg(feature = "tray")]
