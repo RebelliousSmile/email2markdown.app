@@ -47,6 +47,9 @@ encoding_rs = "0.8"
 # HTML entity decoding (for cleaner pipeline)
 html-escape = "0.2"
 
+# HTML-to-Markdown conversion (for emails with no text/plain part)
+htmd = "0"
+
 # URL parsing and validation (for cleaner pipeline)
 url = "2.5"
 

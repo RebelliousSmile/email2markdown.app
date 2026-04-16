@@ -377,6 +377,11 @@ pub fn export_to_markdown(
     Ok(Some(filepath))
 }
 
+/// Convert HTML to Markdown using htmd. Returns empty string on failure.
+fn html_to_markdown(html: &str) -> String {
+    htmd::convert(html).unwrap_or_default()
+}
+
 /// Extract the body from a parsed email.
 fn extract_body(mail: &ParsedMail) -> String {
     if mail.subparts.is_empty() {
@@ -397,7 +402,8 @@ fn extract_body(mail: &ParsedMail) -> String {
                 body = part.get_body().unwrap_or_default();
                 break;
             } else if content_type.starts_with("text/html") && body.is_empty() {
-                body = part.get_body().unwrap_or_default();
+                let raw_html = part.get_body().unwrap_or_default();
+                body = html_to_markdown(&raw_html);
             } else if content_type.starts_with("multipart/") {
                 // Recurse into nested multipart
                 let nested_body = extract_body(part);
@@ -928,5 +934,25 @@ mod tests {
 
         assert!(collector.direct.contains("test@example.com"));
         assert!(collector.group.contains("group@example.com"));
+    }
+
+    #[test]
+    fn test_html_to_markdown_heading() {
+        let result = html_to_markdown("<h1>Hello</h1>");
+        assert!(result.contains("Hello"));
+        assert!(!result.contains("<h1>"));
+    }
+
+    #[test]
+    fn test_html_to_markdown_paragraph() {
+        let result = html_to_markdown("<p>World</p>");
+        assert!(result.contains("World"));
+        assert!(!result.contains("<p>"));
+    }
+
+    #[test]
+    fn test_html_to_markdown_empty() {
+        let result = html_to_markdown("");
+        assert!(result.is_empty() || result.trim().is_empty());
     }
 }
