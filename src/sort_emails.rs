@@ -1,12 +1,17 @@
 use crate::config::SortConfig;
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use walkdir::WalkDir;
+
+static UNSUBSCRIBE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)https?://[^\s)>\]]*unsubscribe[^\s)>\]]*").expect("static regex"));
 
 /// Email sorting category.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -66,7 +71,9 @@ pub struct EmailData {
     pub subject: String,
     pub tags: Vec<String>,
     pub email_type: EmailSortType,
+    pub sender_count: usize,
     pub score: i32,
+    pub score_breakdown: Vec<(String, i32)>,
     pub category: Category,
 }
 
@@ -113,6 +120,8 @@ pub struct EmailSummary {
     pub email_type: String,
     pub size: u64,
     pub attachments: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub breakdown: Vec<(String, i32)>,
 }
 
 /// Email sorter.
@@ -138,8 +147,8 @@ impl EmailSorter {
         }
     }
 
-    /// Analyze a single email markdown file.
-    pub fn analyze_email_file(&self, file_path: &Path) -> Result<Option<EmailData>> {
+    /// Analyze a single email markdown file, returning the parsed data and body text.
+    pub fn analyze_email_file(&self, file_path: &Path) -> Result<Option<(EmailData, String)>> {
         let content = fs::read_to_string(file_path)
             .context("Failed to read file")?;
 
@@ -219,10 +228,10 @@ impl EmailSorter {
         });
 
         // Determine email type
-        let email_type = self.determine_email_type(&subject, &fm);
+        let email_type = self.determine_email_type(&subject, &fm, &body);
 
         // Build email data
-        let mut email_data = EmailData {
+        let email_data = EmailData {
             file_path: file_path.to_path_buf(),
             file_name: file_path
                 .file_name()
@@ -240,26 +249,34 @@ impl EmailSorter {
             subject,
             tags,
             email_type,
+            sender_count: 0,
             score: 0,
+            score_breakdown: Vec::new(),
             category: Category::Summarize,
         };
 
-        // Calculate score
-        email_data.score = self.calculate_score(&email_data, &body);
-
-        // Determine category
-        email_data.category = self.determine_category(&email_data, &body);
-
-        Ok(Some(email_data))
+        Ok(Some((email_data, body)))
     }
 
-    /// Determine email type from subject and frontmatter.
-    fn determine_email_type(&self, subject: &str, _fm: &Value) -> EmailSortType {
+    /// Determine email type from frontmatter field, subject, and body.
+    fn determine_email_type(&self, subject: &str, fm: &Value, body: &str) -> EmailSortType {
+        // Check frontmatter email_type field first (from export Phase 1)
+        if let Some(et) = fm.get("email_type").and_then(|v| v.as_str()) {
+            match et {
+                "newsletter" => return EmailSortType::Newsletter,
+                "mailing_list" => return EmailSortType::MailingList,
+                "group" => return EmailSortType::Group,
+                "direct" => return EmailSortType::Direct,
+                _ => {}
+            }
+        }
+
         let subject_lower = subject.to_lowercase();
 
         if subject_lower.contains("newsletter")
             || subject_lower.contains("bulletin")
             || subject_lower.contains("digest")
+            || UNSUBSCRIBE_RE.is_match(body)
         {
             EmailSortType::Newsletter
         } else {
@@ -267,105 +284,161 @@ impl EmailSorter {
         }
     }
 
-    /// Calculate a score for the email.
-    fn calculate_score(&self, email_data: &EmailData, body: &str) -> i32 {
+    /// Calculate a score for the email, returning (score, breakdown).
+    fn calculate_score(&self, email_data: &EmailData, body: &str) -> (i32, Vec<(String, i32)>) {
         let mut score: i32 = 0;
+        let mut breakdown: Vec<(String, i32)> = Vec::new();
 
         // Type weight
-        let type_key = email_data.email_type.to_string();
-        if let Some(&weight) = self.config.type_weights.get(&type_key) {
-            score += weight;
+        if self.config.use_type_weights {
+            let type_key = email_data.email_type.to_string();
+            if let Some(&weight) = self.config.type_weights.get(&type_key) {
+                if weight != 0 {
+                    breakdown.push(("type".to_string(), weight));
+                }
+                score += weight;
+            }
         }
 
         // Age factors
-        if let Some(age) = email_data.age_days {
-            if age <= self.config.recent_threshold_days {
-                score += 2;
-            } else if age >= self.config.old_threshold_days {
-                score -= 1;
+        if self.config.use_age_scoring {
+            if let Some(age) = email_data.age_days {
+                if age <= self.config.recent_threshold_days {
+                    breakdown.push(("age".to_string(), 2));
+                    score += 2;
+                } else if age >= self.config.old_threshold_days {
+                    breakdown.push(("age".to_string(), -1));
+                    score -= 1;
+                }
             }
         }
 
         // Size factors
-        if email_data.body_length <= self.config.small_email_threshold {
-            score -= 1;
-        } else if email_data.body_length >= self.config.large_email_threshold {
-            score += 1;
+        if self.config.use_size_scoring {
+            if email_data.body_length <= self.config.small_email_threshold {
+                breakdown.push(("size".to_string(), -1));
+                score -= 1;
+            } else if email_data.body_length >= self.config.large_email_threshold {
+                breakdown.push(("size".to_string(), 1));
+                score += 1;
+            }
         }
 
         // Attachment factors
         if email_data.has_attachments {
             if self.config.keep_with_attachments {
-                score += 2;
+                breakdown.push(("attachments".to_string(), 1));
+                score += 1;
             } else {
+                breakdown.push(("attachments".to_string(), -1));
                 score -= 1;
             }
         }
 
-        // Subject analysis
-        let subject_lower = email_data.subject.to_lowercase();
-
-        // Delete keywords
-        let delete_count = self
-            .config
-            .delete_keywords
-            .iter()
-            .filter(|k| subject_lower.contains(&k.to_lowercase()))
-            .count() as i32;
-        score -= delete_count;
-
-        // Keep keywords
-        let keep_count = self
-            .config
-            .keep_keywords
-            .iter()
-            .filter(|k| subject_lower.contains(&k.to_lowercase()))
-            .count() as i32;
-        score += keep_count * 2;
-
-        // Sender analysis
-        let sender_lower = email_data.sender.to_lowercase();
-
-        if self
-            .config
-            .delete_senders
-            .iter()
-            .any(|s| sender_lower.contains(&s.to_lowercase()))
-        {
-            score -= 3;
+        // Folder scoring from tags
+        if self.config.use_folder_score && !email_data.tags.is_empty() {
+            let min_folder = email_data.tags.iter().map(|t| folder_score(t)).min().unwrap_or(0);
+            if min_folder != 0 {
+                breakdown.push(("folder".to_string(), min_folder));
+                score += min_folder;
+            }
         }
 
-        if self
-            .config
-            .keep_senders
-            .iter()
-            .any(|s| sender_lower.contains(&s.to_lowercase()))
-        {
-            score += 3;
+        // Subfolder bonus
+        if self.config.use_subfolder_bonus && !email_data.tags.is_empty() {
+            let all_user_folders = email_data.tags.iter().all(|t| !is_base_folder(t));
+            if all_user_folders {
+                breakdown.push(("subfolder".to_string(), 2));
+                score += 2;
+            }
+        }
+
+        // Subject analysis
+        if self.config.use_subject_rules {
+            let subject_lower = email_data.subject.to_lowercase();
+
+            let delete_count = self
+                .config
+                .delete_keywords
+                .iter()
+                .filter(|k| subject_lower.contains(&k.to_lowercase()))
+                .count() as i32;
+            if delete_count > 0 {
+                breakdown.push(("subject_delete".to_string(), -delete_count));
+            }
+            score -= delete_count;
+
+            let keep_count = self
+                .config
+                .keep_keywords
+                .iter()
+                .filter(|k| subject_lower.contains(&k.to_lowercase()))
+                .count() as i32;
+            if keep_count > 0 {
+                breakdown.push(("subject_keep".to_string(), keep_count * 2));
+            }
+            score += keep_count * 2;
+        }
+
+        // Sender analysis
+        if self.config.use_sender_rules {
+            let sender_lower = email_data.sender.to_lowercase();
+
+            if self
+                .config
+                .delete_senders
+                .iter()
+                .any(|s| sender_lower.contains(&s.to_lowercase()))
+            {
+                breakdown.push(("sender_delete".to_string(), -3));
+                score -= 3;
+            }
+
+            if self
+                .config
+                .keep_senders
+                .iter()
+                .any(|s| sender_lower.contains(&s.to_lowercase()))
+            {
+                breakdown.push(("sender_keep".to_string(), 3));
+                score += 3;
+            }
+        }
+
+        // Recurring sender malus
+        if self.config.penalize_recurring && email_data.sender_count > 1 {
+            let malus = -((email_data.sender_count as f64).ln() as i32);
+            if malus != 0 {
+                breakdown.push(("recurring".to_string(), malus));
+            }
+            score += malus;
         }
 
         // Body content analysis
-        let body_lower = body.to_lowercase();
-        let important_keywords = [
-            "contract",
-            "invoice",
-            "legal",
-            "urgent",
-            "important",
-            "confidential",
-            "agreement",
-            "signature",
-            "payment",
-        ];
+        if self.config.use_body_keywords {
+            let body_lower = body.to_lowercase();
+            let important_keywords = [
+                "contract",
+                "invoice",
+                "legal",
+                "urgent",
+                "important",
+                "confidential",
+                "agreement",
+                "signature",
+                "payment",
+            ];
 
-        if important_keywords
-            .iter()
-            .any(|&k| body_lower.contains(k))
-        {
-            score += 2;
+            if important_keywords
+                .iter()
+                .any(|&k| body_lower.contains(k))
+            {
+                breakdown.push(("body_keywords".to_string(), 2));
+                score += 2;
+            }
         }
 
-        score
+        (score, breakdown)
     }
 
     /// Determine the category for an email.
@@ -403,7 +476,6 @@ impl EmailSorter {
                 .keep_senders
                 .iter()
                 .any(|s| sender_lower.contains(&s.to_lowercase()))
-            || (email_data.has_attachments && self.config.keep_with_attachments)
             || ["contract", "invoice", "legal", "urgent", "important"]
                 .iter()
                 .any(|&k| body_lower.contains(k));
@@ -411,6 +483,8 @@ impl EmailSorter {
         // Apply rules
         if keep_indicators {
             Category::Keep
+        } else if self.config.delete_newsletters && email_data.email_type == EmailSortType::Newsletter {
+            Category::Delete
         } else if delete_indicators || email_data.score <= -2 {
             Category::Delete
         } else if email_data.score >= 2
@@ -430,43 +504,61 @@ impl EmailSorter {
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.path().extension().map_or(false, |ext| ext == "md")
+                e.path().extension().is_some_and(|ext| ext == "md")
                     && !e.path().to_string_lossy().contains("attachments")
             })
             .map(|e| e.path().to_path_buf())
             .collect();
 
-        for file_path in entries {
-            if let Some(email_data) = self.analyze_email_file(&file_path)? {
-                self.stats.total_emails += 1;
+        // Pass 1: collect emails and count senders
+        let mut collected: Vec<(EmailData, String)> = Vec::new();
+        let mut sender_counts: HashMap<String, usize> = HashMap::new();
 
-                let category = email_data.category.clone();
-                let category_key = category.to_string();
-                *self
-                    .stats
-                    .by_category
-                    .entry(category_key)
-                    .or_insert(0) += 1;
-
-                let type_key = email_data.email_type.to_string();
-                *self.stats.by_type.entry(type_key).or_insert(0) += 1;
-
-                *self
-                    .stats
-                    .by_sender
-                    .entry(email_data.sender.clone())
-                    .or_insert(0) += 1;
-
-                if let Some(date) = &email_data.date {
-                    let date_key = date.format("%Y-%m").to_string();
-                    *self.stats.by_date.entry(date_key).or_insert(0) += 1;
-                }
-
-                self.categories
-                    .entry(category)
-                    .or_insert_with(Vec::new)
-                    .push(email_data);
+        for file_path in &entries {
+            if let Some((email_data, body)) = self.analyze_email_file(file_path)? {
+                let sender_key = email_data.sender.to_lowercase();
+                *sender_counts.entry(sender_key).or_insert(0) += 1;
+                collected.push((email_data, body));
             }
+        }
+
+        // Pass 2: score and categorize with sender counts
+        for (mut email_data, body) in collected {
+            let sender_key = email_data.sender.to_lowercase();
+            email_data.sender_count = *sender_counts.get(&sender_key).unwrap_or(&1);
+            let (calc_score, breakdown) = self.calculate_score(&email_data, &body);
+            email_data.score = calc_score;
+            email_data.score_breakdown = breakdown;
+            email_data.category = self.determine_category(&email_data, &body);
+
+            self.stats.total_emails += 1;
+
+            let category = email_data.category.clone();
+            let category_key = category.to_string();
+            *self
+                .stats
+                .by_category
+                .entry(category_key)
+                .or_insert(0) += 1;
+
+            let type_key = email_data.email_type.to_string();
+            *self.stats.by_type.entry(type_key).or_insert(0) += 1;
+
+            *self
+                .stats
+                .by_sender
+                .entry(email_data.sender.clone())
+                .or_insert(0) += 1;
+
+            if let Some(date) = &email_data.date {
+                let date_key = date.format("%Y-%m").to_string();
+                *self.stats.by_date.entry(date_key).or_insert(0) += 1;
+            }
+
+            self.categories
+                .entry(category)
+                .or_default()
+                .push(email_data);
         }
 
         Ok(())
@@ -527,6 +619,7 @@ impl EmailSorter {
                     email_type: e.email_type.to_string(),
                     size: e.file_size,
                     attachments: e.attachment_count,
+                    breakdown: e.score_breakdown.clone(),
                 })
                 .collect();
 
@@ -615,6 +708,55 @@ impl EmailSorter {
     pub fn stats(&self) -> &SortStats {
         &self.stats
     }
+}
+
+/// Strip provider prefix from IMAP folder tag (e.g. `[Gmail]/Corbeille` → `Corbeille`).
+fn strip_provider_prefix(tag: &str) -> &str {
+    if let Some(pos) = tag.find("]/") {
+        &tag[pos + 2..]
+    } else {
+        tag
+    }
+}
+
+/// Score a folder tag. Trash/Spam = -5, Drafts = -3, others = 0.
+pub fn folder_score(tag: &str) -> i32 {
+    let leaf = strip_provider_prefix(tag);
+    let lower = leaf.to_lowercase();
+    match lower.as_str() {
+        "corbeille" | "trash" | "bin" => -5,
+        "spam" | "junk" | "pourriel" => -5,
+        "brouillons" | "drafts" => -3,
+        _ => 0,
+    }
+}
+
+/// Known base folder names (INBOX, Sent, etc.) that should not get a subfolder bonus.
+const BASE_FOLDERS: &[&str] = &[
+    "inbox",
+    "sent",
+    "messages envoyés",
+    "messages envoyes",
+    "all mail",
+    "tous les messages",
+    "starred",
+    "suivis",
+    "important",
+    "corbeille",
+    "trash",
+    "bin",
+    "spam",
+    "junk",
+    "pourriel",
+    "brouillons",
+    "drafts",
+];
+
+/// Returns true if the tag matches a known base folder name (case-insensitive).
+pub fn is_base_folder(tag: &str) -> bool {
+    let leaf = strip_provider_prefix(tag);
+    let lower = leaf.to_lowercase();
+    BASE_FOLDERS.contains(&lower.as_str())
 }
 
 /// Extract frontmatter and body from markdown content.
@@ -708,5 +850,330 @@ mod tests {
         assert_eq!(Category::Delete.to_string(), "delete");
         assert_eq!(Category::Summarize.to_string(), "summarize");
         assert_eq!(Category::Keep.to_string(), "keep");
+    }
+
+    fn make_email_data() -> EmailData {
+        EmailData {
+            file_path: PathBuf::from("test.md"),
+            file_name: "test.md".to_string(),
+            file_size: 1000,
+            body_length: 2000,
+            has_attachments: false,
+            attachment_count: 0,
+            date: None,
+            age_days: Some(60),
+            sender: "user@example.com".to_string(),
+            recipients: vec![],
+            subject: "Hello".to_string(),
+            tags: vec![],
+            email_type: EmailSortType::Direct,
+            sender_count: 0,
+            score: 0,
+            score_breakdown: Vec::new(),
+            category: Category::Summarize,
+        }
+    }
+
+    #[test]
+    fn test_toggle_use_type_weights_off() {
+        let mut config = SortConfig::default();
+        config.use_type_weights = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let email = make_email_data();
+        let (score_off, _) = sorter.calculate_score(&email, "hello");
+
+        let mut config2 = SortConfig::default();
+        config2.use_type_weights = true;
+        let sorter2 = EmailSorter::new(PathBuf::from("/tmp"), config2);
+        let (score_on, _) = sorter2.calculate_score(&email, "hello");
+
+        // Direct type weight is +1, so score_on should be higher
+        assert!(score_on > score_off);
+    }
+
+    #[test]
+    fn test_toggle_use_age_scoring_off() {
+        let mut config = SortConfig::default();
+        config.use_age_scoring = false;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.age_days = Some(5); // recent
+        let (score, _) = sorter.calculate_score(&email, "hello");
+
+        let mut config2 = SortConfig::default();
+        config2.use_age_scoring = true;
+        config2.use_type_weights = false;
+        config2.use_size_scoring = false;
+        let sorter2 = EmailSorter::new(PathBuf::from("/tmp"), config2);
+        let (score_on, _) = sorter2.calculate_score(&email, "hello");
+
+        assert!(score_on > score, "age scoring should add bonus for recent emails");
+    }
+
+    #[test]
+    fn test_toggle_use_body_keywords_off() {
+        let mut config = SortConfig::default();
+        config.use_body_keywords = false;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let email = make_email_data();
+        let (score, _) = sorter.calculate_score(&email, "this is an important contract");
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn test_toggle_use_sender_rules_off() {
+        let mut config = SortConfig::default();
+        config.use_sender_rules = false;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        config.delete_senders = vec!["spam@example.com".to_string()];
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.sender = "spam@example.com".to_string();
+        let (score, _) = sorter.calculate_score(&email, "hello");
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn test_folder_score_trash() {
+        assert_eq!(folder_score("Corbeille"), -5);
+        assert_eq!(folder_score("[Gmail]/Corbeille"), -5);
+        assert_eq!(folder_score("Trash"), -5);
+        assert_eq!(folder_score("[Gmail]/Trash"), -5);
+    }
+
+    #[test]
+    fn test_folder_score_spam() {
+        assert_eq!(folder_score("Spam"), -5);
+        assert_eq!(folder_score("[Gmail]/Spam"), -5);
+        assert_eq!(folder_score("Junk"), -5);
+    }
+
+    #[test]
+    fn test_folder_score_drafts() {
+        assert_eq!(folder_score("Brouillons"), -3);
+        assert_eq!(folder_score("[Gmail]/Drafts"), -3);
+    }
+
+    #[test]
+    fn test_folder_score_neutral() {
+        assert_eq!(folder_score("INBOX"), 0);
+        assert_eq!(folder_score("MyFolder"), 0);
+        assert_eq!(folder_score("[Gmail]/All Mail"), 0);
+    }
+
+    #[test]
+    fn test_is_base_folder() {
+        assert!(is_base_folder("INBOX"));
+        assert!(is_base_folder("[Gmail]/Sent"));
+        assert!(is_base_folder("[Gmail]/Tous les messages"));
+        assert!(is_base_folder("Drafts"));
+        assert!(!is_base_folder("Projects"));
+        assert!(!is_base_folder("Work/Reports"));
+    }
+
+    #[test]
+    fn test_folder_score_applied_in_calculate() {
+        let mut config = SortConfig::default();
+        config.use_folder_score = true;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.tags = vec!["[Gmail]/Corbeille".to_string()];
+        let (score, _) = sorter.calculate_score(&email, "hello");
+        assert!(score < 0, "trash folder should give negative score, got {}", score);
+    }
+
+    #[test]
+    fn test_subfolder_bonus_applied() {
+        let mut config = SortConfig::default();
+        config.use_subfolder_bonus = true;
+        config.use_folder_score = false;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.tags = vec!["Projects/Important".to_string()];
+        let (score, _) = sorter.calculate_score(&email, "hello");
+        assert_eq!(score, 2, "subfolder bonus should be +2");
+    }
+
+    #[test]
+    fn test_no_subfolder_bonus_for_inbox() {
+        let mut config = SortConfig::default();
+        config.use_subfolder_bonus = true;
+        config.use_folder_score = false;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.tags = vec!["INBOX".to_string()];
+        let (score, _) = sorter.calculate_score(&email, "hello");
+        assert_eq!(score, 0, "base folder should not get subfolder bonus");
+    }
+
+    #[test]
+    fn test_toggle_use_subject_rules_off() {
+        let mut config = SortConfig::default();
+        config.use_subject_rules = false;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.subject = "newsletter promotion".to_string();
+        let (score, _) = sorter.calculate_score(&email, "hello");
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn test_newsletter_detection_via_frontmatter() {
+        let config = SortConfig::default();
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let fm: Value = serde_yaml::from_str("email_type: newsletter\nsubject: Hello").unwrap();
+        let email_type = sorter.determine_email_type("Hello", &fm, "plain body");
+        assert_eq!(email_type, EmailSortType::Newsletter);
+    }
+
+    #[test]
+    fn test_newsletter_detection_via_body_unsubscribe() {
+        let config = SortConfig::default();
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let fm: Value = serde_yaml::from_str("subject: Hello").unwrap();
+        let body = "Click here to https://example.com/unsubscribe?id=123";
+        let email_type = sorter.determine_email_type("Hello", &fm, body);
+        assert_eq!(email_type, EmailSortType::Newsletter);
+    }
+
+    #[test]
+    fn test_newsletter_detection_direct_no_unsubscribe() {
+        let config = SortConfig::default();
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let fm: Value = serde_yaml::from_str("subject: Hello").unwrap();
+        let email_type = sorter.determine_email_type("Hello", &fm, "just a normal email");
+        assert_eq!(email_type, EmailSortType::Direct);
+    }
+
+    #[test]
+    fn test_delete_newsletters_toggle_on() {
+        let mut config = SortConfig::default();
+        config.delete_newsletters = true;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.email_type = EmailSortType::Newsletter;
+        let category = sorter.determine_category(&email, "body");
+        assert_eq!(category, Category::Delete);
+    }
+
+    #[test]
+    fn test_recurring_sender_1_email_no_malus() {
+        let mut config = SortConfig::default();
+        config.penalize_recurring = true;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.sender_count = 1;
+        let (score, _) = sorter.calculate_score(&email, "hello");
+        assert_eq!(score, 0, "1 email = 0 malus");
+    }
+
+    #[test]
+    fn test_recurring_sender_3_emails_malus_1() {
+        let mut config = SortConfig::default();
+        config.penalize_recurring = true;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.sender_count = 3;
+        let (score, _) = sorter.calculate_score(&email, "hello");
+        assert_eq!(score, -1, "3 emails = -1 malus");
+    }
+
+    #[test]
+    fn test_recurring_sender_8_emails_malus_2() {
+        let mut config = SortConfig::default();
+        config.penalize_recurring = true;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.sender_count = 8;
+        let (score, _) = sorter.calculate_score(&email, "hello");
+        assert_eq!(score, -2, "8 emails = -2 malus");
+    }
+
+    #[test]
+    fn test_recurring_sender_25_emails_malus_3() {
+        let mut config = SortConfig::default();
+        config.penalize_recurring = true;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.sender_count = 25;
+        let (score, _) = sorter.calculate_score(&email, "hello");
+        assert_eq!(score, -3, "25 emails = -3 malus");
+    }
+
+    #[test]
+    fn test_score_breakdown_contains_expected_entries() {
+        let mut config = SortConfig::default();
+        config.use_folder_score = true;
+        config.use_type_weights = true;
+        config.penalize_recurring = true;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.tags = vec!["[Gmail]/Corbeille".to_string()];
+        email.sender_count = 8;
+        let (_, breakdown) = sorter.calculate_score(&email, "hello");
+
+        let names: Vec<&str> = breakdown.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"type"), "breakdown should contain 'type', got {:?}", names);
+        assert!(names.contains(&"folder"), "breakdown should contain 'folder', got {:?}", names);
+        assert!(names.contains(&"recurring"), "breakdown should contain 'recurring', got {:?}", names);
+    }
+
+    #[test]
+    fn test_score_breakdown_folder_value() {
+        let mut config = SortConfig::default();
+        config.use_folder_score = true;
+        config.use_type_weights = false;
+        config.use_size_scoring = false;
+        config.use_age_scoring = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.tags = vec!["[Gmail]/Corbeille".to_string()];
+        let (_, breakdown) = sorter.calculate_score(&email, "hello");
+        let folder_entry = breakdown.iter().find(|(n, _)| n == "folder");
+        assert_eq!(folder_entry, Some(&("folder".to_string(), -5)));
+    }
+
+    #[test]
+    fn test_delete_newsletters_toggle_off() {
+        let mut config = SortConfig::default();
+        config.delete_newsletters = false;
+        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
+        let mut email = make_email_data();
+        email.email_type = EmailSortType::Newsletter;
+        email.score = 0;
+        let category = sorter.determine_category(&email, "body");
+        // Without delete_newsletters, newsletter still goes through normal flow
+        assert_ne!(category, Category::Keep);
     }
 }

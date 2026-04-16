@@ -72,6 +72,8 @@ pub struct AccountBehavior {
     pub delete_after_export: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cleanup_empty_dirs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort: Option<SortConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -336,6 +338,27 @@ pub struct SortConfig {
 
     #[serde(default = "default_type_weights")]
     pub type_weights: HashMap<String, i32>,
+
+    #[serde(default = "default_true")]
+    pub use_folder_score: bool,
+    #[serde(default = "default_true")]
+    pub use_subfolder_bonus: bool,
+    #[serde(default = "default_true")]
+    pub use_body_keywords: bool,
+    #[serde(default = "default_true")]
+    pub use_sender_rules: bool,
+    #[serde(default = "default_true")]
+    pub use_subject_rules: bool,
+    #[serde(default = "default_true")]
+    pub use_age_scoring: bool,
+    #[serde(default = "default_true")]
+    pub use_size_scoring: bool,
+    #[serde(default = "default_true")]
+    pub use_type_weights: bool,
+    #[serde(default)]
+    pub delete_newsletters: bool,
+    #[serde(default)]
+    pub penalize_recurring: bool,
 }
 
 fn default_delete_keywords() -> Vec<String> {
@@ -412,6 +435,16 @@ impl Default for SortConfig {
             large_email_threshold: default_large_threshold(),
             keep_with_attachments: true,
             type_weights: default_type_weights(),
+            use_folder_score: true,
+            use_subfolder_bonus: true,
+            use_body_keywords: true,
+            use_sender_rules: true,
+            use_subject_rules: true,
+            use_age_scoring: true,
+            use_size_scoring: true,
+            use_type_weights: true,
+            delete_newsletters: false,
+            penalize_recurring: false,
         }
     }
 }

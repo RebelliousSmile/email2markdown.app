@@ -401,6 +401,12 @@ fn main() -> Result<()> {
                 let sort_config = SortConfig::default();
                 sort_config.save(&config_path)?;
                 println!("Configuration file created: {}", config_path.display());
+                println!("\nTip: You can override sort config per-account in settings.yaml:");
+                println!("  accounts:");
+                println!("    myaccount@example.com:");
+                println!("      sort:");
+                println!("        delete_newsletters: true");
+                println!("        penalize_recurring: true");
                 return Ok(());
             }
 
@@ -422,7 +428,8 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            // Determine directory to sort
+            // Determine directory to sort and per-account override
+            let mut per_account_sort: Option<SortConfig> = None;
             let sort_directory = if let Some(acc_name) = account {
                 let accounts_config = Config::load(&config::accounts_yaml_path())
                     .context("Failed to load accounts configuration")?;
@@ -430,6 +437,15 @@ fn main() -> Result<()> {
                 let acc = accounts_config
                     .get_account(&acc_name)
                     .context(format!("Account '{}' not found", acc_name))?;
+
+                // Check for per-account sort config in settings.yaml
+                let settings = config::Settings::load(&config::settings_path()).unwrap_or_default();
+                if let Some(behavior) = settings.accounts.get(&acc.name) {
+                    if let Some(sort_cfg) = &behavior.sort {
+                        println!("Using per-account sort config for: {}", acc.name);
+                        per_account_sort = Some(sort_cfg.clone());
+                    }
+                }
 
                 println!("Sorting emails for account: {}", acc.name);
                 PathBuf::from(&acc.export_directory)
@@ -440,8 +456,12 @@ fn main() -> Result<()> {
                 return Ok(());
             };
 
-            // Load sort config
-            let sort_config = SortConfig::load(&config.unwrap_or_else(config::sort_config_path))?;
+            // Load sort config: per-account override takes precedence over global
+            let sort_config = if let Some(cfg) = per_account_sort {
+                cfg
+            } else {
+                SortConfig::load(&config.unwrap_or_else(config::sort_config_path))?
+            };
 
             let mut sorter = EmailSorter::new(sort_directory, sort_config);
 
@@ -466,9 +486,19 @@ fn main() -> Result<()> {
                 for (category, emails) in sorter.categories() {
                     println!("\n{} ({} emails):", category.to_string().to_uppercase(), emails.len());
                     for email in emails.iter().take(5) {
+                        let breakdown_str = if email.score_breakdown.is_empty() {
+                            String::new()
+                        } else {
+                            let parts: Vec<String> = email
+                                .score_breakdown
+                                .iter()
+                                .map(|(name, val)| format!("{}:{}", name, val))
+                                .collect();
+                            format!(" [{}]", parts.join(", "))
+                        };
                         println!(
-                            "  - {} (from: {}, score: {})",
-                            email.subject, email.sender, email.score
+                            "  - {} (from: {}, score: {}){}",
+                            email.subject, email.sender, email.score, breakdown_str
                         );
                     }
                     if emails.len() > 5 {
