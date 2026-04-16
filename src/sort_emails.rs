@@ -974,6 +974,9 @@ pub fn apply_report(report: &SortReport) -> anyhow::Result<ApplyStats> {
 
     for email in &delete_entries {
         let md_path = base.join(&email.file);
+        if !md_path.exists() {
+            continue;
+        }
         trash::delete(&md_path)
             .with_context(|| format!("failed to trash {}", email.file))?;
 
@@ -1018,6 +1021,9 @@ pub fn apply_report(report: &SortReport) -> anyhow::Result<ApplyStats> {
 
     for email in &summarize_entries {
         let md_path = base.join(&email.file);
+        if !md_path.exists() {
+            continue;
+        }
         let to_summarize_dir = base
             .parent()
             .unwrap_or_else(|| Path::new("."))

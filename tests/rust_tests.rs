@@ -986,7 +986,8 @@ mod sort_apply_tests {
             vec![("delete", make_email_summary("nonexistent.md", "sender@example.com"))],
         );
 
-        let result = apply_report(&report);
-        assert!(result.is_err(), "apply_report should return Err for missing delete file");
+        // Missing files are silently skipped — deleted count stays 0
+        let stats = apply_report(&report).unwrap();
+        assert_eq!(stats.deleted, 0);
     }
 }
