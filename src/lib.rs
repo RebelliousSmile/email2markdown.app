@@ -12,3 +12,5 @@ pub mod network;      // [3][4] Progress indicator et retry logic
 pub mod tray;
 #[cfg(feature = "tray")]
 pub mod tray_actions;
+#[cfg(feature = "tray")]
+pub mod tray_sort_window;

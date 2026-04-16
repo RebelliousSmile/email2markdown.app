@@ -27,6 +27,8 @@ mod menu_ids {
     pub const QUIT: &str = "quit";
     pub const EXPORT_PREFIX: &str = "export_";
     pub const SORT_PREFIX: &str = "sort_";
+    pub const FIXYAML_PREFIX: &str = "fixyaml_";
+    pub const FIXHTML_PREFIX: &str = "fixhtml_";
 }
 
 /// Run the system tray application.
@@ -70,16 +72,38 @@ pub fn run_tray() -> Result<()> {
 
         // Handle action results (notifications)
         if let Ok(result) = result_receiver.try_recv() {
-            if let crate::tray_actions::ActionResult::Imported(_) = &result {
-                // Rebuild menu so Export/Sort submenus reflect new accounts
-                if let Some(ref icon) = tray_icon {
-                    match create_menu() {
-                        Ok(new_menu) => icon.set_menu(Some(Box::new(new_menu))),
-                        Err(e) => eprintln!("Failed to rebuild menu: {}", e),
+            match &result {
+                crate::tray_actions::ActionResult::Imported(_) => {
+                    // Rebuild menu so Export/Sort submenus reflect new accounts
+                    if let Some(ref icon) = tray_icon {
+                        match create_menu() {
+                            Ok(new_menu) => icon.set_menu(Some(Box::new(new_menu))),
+                            Err(e) => eprintln!("Failed to rebuild menu: {}", e),
+                        }
+                    }
+                    show_notification(&result);
+                }
+                crate::tray_actions::ActionResult::SortCompleted { report_path, account } => {
+                    let total = count_report_emails(report_path);
+                    if total == 0 {
+                        let nothing = crate::tray_actions::ActionResult::Success(
+                            "Tri terminé".to_string(),
+                            "Rien à réviser".to_string(),
+                        );
+                        show_notification(&nothing);
+                    } else {
+                        let sender = result_sender.clone();
+                        let path = report_path.clone();
+                        let account = account.clone();
+                        thread::spawn(move || {
+                            crate::tray_sort_window::open(path, account, sender);
+                        });
                     }
                 }
+                _ => {
+                    show_notification(&result);
+                }
             }
-            show_notification(&result);
         }
 
         // Keep the tray icon alive
@@ -139,40 +163,66 @@ fn create_menu() -> Result<Menu> {
     }
     menu.append(&sort_submenu)?;
 
-    // Separator
-    menu.append(&PredefinedMenuItem::separator())?;
+    // Outils submenu
+    let outils_submenu = Submenu::new("Outils", true);
 
-    // Import Thunderbird
-    menu.append(&MenuItem::with_id(
+    // Fix YAML submenu — one entry per account
+    let fixyaml_submenu = Submenu::new("Fix YAML", has_accounts);
+    for account in &accounts {
+        let id = format!("{}{}", menu_ids::FIXYAML_PREFIX, account);
+        let _ = fixyaml_submenu.append(&MenuItem::with_id(
+            id,
+            account,
+            true,
+            no_accel.clone(),
+        ));
+    }
+    let _ = outils_submenu.append(&fixyaml_submenu);
+
+    // Fix HTML→Markdown submenu — one entry per account
+    let fixhtml_submenu = Submenu::new("Fix HTML→Markdown", has_accounts);
+    for account in &accounts {
+        let id = format!("{}{}", menu_ids::FIXHTML_PREFIX, account);
+        let _ = fixhtml_submenu.append(&MenuItem::with_id(
+            id,
+            account,
+            true,
+            no_accel.clone(),
+        ));
+    }
+    let _ = outils_submenu.append(&fixhtml_submenu);
+
+    let _ = outils_submenu.append(&PredefinedMenuItem::separator());
+
+    let _ = outils_submenu.append(&MenuItem::with_id(
         menu_ids::IMPORT_THUNDERBIRD,
         "Import Thunderbird",
         true,
         no_accel.clone(),
-    ))?;
+    ));
 
-    // Choose export directory
-    menu.append(&MenuItem::with_id(
+    let _ = outils_submenu.append(&MenuItem::with_id(
         menu_ids::CHOOSE_EXPORT_DIR,
         "Choisir répertoire d'export…",
         true,
         no_accel.clone(),
-    ))?;
+    ));
 
-    // Open settings
-    menu.append(&MenuItem::with_id(
+    let _ = outils_submenu.append(&MenuItem::with_id(
         menu_ids::OPEN_CONFIG,
         "Paramètres…",
         true,
         no_accel.clone(),
-    ))?;
+    ));
 
-    // Documentation
-    menu.append(&MenuItem::with_id(
+    let _ = outils_submenu.append(&MenuItem::with_id(
         menu_ids::OPEN_DOCUMENTATION,
         "Documentation",
         true,
         no_accel.clone(),
-    ))?;
+    ));
+
+    menu.append(&outils_submenu)?;
 
     // Separator
     menu.append(&PredefinedMenuItem::separator())?;
@@ -217,12 +267,24 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
             std::process::exit(0);
         }
         id if id.starts_with(menu_ids::EXPORT_PREFIX) => {
-            let account_name = id.strip_prefix(menu_ids::EXPORT_PREFIX).unwrap();
-            tray_actions::action_export(account_name.to_string(), result_sender);
+            if let Some(account_name) = id.strip_prefix(menu_ids::EXPORT_PREFIX) {
+                tray_actions::action_export(account_name.to_string(), result_sender);
+            }
         }
         id if id.starts_with(menu_ids::SORT_PREFIX) => {
-            let account_name = id.strip_prefix(menu_ids::SORT_PREFIX).unwrap();
-            tray_actions::action_sort(account_name.to_string(), result_sender);
+            if let Some(account_name) = id.strip_prefix(menu_ids::SORT_PREFIX) {
+                tray_actions::action_sort(account_name.to_string(), result_sender);
+            }
+        }
+        id if id.starts_with(menu_ids::FIXYAML_PREFIX) => {
+            if let Some(account_name) = id.strip_prefix(menu_ids::FIXYAML_PREFIX) {
+                tray_actions::action_fix_yaml(account_name.to_string(), result_sender);
+            }
+        }
+        id if id.starts_with(menu_ids::FIXHTML_PREFIX) => {
+            if let Some(account_name) = id.strip_prefix(menu_ids::FIXHTML_PREFIX) {
+                tray_actions::action_fix_html(account_name.to_string(), result_sender);
+            }
         }
         _ => {}
     }
@@ -294,6 +356,17 @@ fn create_default_icon() -> Result<tray_icon::Icon> {
     tray_icon::Icon::from_rgba(rgba, size, size).context("Failed to create default icon")
 }
 
+/// Count the total emails across all categories in a sort report.
+fn count_report_emails(report_path: &std::path::Path) -> usize {
+    let Ok(json) = std::fs::read_to_string(report_path) else {
+        return 0;
+    };
+    let Ok(report) = serde_json::from_str::<crate::sort_emails::SortReport>(&json) else {
+        return 0;
+    };
+    report.categories.values().map(|v| v.len()).sum()
+}
+
 /// Show a notification to the user (spawns a thread to avoid blocking the event loop).
 fn show_notification(result: &ActionResult) {
     let (title, description, level) = match result {
@@ -308,6 +381,10 @@ fn show_notification(result: &ActionResult) {
             m.clone(),
             rfd::MessageLevel::Error,
         ),
+        ActionResult::SortCompleted { .. } => {
+            // SortCompleted is handled by the event loop before reaching show_notification
+            unreachable!("SortCompleted should never be forwarded to show_notification")
+        }
     };
 
     thread::spawn(move || {
