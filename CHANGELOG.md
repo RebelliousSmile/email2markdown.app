@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-16
+
+### Added
+
+- `sort-apply` command: interactive review and apply of sort reports; moves emails to trash, `to-summarize/`, or keeps them in place with optional type-based organization.
+- Sort scoring: toggle-based scoring with folder, recurring, and per-account overrides.
+- Email filenames now include a 12-character CamelCase subject extract.
+- `organize_by_type` in `sort-apply`: moves "keep" emails into type subfolders (`direct/`, `newsletter/`, `mailing_list/`, `unknown/`) within the base export directory. Enabled by default; overridable per account in `settings.yaml`.
+- `fix --html-bodies`: retroactively converts raw HTML body content in existing `.md` files to Markdown. Supports `--account` for automatic directory resolution and `--dry-run` preview.
+
+### Fixed
+
+- Export: HTML-only emails (no `text/plain` part) are now converted to Markdown at extract time instead of writing raw HTML into `.md` files (`htmd` crate).
+- Export: Gmail permanent deletion now uses `[Gmail]/All Mail` EXPUNGE. Previously EXPUNGE on INBOX only removed the label (archived the message) instead of deleting it permanently.
+- `sort-apply`: missing files are silently skipped instead of aborting the apply run.
+- Thunderbird import: `organize_by_type` field is now included in generated account config.
+
+### Changed
+
+- `organize_by_type` defaults to `true`.
+
 ## [0.2.0] - 2026-04-16
 
 ### Added
