@@ -888,3 +888,105 @@ Content-Transfer-Encoding: quoted-printable\r\n\
         );
     }
 }
+
+mod sort_apply_tests {
+    use email_to_markdown::sort_emails::{apply_report, EmailSummary, SortDetails, SortReport, SortSummary};
+    use std::collections::HashMap;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn make_email_summary(file: &str, sender: &str) -> EmailSummary {
+        EmailSummary {
+            file: file.to_string(),
+            subject: "Test subject".to_string(),
+            sender: sender.to_string(),
+            date: "2024-01-01".to_string(),
+            score: 0,
+            email_type: "direct".to_string(),
+            size: 1000,
+            attachments: 0,
+            breakdown: vec![],
+        }
+    }
+
+    fn make_sort_report(base_directory: &str, entries: Vec<(&str, EmailSummary)>) -> SortReport {
+        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
+        for (category, summary) in entries {
+            categories.entry(category.to_string()).or_default().push(summary);
+        }
+        SortReport {
+            base_directory: base_directory.to_string(),
+            summary: SortSummary {
+                total_emails: 0,
+                categories: HashMap::new(),
+                recommendations: HashMap::new(),
+            },
+            details: SortDetails {
+                by_type: HashMap::new(),
+                by_sender: vec![],
+                by_date: HashMap::new(),
+            },
+            categories,
+        }
+    }
+
+    #[test]
+    fn test_apply_report_summarize() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        fs::create_dir_all(&base).unwrap();
+        let md_file = base.join("test_email.md");
+        fs::write(&md_file, "---\nsubject: Test\n---\nBody").unwrap();
+
+        let report = make_sort_report(
+            &base.to_string_lossy(),
+            vec![("summarize", make_email_summary("test_email.md", "sender@example.com"))],
+        );
+
+        let stats = apply_report(&report).unwrap();
+
+        assert_eq!(stats.moved, 1);
+        assert_eq!(stats.deleted, 0);
+        assert_eq!(stats.skipped, 0);
+
+        // File should no longer be at original path
+        assert!(!md_file.exists(), "original file should have been moved");
+
+        // File should exist at to-summarize/ destination
+        let dest = temp.path().join("to-summarize").join("test_email.md");
+        assert!(dest.exists(), "file should exist at to-summarize/ destination");
+    }
+
+    #[test]
+    fn test_apply_report_keep() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        fs::create_dir_all(&base).unwrap();
+
+        let report = make_sort_report(
+            &base.to_string_lossy(),
+            vec![("keep", make_email_summary("some_email.md", "sender@example.com"))],
+        );
+
+        let stats = apply_report(&report).unwrap();
+
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.deleted, 0);
+        assert_eq!(stats.moved, 0);
+    }
+
+    #[test]
+    fn test_apply_report_missing_file() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        fs::create_dir_all(&base).unwrap();
+
+        let report = make_sort_report(
+            &base.to_string_lossy(),
+            vec![("delete", make_email_summary("nonexistent.md", "sender@example.com"))],
+        );
+
+        let result = apply_report(&report);
+        assert!(result.is_err(), "apply_report should return Err for missing delete file");
+    }
+}
