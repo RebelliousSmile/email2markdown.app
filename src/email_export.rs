@@ -385,6 +385,75 @@ fn html_to_markdown(html: &str) -> String {
     htmd::convert(html).unwrap_or_default()
 }
 
+/// Stats returned by `fix_html_bodies`.
+pub struct FixHtmlStats {
+    pub fixed: usize,
+    pub skipped: usize,
+    pub errors: usize,
+}
+
+/// Walk `directory` recursively, find `.md` files whose body is raw HTML,
+/// and convert them to Markdown in place.
+///
+/// When `dry_run` is true the files are detected but not modified.
+pub fn fix_html_bodies(directory: &Path, dry_run: bool) -> anyhow::Result<FixHtmlStats> {
+    let mut stats = FixHtmlStats { fixed: 0, skipped: 0, errors: 0 };
+
+    for entry in WalkDir::new(directory)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
+    {
+        let path = entry.path();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => { stats.errors += 1; continue; }
+        };
+
+        // Find body: content after the second "---" separator line
+        let body = extract_md_body(&content);
+        let trimmed = body.trim_start();
+        if !trimmed.starts_with("<!DOCTYPE html") && !trimmed.starts_with("<html") && !trimmed.starts_with("<HTML") {
+            stats.skipped += 1;
+            continue;
+        }
+
+        let converted = html_to_markdown(trimmed);
+        if converted.trim().is_empty() {
+            stats.errors += 1;
+            continue;
+        }
+
+        if !dry_run {
+            let front = &content[..content.len() - body.len()];
+            let new_content = format!("{}{}", front, converted);
+            if let Err(_) = fs::write(path, &new_content) {
+                stats.errors += 1;
+                continue;
+            }
+        }
+
+        stats.fixed += 1;
+    }
+
+    Ok(stats)
+}
+
+/// Extract the body portion of a `.md` file (content after the closing `---`).
+fn extract_md_body(content: &str) -> &str {
+    // Skip the opening ---
+    let after_open = content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n")).unwrap_or(content);
+    // Find the closing ---
+    if let Some(idx) = after_open.find("\n---\n") {
+        &after_open[idx + 5..]
+    } else if let Some(idx) = after_open.find("\n---\r\n") {
+        &after_open[idx + 6..]
+    } else {
+        content
+    }
+}
+
 /// Extract the body from a parsed email.
 fn extract_body(mail: &ParsedMail) -> String {
     if mail.subparts.is_empty() {

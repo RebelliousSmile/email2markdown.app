@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 use email_to_markdown::config::{self, Config, SortConfig};
-use email_to_markdown::email_export::ImapExporter;
+use email_to_markdown::email_export::{fix_html_bodies, ImapExporter};
 use email_to_markdown::fix_yaml;
 use email_to_markdown::sort_emails::{apply_report, review_report, EmailSorter, SortReport};
 use std::fs;
@@ -78,7 +78,15 @@ enum Commands {
     /// Fix malformed YAML in email files
     Fix {
         /// Directory containing email files to fix
-        directory: PathBuf,
+        directory: Option<PathBuf>,
+
+        /// Fix for a specific account (resolves directory automatically)
+        #[arg(short, long)]
+        account: Option<String>,
+
+        /// Convert raw HTML bodies to Markdown in existing .md files
+        #[arg(long)]
+        html_bodies: bool,
 
         /// Scan only, show what would be fixed
         #[arg(long)]
@@ -383,21 +391,43 @@ fn main() -> Result<()> {
 
         Commands::Fix {
             directory,
+            account,
+            html_bodies,
             dry_run,
             apply,
         } => {
-            if !directory.exists() {
-                println!("Directory not found: {}", directory.display());
+            // Resolve directory from --account or positional argument
+            let resolved_dir: PathBuf = if let Some(ref account_name) = account {
+                let accounts_config = Config::load(&config::accounts_yaml_path())
+                    .context("failed to load accounts config")?;
+                let acc = accounts_config
+                    .get_account(account_name)
+                    .with_context(|| format!("account '{}' not found", account_name))?;
+                PathBuf::from(&acc.export_directory)
+            } else if let Some(dir) = directory {
+                dir
+            } else {
+                println!("Error: provide a directory or --account <name>");
+                return Ok(());
+            };
+
+            if !resolved_dir.exists() {
+                println!("Directory not found: {}", resolved_dir.display());
                 return Ok(());
             }
 
-            println!("Scanning for malformed email files in: {}", directory.display());
-
-            // Default to dry-run unless --apply is specified
             let is_dry_run = !apply || dry_run;
 
-            let stats = fix_yaml::scan_and_fix_directory(&directory, is_dry_run)?;
-            fix_yaml::print_summary(&stats, is_dry_run);
+            if html_bodies {
+                println!("{}Converting HTML bodies in: {}", if is_dry_run { "[dry-run] " } else { "" }, resolved_dir.display());
+                let stats = fix_html_bodies(&resolved_dir, is_dry_run)
+                    .context("failed to fix html bodies")?;
+                println!("Fixed: {} | Skipped: {} | Errors: {}", stats.fixed, stats.skipped, stats.errors);
+            } else {
+                println!("Scanning for malformed email files in: {}", resolved_dir.display());
+                let stats = fix_yaml::scan_and_fix_directory(&resolved_dir, is_dry_run)?;
+                fix_yaml::print_summary(&stats, is_dry_run);
+            }
         }
 
         Commands::Sort {
