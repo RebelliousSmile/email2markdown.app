@@ -36,13 +36,13 @@ struct IpcDecision {
 ///
 /// This function blocks the calling thread until the window is closed.
 /// All errors are sent as `ActionResult::Error` through `sender`.
-pub fn open(report_path: PathBuf, sender: Sender<ActionResult>) {
-    if let Err(e) = run_window(report_path, sender.clone()) {
+pub fn open(report_path: PathBuf, account: String, sender: Sender<ActionResult>) {
+    if let Err(e) = run_window(report_path, account, sender.clone()) {
         let _ = sender.send(ActionResult::Error(format!("Fenêtre de révision : {}", e)));
     }
 }
 
-fn run_window(report_path: PathBuf, sender: Sender<ActionResult>) -> anyhow::Result<()> {
+fn run_window(report_path: PathBuf, account: String, sender: Sender<ActionResult>) -> anyhow::Result<()> {
     // Load the sort report.
     let json = std::fs::read_to_string(&report_path)
         .with_context(|| format!("failed to read report: {}", report_path.display()))?;
@@ -52,10 +52,7 @@ fn run_window(report_path: PathBuf, sender: Sender<ActionResult>) -> anyhow::Res
     let html_template = include_str!("../assets/sort_review.html");
     let report_json =
         serde_json::to_string(&report.categories).context("failed to serialize report")?;
-    let html = html_template.replace("window.__REPORT_DATA__ = __REPORT_JSON__", &format!(
-        "window.__REPORT_DATA__ = {}",
-        report_json
-    ));
+    let html = html_template.replace("__REPORT_JSON__", &report_json);
 
     // Shared flag: IPC handler signals "exit after apply" to the event loop.
     let should_exit = Arc::new(AtomicBool::new(false));
@@ -64,11 +61,12 @@ fn run_window(report_path: PathBuf, sender: Sender<ActionResult>) -> anyhow::Res
     // Capture values for the IPC closure.
     let sender_ipc = sender.clone();
     let report_path_ipc = report_path.clone();
+    let account_ipc = account.clone();
 
     let event_loop = EventLoop::<()>::new();
 
     let window = WindowBuilder::new()
-        .with_title("Révision du tri")
+        .with_title(format!("Révision du tri — {}", account))
         .with_inner_size(LogicalSize::new(900.0f64, 620.0f64))
         .build(&event_loop)
         .context("failed to create review window")?;
@@ -77,7 +75,7 @@ fn run_window(report_path: PathBuf, sender: Sender<ActionResult>) -> anyhow::Res
         .with_html(html)
         .with_ipc_handler(move |req: wry::http::Request<String>| {
             let body = req.body().clone();
-            match handle_ipc_message(&body, &report_path_ipc) {
+            match handle_ipc_message(&body, &report_path_ipc, &account_ipc) {
                 Ok(result) => {
                     let _ = sender_ipc.send(result);
                 }
@@ -92,7 +90,7 @@ fn run_window(report_path: PathBuf, sender: Sender<ActionResult>) -> anyhow::Res
         .context("failed to create webview")?;
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Poll;
+        *control_flow = ControlFlow::Wait;
 
         match event {
             Event::WindowEvent {
@@ -112,7 +110,7 @@ fn run_window(report_path: PathBuf, sender: Sender<ActionResult>) -> anyhow::Res
 }
 
 /// Parse the IPC JSON, update the report, write it back, and apply it.
-fn handle_ipc_message(body: &str, report_path: &PathBuf) -> anyhow::Result<ActionResult> {
+fn handle_ipc_message(body: &str, report_path: &PathBuf, account: &str) -> anyhow::Result<ActionResult> {
     let payload: IpcDecisions =
         serde_json::from_str(body).context("failed to parse IPC decisions")?;
 
@@ -138,7 +136,18 @@ fn handle_ipc_message(body: &str, report_path: &PathBuf) -> anyhow::Result<Actio
         .collect();
 
     // Distribute according to the decisions received from the UI.
+    // Reject unknown action values to prevent corrupt categories.
     for decision in &payload.decisions {
+        match decision.action.as_str() {
+            "delete" | "summarize" | "keep" => {}
+            other => {
+                return Err(anyhow::anyhow!(
+                    "unknown action '{}' in IPC decision for file '{}'",
+                    other,
+                    decision.file
+                ));
+            }
+        }
         if let Some(email) = all_emails.get(&decision.file) {
             let target = new_categories
                 .entry(decision.action.clone())
@@ -159,7 +168,7 @@ fn handle_ipc_message(body: &str, report_path: &PathBuf) -> anyhow::Result<Actio
     let stats = apply_report(&report).context("failed to apply sort report")?;
 
     Ok(ActionResult::Success(
-        "Tri appliqué".to_string(),
+        format!("Tri appliqué — {}", account),
         format!(
             "Supprimés : {} | Résumés : {} | Conservés : {}",
             stats.deleted, stats.moved, stats.skipped

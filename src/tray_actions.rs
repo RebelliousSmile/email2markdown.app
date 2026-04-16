@@ -116,8 +116,10 @@ fn run_sort(account_name: &str) -> Result<PathBuf> {
 
     let report = sorter.generate_report();
     let report_path = sort_directory.join("sort_report.json");
-    sorter.save_report(&report, report_path.to_str().unwrap_or("sort_report.json"))
-        .context("failed to save sort report")?;
+    let path_str = report_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("sort report path contains non-UTF-8 characters"))?;
+    sorter.save_report(&report, path_str).context("failed to save sort report")?;
 
     Ok(report_path)
 }

@@ -94,9 +94,9 @@ pub fn run_tray() -> Result<()> {
                     } else {
                         let sender = result_sender.clone();
                         let path = report_path.clone();
-                        let _account = account.clone();
+                        let account = account.clone();
                         thread::spawn(move || {
-                            crate::tray_sort_window::open(path, sender);
+                            crate::tray_sort_window::open(path, account, sender);
                         });
                     }
                 }
@@ -267,20 +267,24 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
             std::process::exit(0);
         }
         id if id.starts_with(menu_ids::EXPORT_PREFIX) => {
-            let account_name = id.strip_prefix(menu_ids::EXPORT_PREFIX).unwrap();
-            tray_actions::action_export(account_name.to_string(), result_sender);
+            if let Some(account_name) = id.strip_prefix(menu_ids::EXPORT_PREFIX) {
+                tray_actions::action_export(account_name.to_string(), result_sender);
+            }
         }
         id if id.starts_with(menu_ids::SORT_PREFIX) => {
-            let account_name = id.strip_prefix(menu_ids::SORT_PREFIX).unwrap();
-            tray_actions::action_sort(account_name.to_string(), result_sender);
+            if let Some(account_name) = id.strip_prefix(menu_ids::SORT_PREFIX) {
+                tray_actions::action_sort(account_name.to_string(), result_sender);
+            }
         }
         id if id.starts_with(menu_ids::FIXYAML_PREFIX) => {
-            let account_name = id.strip_prefix(menu_ids::FIXYAML_PREFIX).unwrap();
-            tray_actions::action_fix_yaml(account_name.to_string(), result_sender);
+            if let Some(account_name) = id.strip_prefix(menu_ids::FIXYAML_PREFIX) {
+                tray_actions::action_fix_yaml(account_name.to_string(), result_sender);
+            }
         }
         id if id.starts_with(menu_ids::FIXHTML_PREFIX) => {
-            let account_name = id.strip_prefix(menu_ids::FIXHTML_PREFIX).unwrap();
-            tray_actions::action_fix_html(account_name.to_string(), result_sender);
+            if let Some(account_name) = id.strip_prefix(menu_ids::FIXHTML_PREFIX) {
+                tray_actions::action_fix_html(account_name.to_string(), result_sender);
+            }
         }
         _ => {}
     }
@@ -377,11 +381,10 @@ fn show_notification(result: &ActionResult) {
             m.clone(),
             rfd::MessageLevel::Error,
         ),
-        ActionResult::SortCompleted { account, .. } => (
-            "Tri terminé".to_string(),
-            format!("Tri terminé pour {}", account),
-            rfd::MessageLevel::Info,
-        ),
+        ActionResult::SortCompleted { .. } => {
+            // SortCompleted is handled by the event loop before reaching show_notification
+            unreachable!("SortCompleted should never be forwarded to show_notification")
+        }
     };
 
     thread::spawn(move || {
