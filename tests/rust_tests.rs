@@ -316,6 +316,31 @@ mod settings_tests {
         // Should fail validation: export_directory is empty because no export_base_dir set
         assert!(config.is_err());
     }
+
+    #[test]
+    fn test_per_account_sort_config_in_settings() {
+        let temp = TempDir::new().unwrap();
+        let settings_yaml = r#"
+export_base_dir: /tmp/exports
+accounts:
+  TestAccount:
+    sort:
+      delete_newsletters: true
+      penalize_recurring: true
+"#;
+        let settings_path = temp.path().join("settings.yaml");
+        std::fs::write(&settings_path, settings_yaml).unwrap();
+
+        let settings = Settings::load(&settings_path).unwrap();
+        let behavior = settings.accounts.get("TestAccount").unwrap();
+        let sort_cfg = behavior.sort.as_ref().unwrap();
+        assert!(sort_cfg.delete_newsletters);
+        assert!(sort_cfg.penalize_recurring);
+        // Omitted fields get serde defaults
+        assert!(sort_cfg.use_folder_score);
+        assert!(sort_cfg.keep_with_attachments);
+        assert_eq!(sort_cfg.recent_threshold_days, 30);
+    }
 }
 
 mod email_export_tests {
@@ -383,6 +408,7 @@ mod email_export_tests {
             subject_hash: "abcdef".to_string(),
             tags: vec!["inbox".to_string()],
             attachments: vec![],
+            email_type: None,
             social_links: Some(links),
         };
 
@@ -402,11 +428,48 @@ mod email_export_tests {
             subject_hash: "abcdef".to_string(),
             tags: vec![],
             attachments: vec![],
+            email_type: None,
             social_links: None,
         };
 
         let yaml = serde_yaml::to_string(&fm).expect("serialize");
         assert!(!yaml.contains("social_links"), "social_links should be omitted when None, got:\n{}", yaml);
+    }
+
+    #[test]
+    fn test_email_frontmatter_contains_email_type() {
+        let fm = EmailFrontmatter {
+            from: "news@example.com".to_string(),
+            to: "user@example.com".to_string(),
+            date: "2026-04-15T00:00:00+00:00".to_string(),
+            subject: "Weekly Newsletter".to_string(),
+            subject_hash: "abc123".to_string(),
+            tags: vec!["INBOX".to_string()],
+            attachments: vec![],
+            email_type: Some("newsletter".to_string()),
+            social_links: None,
+        };
+
+        let yaml = serde_yaml::to_string(&fm).expect("serialize");
+        assert!(yaml.contains("email_type: newsletter"), "expected email_type in:\n{}", yaml);
+    }
+
+    #[test]
+    fn test_email_frontmatter_omits_email_type_when_none() {
+        let fm = EmailFrontmatter {
+            from: "a@example.com".to_string(),
+            to: "b@example.com".to_string(),
+            date: "2026-04-15T00:00:00+00:00".to_string(),
+            subject: "Hi".to_string(),
+            subject_hash: "abcdef".to_string(),
+            tags: vec![],
+            attachments: vec![],
+            email_type: None,
+            social_links: None,
+        };
+
+        let yaml = serde_yaml::to_string(&fm).expect("serialize");
+        assert!(!yaml.contains("email_type"), "email_type should be omitted when None, got:\n{}", yaml);
     }
 }
 

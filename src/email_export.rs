@@ -25,6 +25,8 @@ pub struct EmailFrontmatter {
     pub tags: Vec<String>,
     pub attachments: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub social_links: Option<BTreeMap<String, String>>,
 }
 
@@ -274,9 +276,10 @@ pub fn export_to_markdown(
         return Ok(None);
     }
 
-    // Analyze email and collect contacts if enabled
+    // Analyze email type and collect contacts if enabled
+    let analysis = analyze_email_type(&mail);
+    let email_type_str = analysis.email_type.to_string();
     if let Some(collector) = contacts_collector {
-        let analysis = analyze_email_type(&mail);
         for contact in analysis.contacts {
             collector.add(&analysis.email_type, contact);
         }
@@ -341,6 +344,7 @@ pub fn export_to_markdown(
         subject_hash,
         tags,
         attachments: attachments.clone(),
+        email_type: Some(email_type_str),
         social_links,
     };
 
