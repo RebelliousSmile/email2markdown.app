@@ -294,6 +294,34 @@
     color: #388e3c;
     font-size: 12px;
   }
+  .acct-field select {
+    padding: 5px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    background: #fff;
+    width: 140px;
+  }
+  .acct-field select:focus {
+    outline: none;
+    border-color: #1e88e5;
+    box-shadow: 0 0 0 2px rgba(30,136,229,0.15);
+  }
+  .acct-behavior-fieldset {
+    border: 1px solid #eee;
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin-top: 16px;
+    margin-bottom: 12px;
+  }
+  .acct-behavior-legend {
+    font-size: 12px;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0 4px;
+  }
 </style>
 </head>
 <body>
@@ -386,6 +414,61 @@
             </div>
           </div>
         </div>
+        <fieldset class="acct-behavior-fieldset">
+          <legend class="acct-behavior-legend">Comportement</legend>
+          <div class="acct-field">
+            <label for="acct-organize-by-type">Organiser par type</label>
+            <select id="acct-organize-by-type">
+              <option value="">Hériter</option>
+              <option value="true">Oui</option>
+              <option value="false">Non</option>
+            </select>
+          </div>
+          <div class="acct-field">
+            <label for="acct-delete-after-export">Supprimer après export</label>
+            <select id="acct-delete-after-export">
+              <option value="">Hériter</option>
+              <option value="true">Oui</option>
+              <option value="false">Non</option>
+            </select>
+          </div>
+          <div class="acct-field">
+            <label for="acct-cleanup-empty-dirs">Nettoyer dossiers vides</label>
+            <select id="acct-cleanup-empty-dirs">
+              <option value="">Hériter</option>
+              <option value="true">Oui</option>
+              <option value="false">Non</option>
+            </select>
+          </div>
+          <div class="acct-field">
+            <label for="acct-skip-existing">Ignorer les existants</label>
+            <select id="acct-skip-existing">
+              <option value="">Hériter</option>
+              <option value="true">Oui</option>
+              <option value="false">Non</option>
+            </select>
+          </div>
+          <div class="acct-field">
+            <label for="acct-collect-contacts">Collecter les contacts</label>
+            <select id="acct-collect-contacts">
+              <option value="">Hériter</option>
+              <option value="true">Oui</option>
+              <option value="false">Non</option>
+            </select>
+          </div>
+          <div class="acct-field">
+            <label for="acct-skip-signature-images">Ignorer images de signature</label>
+            <select id="acct-skip-signature-images">
+              <option value="">Hériter</option>
+              <option value="true">Oui</option>
+              <option value="false">Non</option>
+            </select>
+          </div>
+          <div class="acct-field">
+            <label for="acct-quote-depth">Profondeur citations</label>
+            <input type="number" id="acct-quote-depth" min="0" placeholder="Hériter (vide)">
+          </div>
+        </fieldset>
         <div class="acct-error" id="acct-error"></div>
         <div class="acct-detail-footer">
           <span class="acct-saved-msg" id="acct-saved-msg">Enregistré ✓</span>
@@ -514,6 +597,15 @@
   var currentFolders = [];
   var currentAccountIdx = -1;
 
+  var ACCT_BOOL_FIELDS = [
+    ['acct-organize-by-type', 'organize_by_type'],
+    ['acct-delete-after-export', 'delete_after_export'],
+    ['acct-cleanup-empty-dirs', 'cleanup_empty_dirs'],
+    ['acct-skip-existing', 'skip_existing'],
+    ['acct-collect-contacts', 'collect_contacts'],
+    ['acct-skip-signature-images', 'skip_signature_images']
+  ];
+
   function renderAccountList() {
     var listView = document.getElementById('account-list-view');
     if (!accounts || accounts.length === 0) {
@@ -545,6 +637,16 @@
     document.getElementById('acct-username').value = acct.username || '';
     currentFolders = (acct.ignored_folders || []).slice();
     renderChips();
+
+    var behavior = (window.__SETTINGS_DATA__.accounts && window.__SETTINGS_DATA__.accounts[acct.name]) || {};
+    for (var bi = 0; bi < ACCT_BOOL_FIELDS.length; bi++) {
+      var bel = document.getElementById(ACCT_BOOL_FIELDS[bi][0]);
+      var bval = behavior[ACCT_BOOL_FIELDS[bi][1]];
+      bel.value = bval !== undefined ? String(bval) : '';
+    }
+    var qdEl = document.getElementById('acct-quote-depth');
+    qdEl.value = behavior.quote_depth !== undefined ? behavior.quote_depth : '';
+
     document.getElementById('acct-error').style.display = 'none';
     document.getElementById('acct-error').textContent = '';
     document.getElementById('acct-saved-msg').style.display = 'none';
@@ -629,6 +731,14 @@
       return;
     }
 
+    var behaviorData = {};
+    for (var si = 0; si < ACCT_BOOL_FIELDS.length; si++) {
+      var sv = document.getElementById(ACCT_BOOL_FIELDS[si][0]).value;
+      behaviorData[ACCT_BOOL_FIELDS[si][1]] = sv === '' ? null : sv === 'true';
+    }
+    var qdSave = document.getElementById('acct-quote-depth').value.replace(/^\s+|\s+$/g, '');
+    behaviorData.quote_depth = qdSave === '' ? null : parseInt(qdSave, 10);
+
     var payload = {
       action: 'save_account',
       data: {
@@ -636,7 +746,14 @@
         server: server,
         port: port,
         username: username,
-        ignored_folders: currentFolders
+        ignored_folders: currentFolders,
+        organize_by_type: behaviorData.organize_by_type,
+        delete_after_export: behaviorData.delete_after_export,
+        cleanup_empty_dirs: behaviorData.cleanup_empty_dirs,
+        skip_existing: behaviorData.skip_existing,
+        collect_contacts: behaviorData.collect_contacts,
+        skip_signature_images: behaviorData.skip_signature_images,
+        quote_depth: behaviorData.quote_depth
       }
     };
 

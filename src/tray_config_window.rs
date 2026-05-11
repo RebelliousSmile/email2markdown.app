@@ -56,6 +56,20 @@ struct AccountData {
     username: String,
     #[serde(default)]
     ignored_folders: Vec<String>,
+    #[serde(default)]
+    organize_by_type: Option<bool>,
+    #[serde(default)]
+    delete_after_export: Option<bool>,
+    #[serde(default)]
+    cleanup_empty_dirs: Option<bool>,
+    #[serde(default)]
+    skip_existing: Option<bool>,
+    #[serde(default)]
+    collect_contacts: Option<bool>,
+    #[serde(default)]
+    skip_signature_images: Option<bool>,
+    #[serde(default)]
+    quote_depth: Option<usize>,
 }
 
 /// Open the settings window.
@@ -239,11 +253,11 @@ fn handle_ipc_message(body: &str) -> (Option<ActionResult>, bool) {
                 }
                 if !found {
                     accounts.push(RawAccount {
-                        name: data.account_name,
-                        server: data.server,
+                        name: data.account_name.clone(),
+                        server: data.server.clone(),
                         port: data.port,
-                        username: data.username,
-                        ignored_folders: data.ignored_folders,
+                        username: data.username.clone(),
+                        ignored_folders: data.ignored_folders.clone(),
                     });
                 }
 
@@ -251,6 +265,41 @@ fn handle_ipc_message(body: &str) -> (Option<ActionResult>, bool) {
                     .with_context(|| {
                         format!("failed to save accounts to {}", accounts_path.display())
                     })?;
+
+                let settings_path = config::settings_path();
+                let mut settings = Settings::load(&settings_path).unwrap_or_default();
+
+                // Find the canonical key using case-insensitive matching to avoid duplicate entries.
+                let canonical_key = settings
+                    .accounts
+                    .keys()
+                    .find(|k| k.eq_ignore_ascii_case(&data.account_name))
+                    .cloned()
+                    .unwrap_or_else(|| data.account_name.clone());
+
+                let mut behavior = settings.accounts.get(&canonical_key).cloned().unwrap_or_default();
+
+                behavior.organize_by_type = data.organize_by_type;
+                behavior.delete_after_export = data.delete_after_export;
+                behavior.cleanup_empty_dirs = data.cleanup_empty_dirs;
+                behavior.skip_existing = data.skip_existing;
+                behavior.collect_contacts = data.collect_contacts;
+                behavior.skip_signature_images = data.skip_signature_images;
+                behavior.quote_depth = data.quote_depth;
+
+                let is_empty = serde_json::to_value(&behavior)
+                    .map(|v| v.as_object().map(|o| o.is_empty()).unwrap_or(false))
+                    .unwrap_or(false);
+
+                if is_empty {
+                    settings.accounts.remove(&canonical_key);
+                } else {
+                    settings.accounts.insert(canonical_key, behavior);
+                }
+
+                settings.save(&settings_path).with_context(|| {
+                    format!("failed to save settings to {}", settings_path.display())
+                })?;
 
                 Ok(())
             })();
