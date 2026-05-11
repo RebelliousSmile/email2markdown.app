@@ -50,9 +50,12 @@ fn classify_error(e: &anyhow::Error) -> Option<String> {
 ///
 /// Runs in a separate thread to avoid blocking the UI.
 pub fn action_export(account_name: String, _result_sender: Sender<ActionResult>) {
+    eprintln!("[diag] action_export called for '{}'", account_name);
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
 
+    eprintln!("[diag] action_export: spawning window thread");
     thread::spawn(move || {
+        eprintln!("[diag] window thread started for Export");
         crate::tray_progress_window::open(
             "Export",
             progress_rx,

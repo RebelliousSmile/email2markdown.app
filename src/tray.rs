@@ -67,6 +67,7 @@ pub fn run_tray() -> Result<()> {
 
         // Handle menu events
         if let Ok(event) = menu_channel.try_recv() {
+            eprintln!("[diag] menu event received: '{}'", &event.id.0);
             handle_menu_event(&event.id.0, result_sender.clone());
         }
 

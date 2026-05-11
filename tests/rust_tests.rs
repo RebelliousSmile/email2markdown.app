@@ -1080,7 +1080,7 @@ mod sort_apply_tests {
             vec![("summarize", make_email_summary("test_email.md", "sender@example.com"))],
         );
 
-        let stats = apply_report(&report).unwrap();
+        let stats = apply_report(&report, "_local").unwrap();
 
         assert_eq!(stats.moved, 1);
         assert_eq!(stats.deleted, 0);
@@ -1089,9 +1089,9 @@ mod sort_apply_tests {
         // File should no longer be at original path
         assert!(!md_file.exists(), "original file should have been moved");
 
-        // File should exist at to-summarize/ destination
-        let dest = temp.path().join("to-summarize").join("test_email.md");
-        assert!(dest.exists(), "file should exist at to-summarize/ destination");
+        // File should exist at _local/to-summarize/ destination
+        let dest = temp.path().join("_local").join("to-summarize").join("test_email.md");
+        assert!(dest.exists(), "file should exist at _local/to-summarize/ destination");
     }
 
     #[test]
@@ -1105,11 +1105,35 @@ mod sort_apply_tests {
             vec![("keep", make_email_summary("some_email.md", "sender@example.com"))],
         );
 
-        let stats = apply_report(&report).unwrap();
+        let stats = apply_report(&report, "_local").unwrap();
 
         assert_eq!(stats.skipped, 1);
         assert_eq!(stats.deleted, 0);
         assert_eq!(stats.moved, 0);
+    }
+
+    #[test]
+    fn test_apply_report_summarize_with_custom_folder() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        fs::create_dir_all(&base).unwrap();
+        let md_file = base.join("test_email.md");
+        fs::write(&md_file, "---\nsubject: Test\n---\nBody").unwrap();
+
+        let report = make_sort_report(
+            &base.to_string_lossy(),
+            vec![("summarize", make_email_summary("test_email.md", "sender@example.com"))],
+        );
+
+        apply_report(&report, "_archive").unwrap();
+
+        // File should exist at _archive/to-summarize/ destination (custom folder)
+        let dest = temp.path().join("_archive").join("to-summarize").join("test_email.md");
+        assert!(dest.exists(), "file should exist at _archive/to-summarize/ destination");
+
+        // File must NOT exist at _local/to-summarize/ (wrong default folder)
+        let wrong_dest = temp.path().join("_local").join("to-summarize").join("test_email.md");
+        assert!(!wrong_dest.exists(), "file must not be placed under the default _local folder");
     }
 
     #[test]
@@ -1124,7 +1148,7 @@ mod sort_apply_tests {
         );
 
         // Missing files are silently skipped — deleted count stays 0
-        let stats = apply_report(&report).unwrap();
+        let stats = apply_report(&report, "_local").unwrap();
         assert_eq!(stats.deleted, 0);
     }
 
@@ -1145,7 +1169,7 @@ mod sort_apply_tests {
             details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
             categories,
         };
-        let stats = apply_report(&report).unwrap();
+        let stats = apply_report(&report, "_local").unwrap();
         assert_eq!(stats.moved, 1);
     }
 
@@ -1166,7 +1190,7 @@ mod sort_apply_tests {
             details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
             categories,
         };
-        apply_report(&report).unwrap();
+        apply_report(&report, "_local").unwrap();
         assert!(base.join("newsletter").join("email_test.md").exists());
     }
 
@@ -1188,7 +1212,7 @@ mod sort_apply_tests {
             details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
             categories,
         };
-        let stats = apply_report(&report).unwrap();
+        let stats = apply_report(&report, "_local").unwrap();
         assert_eq!(stats.skipped, 1);
     }
 
@@ -1210,7 +1234,7 @@ mod sort_apply_tests {
             details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
             categories,
         };
-        apply_report(&report).unwrap();
+        apply_report(&report, "_local").unwrap();
         assert!(newsletter_dir.join("email_test.md").exists());
     }
 }

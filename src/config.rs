@@ -84,6 +84,10 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export_base_dir: Option<String>,
 
+    /// Name of the local output folder used by sort-apply (default: `_local`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_folder_name: Option<String>,
+
     /// Default behaviour applied to every account unless overridden.
     #[serde(default)]
     pub defaults: AccountBehavior,
@@ -94,6 +98,11 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Returns the configured local output folder name, defaulting to `"_local"`.
+    pub fn local_folder(&self) -> &str {
+        self.local_folder_name.as_deref().unwrap_or("_local")
+    }
+
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
             return Ok(Settings::default());
