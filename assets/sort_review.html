@@ -342,6 +342,10 @@
       if (sel) { sel.value = decision; updateSelectStyle(sel); }
     });
     updateSummary();
+    rows.forEach(function (r) { r.checked = false; });
+    document.querySelectorAll('.row-check').forEach(function (cb) { cb.checked = false; });
+    document.getElementById('header-check').checked = false;
+    document.getElementById('select-all').checked = false;
   });
 
   // Cancel
