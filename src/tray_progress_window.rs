@@ -133,9 +133,5 @@ fn run_window(
         }
     });
 
-    if let Ok(mut guard) = WINDOW_PROXY.lock() {
-        *guard = None;
-    }
-
     Ok(())
 }
