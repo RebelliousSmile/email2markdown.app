@@ -1,11 +1,12 @@
 use std::sync::mpsc::Receiver;
+use std::sync::Mutex;
 use std::thread;
 
 use anyhow::Context;
 use tao::{
     dpi::LogicalSize,
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoopBuilder},
+    event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     platform::run_return::EventLoopExtRunReturn,
     window::WindowBuilder,
 };
@@ -16,7 +17,10 @@ use crate::progress::ProgressUpdate;
 enum AppEvent {
     Progress(ProgressUpdate),
     ActionRequested,
+    Kill,
 }
+
+static WINDOW_PROXY: Mutex<Option<EventLoopProxy<AppEvent>>> = Mutex::new(None);
 
 pub fn open(
     action_name: &str,
@@ -24,6 +28,11 @@ pub fn open(
     on_close: Option<Box<dyn FnOnce() + Send>>,
     error_action: Option<Box<dyn FnOnce() + Send>>,
 ) {
+    if let Ok(mut guard) = WINDOW_PROXY.lock() {
+        if let Some(proxy) = guard.take() {
+            let _ = proxy.send_event(AppEvent::Kill);
+        }
+    }
     if let Err(e) = run_window(action_name, progress_rx, on_close, error_action) {
         eprintln!("Progress window error: {}", e);
     }
@@ -49,6 +58,9 @@ fn run_window(
     };
 
     let proxy = event_loop.create_proxy();
+    if let Ok(mut guard) = WINDOW_PROXY.lock() {
+        *guard = Some(proxy.clone());
+    }
     thread::spawn(move || {
         for update in progress_rx {
             let terminal = matches!(update, ProgressUpdate::Done { .. } | ProgressUpdate::Error { .. });
@@ -105,6 +117,9 @@ fn run_window(
                 }
                 *control_flow = ControlFlow::ExitWithCode(0);
             }
+            Event::UserEvent(AppEvent::Kill) => {
+                *control_flow = ControlFlow::ExitWithCode(0);
+            }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
@@ -117,6 +132,10 @@ fn run_window(
             _ => {}
         }
     });
+
+    if let Ok(mut guard) = WINDOW_PROXY.lock() {
+        *guard = None;
+    }
 
     Ok(())
 }
