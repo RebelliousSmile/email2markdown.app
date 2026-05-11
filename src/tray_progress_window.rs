@@ -33,8 +33,21 @@ pub fn open(
             let _ = proxy.send_event(AppEvent::Kill);
         }
     }
-    if let Err(e) = run_window(action_name, progress_rx, on_close, error_action) {
-        eprintln!("Progress window error: {}", e);
+    eprintln!("[diag] open() → calling run_window for '{}'", action_name);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_window(action_name, progress_rx, on_close, error_action)
+    }));
+    match result {
+        Ok(Ok(())) => eprintln!("[diag] run_window for '{}' completed OK", action_name),
+        Ok(Err(e)) => eprintln!("Progress window error: {}", e),
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("unknown panic payload");
+            eprintln!("[diag] run_window PANICKED for '{}': {}", action_name, msg);
+        }
     }
 }
 
@@ -44,6 +57,7 @@ fn run_window(
     on_close: Option<Box<dyn FnOnce() + Send>>,
     error_action: Option<Box<dyn FnOnce() + Send>>,
 ) -> anyhow::Result<()> {
+    eprintln!("[diag] run_window start for '{}'", action_name);
     let html_template = include_str!("../assets/progress_window.html");
     let html = html_template.replace("__ACTION_NAME__", action_name);
 
@@ -56,6 +70,7 @@ fn run_window(
         }
         builder.build()
     };
+    eprintln!("[diag] EventLoop created for '{}'", action_name);
 
     let proxy = event_loop.create_proxy();
     if let Ok(mut guard) = WINDOW_PROXY.lock() {
@@ -77,6 +92,7 @@ fn run_window(
         .build(&event_loop)
         .context("failed to create progress window")?;
     window.set_focus();
+    eprintln!("[diag] Window created for '{}'", action_name);
 
     let proxy_ipc = event_loop.create_proxy();
     let webview = WebViewBuilder::new(&window)
@@ -88,9 +104,11 @@ fn run_window(
         })
         .build()
         .context("failed to create progress webview")?;
+    eprintln!("[diag] WebView created for '{}'", action_name);
 
     let mut on_close = on_close;
     let mut error_action = error_action;
+    eprintln!("[diag] entering run_return for '{}'", action_name);
     event_loop.run_return(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
@@ -132,6 +150,7 @@ fn run_window(
             _ => {}
         }
     });
+    eprintln!("[diag] run_return exited for '{}'", action_name);
 
     Ok(())
 }

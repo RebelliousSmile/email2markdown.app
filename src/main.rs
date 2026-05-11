@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
-use email_to_markdown::config::{self, Config, SortConfig};
+use email_to_markdown::config::{self, Config, Settings, SortConfig};
 use email_to_markdown::email_export::{fix_html_bodies, ImapExporter};
 use email_to_markdown::fix_yaml;
 use email_to_markdown::sort_emails::{apply_report, review_report, EmailSorter, SortReport};
@@ -592,7 +592,8 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let stats = apply_report(&sort_report)?;
+            let settings = Settings::load(&config::settings_path()).unwrap_or_default();
+            let stats = apply_report(&sort_report, settings.local_folder())?;
             if verbose {
                 // per-email actions are printed inside apply_report
             }

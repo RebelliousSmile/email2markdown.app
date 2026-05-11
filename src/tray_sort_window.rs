@@ -18,6 +18,7 @@ use tao::{
 };
 use wry::WebViewBuilder;
 
+use crate::config::{settings_path, Settings};
 use crate::sort_emails::{apply_report, EmailSummary, SortReport};
 use crate::tray_actions::ActionResult;
 
@@ -177,7 +178,8 @@ fn handle_ipc_message(body: &str, report_path: &PathBuf, account: &str) -> anyho
         .with_context(|| format!("failed to write updated report to {}", report_path.display()))?;
 
     // Apply the decisions.
-    let stats = apply_report(&report).context("failed to apply sort report")?;
+    let settings = Settings::load(&settings_path()).unwrap_or_default();
+    let stats = apply_report(&report, settings.local_folder()).context("failed to apply sort report")?;
 
     Ok(ActionResult::Success(
         format!("Tri appliqué — {}", account),

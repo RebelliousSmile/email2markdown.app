@@ -1055,7 +1055,7 @@ fn rewrite_attachment_paths(
 }
 
 /// Apply the decisions from a `SortReport`: trash deletes, move summarize, count keeps.
-pub fn apply_report(report: &SortReport) -> anyhow::Result<ApplyStats> {
+pub fn apply_report(report: &SortReport, local_folder: &str) -> anyhow::Result<ApplyStats> {
     let mut deleted = 0usize;
     let mut moved = 0usize;
     let mut skipped = 0usize;
@@ -1124,15 +1124,17 @@ pub fn apply_report(report: &SortReport) -> anyhow::Result<ApplyStats> {
         .cloned()
         .unwrap_or_default();
 
+    let to_summarize_dir = base
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(local_folder)
+        .join("to-summarize");
+
     for email in &summarize_entries {
         let md_path = base.join(&email.file);
         if !md_path.exists() {
             continue;
         }
-        let to_summarize_dir = base
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("to-summarize");
         fs::create_dir_all(&to_summarize_dir)
             .context("failed to create to-summarize directory")?;
         let dest = to_summarize_dir.join(
