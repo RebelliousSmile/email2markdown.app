@@ -238,10 +238,7 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
             tray_actions::action_choose_export_dir(result_sender);
         }
         menu_ids::OPEN_CONFIG => {
-            let sender = result_sender.clone();
-            thread::spawn(move || {
-                crate::tray_config_window::open(sender);
-            });
+            crate::tray_config_window::open(result_sender.clone());
         }
         menu_ids::OPEN_DOCUMENTATION => {
             if let Err(e) = tray_actions::action_open_documentation() {

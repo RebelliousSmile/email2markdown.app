@@ -123,19 +123,12 @@ fn run_window(sender: Sender<ActionResult>) -> anyhow::Result<()> {
         .with_html(html)
         .with_ipc_handler(move |req: wry::http::Request<String>| {
             let body = req.body().clone();
-            match handle_ipc_message(&body) {
-                Ok(Some(result)) => {
-                    let _ = sender_ipc.send(result);
-                    should_exit_ipc.store(true, Ordering::Release);
-                }
-                Ok(None) => {
-                    // "open_raw" action — window stays open.
-                }
-                Err(e) => {
-                    let _ = sender_ipc
-                        .send(ActionResult::Error(format!("Erreur de sauvegarde : {}", e)));
-                    should_exit_ipc.store(true, Ordering::Release);
-                }
+            let (result, should_close) = handle_ipc_message(&body);
+            if let Some(r) = result {
+                let _ = sender_ipc.send(r);
+            }
+            if should_close {
+                should_exit_ipc.store(true, Ordering::Release);
             }
         })
         .build()
@@ -165,92 +158,118 @@ fn run_window(sender: Sender<ActionResult>) -> anyhow::Result<()> {
 
 /// Parse the IPC JSON and act on it.
 ///
-/// Returns `Ok(Some(result))` when the window should close (save completed),
-/// `Ok(None)` for actions that keep the window open (open_raw, save_account),
-/// and `Err` on I/O or parse failures.
-fn handle_ipc_message(body: &str) -> anyhow::Result<Option<ActionResult>> {
-    let msg: IpcMessage =
-        serde_json::from_str(body).context("failed to parse IPC message")?;
+/// Returns `(Option<ActionResult>, bool)` where the bool is `should_close`.
+/// - `save`: success → `(Some(Success), true)`; I/O error → `(Some(Error), true)`
+/// - `save_account`: success → `(None, false)`; I/O error → `(Some(Error), false)`
+/// - `open_raw`: `(None, false)`
+/// - unknown action: `(Some(Error), true)`
+fn handle_ipc_message(body: &str) -> (Option<ActionResult>, bool) {
+    let msg: IpcMessage = match serde_json::from_str(body) {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                Some(ActionResult::Error(format!("failed to parse IPC message: {}", e))),
+                true,
+            );
+        }
+    };
 
     match msg.action.as_str() {
         "save" => {
-            let raw_data = msg
-                .data
-                .ok_or_else(|| anyhow::anyhow!("save action missing data field"))?;
-            let data: SettingsData = serde_json::from_value(raw_data)
-                .context("failed to parse settings data")?;
+            let result = (|| -> anyhow::Result<ActionResult> {
+                let raw_data = msg
+                    .data
+                    .ok_or_else(|| anyhow::anyhow!("save action missing data field"))?;
+                let data: SettingsData = serde_json::from_value(raw_data)
+                    .context("failed to parse settings data")?;
 
-            // Preserve per-account overrides that are not exposed in the GUI.
-            let path = config::settings_path();
-            let mut settings = Settings::load(&path).unwrap_or_default();
-            settings.export_base_dir = data.export_base_dir;
-            settings.defaults = AccountBehavior {
-                folder_name: settings.defaults.folder_name,
-                quote_depth: data.defaults.quote_depth,
-                skip_existing: data.defaults.skip_existing,
-                collect_contacts: data.defaults.collect_contacts,
-                skip_signature_images: data.defaults.skip_signature_images,
-                delete_after_export: data.defaults.delete_after_export,
-                cleanup_empty_dirs: data.defaults.cleanup_empty_dirs,
-                organize_by_type: data.defaults.organize_by_type,
-                sort: settings.defaults.sort,
-            };
+                // Preserve per-account overrides that are not exposed in the GUI.
+                let path = config::settings_path();
+                let mut settings = Settings::load(&path).unwrap_or_default();
+                settings.export_base_dir = data.export_base_dir;
+                settings.defaults = AccountBehavior {
+                    folder_name: settings.defaults.folder_name,
+                    quote_depth: data.defaults.quote_depth,
+                    skip_existing: data.defaults.skip_existing,
+                    collect_contacts: data.defaults.collect_contacts,
+                    skip_signature_images: data.defaults.skip_signature_images,
+                    delete_after_export: data.defaults.delete_after_export,
+                    cleanup_empty_dirs: data.defaults.cleanup_empty_dirs,
+                    organize_by_type: data.defaults.organize_by_type,
+                    sort: settings.defaults.sort,
+                };
 
-            settings
-                .save(&path)
-                .with_context(|| format!("failed to save settings to {}", path.display()))?;
+                settings
+                    .save(&path)
+                    .with_context(|| format!("failed to save settings to {}", path.display()))?;
 
-            Ok(Some(ActionResult::Success(
-                "Param\u{00e8}tres".to_string(),
-                "Param\u{00e8}tres sauvegard\u{00e9}s".to_string(),
-            )))
+                Ok(ActionResult::Success(
+                    "Param\u{00e8}tres".to_string(),
+                    "Param\u{00e8}tres sauvegard\u{00e9}s".to_string(),
+                ))
+            })();
+            match result {
+                Ok(r) => (Some(r), true),
+                Err(e) => (Some(ActionResult::Error(format!("Erreur de sauvegarde : {}", e))), true),
+            }
         }
         "save_account" => {
-            let raw_data = msg
-                .data
-                .ok_or_else(|| anyhow::anyhow!("save_account action missing data field"))?;
-            let data: AccountData = serde_json::from_value(raw_data)
-                .context("failed to parse account data")?;
+            let result = (|| -> anyhow::Result<()> {
+                let raw_data = msg
+                    .data
+                    .ok_or_else(|| anyhow::anyhow!("save_account action missing data field"))?;
+                let data: AccountData = serde_json::from_value(raw_data)
+                    .context("failed to parse account data")?;
 
-            let accounts_path = config::accounts_yaml_path();
-            let mut accounts =
-                config::load_raw_accounts(&accounts_path).unwrap_or_default();
+                let accounts_path = config::accounts_yaml_path();
+                let mut accounts =
+                    config::load_raw_accounts(&accounts_path).unwrap_or_default();
 
-            // Find and update the matching account by name (case-insensitive).
-            let mut found = false;
-            for acct in accounts.iter_mut() {
-                if acct.name.eq_ignore_ascii_case(&data.account_name) {
-                    acct.server = data.server.clone();
-                    acct.port = data.port;
-                    acct.username = data.username.clone();
-                    acct.ignored_folders = data.ignored_folders.clone();
-                    found = true;
-                    break;
+                // Find and update the matching account by name (case-insensitive).
+                let mut found = false;
+                for acct in accounts.iter_mut() {
+                    if acct.name.eq_ignore_ascii_case(&data.account_name) {
+                        acct.server = data.server.clone();
+                        acct.port = data.port;
+                        acct.username = data.username.clone();
+                        acct.ignored_folders = data.ignored_folders.clone();
+                        found = true;
+                        break;
+                    }
                 }
-            }
-            if !found {
-                accounts.push(RawAccount {
-                    name: data.account_name,
-                    server: data.server,
-                    port: data.port,
-                    username: data.username,
-                    ignored_folders: data.ignored_folders,
-                });
-            }
+                if !found {
+                    accounts.push(RawAccount {
+                        name: data.account_name,
+                        server: data.server,
+                        port: data.port,
+                        username: data.username,
+                        ignored_folders: data.ignored_folders,
+                    });
+                }
 
-            config::save_accounts(&accounts, &accounts_path)
-                .with_context(|| {
-                    format!("failed to save accounts to {}", accounts_path.display())
-                })?;
+                config::save_accounts(&accounts, &accounts_path)
+                    .with_context(|| {
+                        format!("failed to save accounts to {}", accounts_path.display())
+                    })?;
 
-            // Window stays open — the JS side handles the UI transition.
-            Ok(None)
+                Ok(())
+            })();
+            match result {
+                // Window stays open — the JS side handles the UI transition.
+                Ok(()) => (None, false),
+                // I/O error — send notification but keep window open so user can retry.
+                Err(e) => (Some(ActionResult::Error(format!("Erreur de sauvegarde : {}", e))), false),
+            }
         }
         "open_raw" => {
-            action_open_config()
-                .context("failed to open settings file in editor")?;
-            Ok(None)
+            if let Err(e) = action_open_config().context("failed to open settings file in editor") {
+                return (Some(ActionResult::Error(format!("Erreur : {}", e))), false);
+            }
+            (None, false)
         }
-        other => Err(anyhow::anyhow!("unknown IPC action '{}'", other)),
+        other => (
+            Some(ActionResult::Error(format!("unknown IPC action '{}'", other))),
+            true,
+        ),
     }
 }

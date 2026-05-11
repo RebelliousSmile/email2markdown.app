@@ -1,4 +1,4 @@
-use email_to_markdown::config::{SortConfig, Config, Account, Settings, AccountBehavior};
+use email_to_markdown::config::{SortConfig, Config, Account, Settings, AccountBehavior, RawAccount, load_raw_accounts, save_accounts};
 use email_to_markdown::network::{NetworkConfig, ProgressIndicator};  // [3][4]
 use email_to_markdown::utils::*;
 use std::path::PathBuf;
@@ -200,6 +200,91 @@ mod config_tests {
     fn test_is_whitelisted_empty() {
         let config = SortConfig::default();
         assert!(!config.is_whitelisted("anyone@example.com"));
+    }
+
+    #[test]
+    fn test_load_raw_accounts_missing_file() {
+        let temp = TempDir::new().expect("create tempdir");
+        let path = temp.path().join("nonexistent_accounts.yaml");
+        let result = load_raw_accounts(&path).expect("load_raw_accounts on missing file");
+        assert!(result.is_empty(), "expected empty vec for missing file, got {:?}", result);
+    }
+
+    #[test]
+    fn test_save_and_load_raw_accounts_round_trip() {
+        let temp = TempDir::new().expect("create tempdir");
+        let path = temp.path().join("accounts.yaml");
+
+        let accounts = vec![
+            RawAccount {
+                name: "WorkAccount".to_string(),
+                server: "imap.work.com".to_string(),
+                port: 993,
+                username: "user@work.com".to_string(),
+                ignored_folders: vec!["Spam".to_string(), "Trash".to_string()],
+            },
+            RawAccount {
+                name: "PersonalAccount".to_string(),
+                server: "imap.personal.com".to_string(),
+                port: 993,
+                username: "me@personal.com".to_string(),
+                ignored_folders: vec![],
+            },
+        ];
+
+        save_accounts(&accounts, &path).expect("save_accounts");
+
+        let loaded = load_raw_accounts(&path).expect("load_raw_accounts");
+        assert_eq!(loaded.len(), 2, "expected 2 accounts, got {}", loaded.len());
+
+        assert_eq!(loaded[0].name, "WorkAccount");
+        assert_eq!(loaded[0].server, "imap.work.com");
+        assert_eq!(loaded[0].port, 993);
+        assert_eq!(loaded[0].username, "user@work.com");
+        assert_eq!(loaded[0].ignored_folders, vec!["Spam", "Trash"]);
+
+        assert_eq!(loaded[1].name, "PersonalAccount");
+        assert_eq!(loaded[1].server, "imap.personal.com");
+        assert_eq!(loaded[1].username, "me@personal.com");
+        assert!(loaded[1].ignored_folders.is_empty());
+    }
+
+    #[test]
+    fn test_save_accounts_preserves_order() {
+        let temp = TempDir::new().expect("create tempdir");
+        let path = temp.path().join("accounts.yaml");
+
+        let accounts = vec![
+            RawAccount {
+                name: "AccountA".to_string(),
+                server: "imap.a.com".to_string(),
+                port: 993,
+                username: "a@a.com".to_string(),
+                ignored_folders: vec![],
+            },
+            RawAccount {
+                name: "AccountB".to_string(),
+                server: "imap.b.com".to_string(),
+                port: 993,
+                username: "b@b.com".to_string(),
+                ignored_folders: vec![],
+            },
+            RawAccount {
+                name: "AccountC".to_string(),
+                server: "imap.c.com".to_string(),
+                port: 993,
+                username: "c@c.com".to_string(),
+                ignored_folders: vec![],
+            },
+        ];
+
+        save_accounts(&accounts, &path).expect("save_accounts");
+
+        let loaded = load_raw_accounts(&path).expect("load_raw_accounts");
+        assert_eq!(loaded.len(), 3, "expected 3 accounts");
+        assert_eq!(loaded[0].name, "AccountA");
+        assert_eq!(loaded[1].name, "AccountB");
+        assert_eq!(loaded[2].name, "AccountC");
     }
 
     #[test]

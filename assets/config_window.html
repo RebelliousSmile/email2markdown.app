@@ -640,15 +640,18 @@
       }
     };
 
+    this.disabled = true;
     if (window.ipc && typeof window.ipc.postMessage === 'function') {
       window.ipc.postMessage(JSON.stringify(payload));
     }
 
     var savedMsg = document.getElementById('acct-saved-msg');
+    var saveBtn = this;
     savedMsg.style.display = 'inline';
 
     setTimeout(function () {
       savedMsg.style.display = 'none';
+      saveBtn.disabled = false;
       document.getElementById('account-detail-view').style.display = 'none';
       document.getElementById('account-list-view').style.display = '';
       currentAccountIdx = -1;
