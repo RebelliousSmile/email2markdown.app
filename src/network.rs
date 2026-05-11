@@ -74,6 +74,7 @@ pub struct ProgressIndicator {
     current: usize,
     label: String,
     show_percentage: bool,
+    on_progress: Option<Box<dyn Fn(usize, usize, &str) + Send>>,
 }
 
 impl ProgressIndicator {
@@ -83,19 +84,31 @@ impl ProgressIndicator {
             current: 0,
             label: label.to_string(),
             show_percentage: total > 0,
+            on_progress: None,
         }
+    }
+
+    pub fn with_callback(mut self, cb: Box<dyn Fn(usize, usize, &str) + Send>) -> Self {
+        self.on_progress = Some(cb);
+        self
     }
 
     /// Update progress and print status
     pub fn update(&mut self, current: usize) {
         self.current = current;
         self.print();
+        if let Some(cb) = &self.on_progress {
+            cb(self.current, self.total, &self.label);
+        }
     }
 
     /// Increment by one
     pub fn inc(&mut self) {
         self.current += 1;
         self.print();
+        if let Some(cb) = &self.on_progress {
+            cb(self.current, self.total, &self.label);
+        }
     }
 
     /// Print current progress

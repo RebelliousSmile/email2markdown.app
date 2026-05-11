@@ -81,24 +81,14 @@ pub fn run_tray() -> Result<()> {
                             Err(e) => eprintln!("Failed to rebuild menu: {}", e),
                         }
                     }
-                    show_notification(&result);
                 }
                 crate::tray_actions::ActionResult::SortCompleted { report_path, account } => {
-                    let total = count_report_emails(report_path);
-                    if total == 0 {
-                        let nothing = crate::tray_actions::ActionResult::Success(
-                            "Tri terminé".to_string(),
-                            "Rien à réviser".to_string(),
-                        );
-                        show_notification(&nothing);
-                    } else {
-                        let sender = result_sender.clone();
-                        let path = report_path.clone();
-                        let account = account.clone();
-                        thread::spawn(move || {
-                            crate::tray_sort_window::open(path, account, sender);
-                        });
-                    }
+                    let sender = result_sender.clone();
+                    let path = report_path.clone();
+                    let account = account.clone();
+                    thread::spawn(move || {
+                        crate::tray_sort_window::open(path, account, sender);
+                    });
                 }
                 _ => {
                     show_notification(&result);
@@ -354,17 +344,6 @@ fn create_default_icon() -> Result<tray_icon::Icon> {
     }
 
     tray_icon::Icon::from_rgba(rgba, size, size).context("Failed to create default icon")
-}
-
-/// Count the total emails across all categories in a sort report.
-fn count_report_emails(report_path: &std::path::Path) -> usize {
-    let Ok(json) = std::fs::read_to_string(report_path) else {
-        return 0;
-    };
-    let Ok(report) = serde_json::from_str::<crate::sort_emails::SortReport>(&json) else {
-        return 0;
-    };
-    report.categories.values().map(|v| v.len()).sum()
 }
 
 /// Show a notification to the user (spawns a thread to avoid blocking the event loop).

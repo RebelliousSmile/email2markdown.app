@@ -362,7 +362,7 @@ fn main() -> Result<()> {
 
                 match exporter.connect() {
                     Ok(_) => {
-                        match exporter.export_account() {
+                        match exporter.export_account(None) {
                             Ok(results) => {
                                 let total_exported: usize = results.values().map(|s| s.exported).sum();
                                 let total_skipped: usize = results.values().map(|s| s.skipped).sum();
@@ -420,12 +420,12 @@ fn main() -> Result<()> {
 
             if html_bodies {
                 println!("{}Converting HTML bodies in: {}", if is_dry_run { "[dry-run] " } else { "" }, resolved_dir.display());
-                let stats = fix_html_bodies(&resolved_dir, is_dry_run)
+                let stats = fix_html_bodies(&resolved_dir, is_dry_run, None)
                     .context("failed to fix html bodies")?;
                 println!("Fixed: {} | Skipped: {} | Errors: {}", stats.fixed, stats.skipped, stats.errors);
             } else {
                 println!("Scanning for malformed email files in: {}", resolved_dir.display());
-                let stats = fix_yaml::scan_and_fix_directory(&resolved_dir, is_dry_run)?;
+                let stats = fix_yaml::scan_and_fix_directory(&resolved_dir, is_dry_run, None)?;
                 fix_yaml::print_summary(&stats, is_dry_run);
             }
         }
@@ -521,7 +521,7 @@ fn main() -> Result<()> {
                 println!("DRY RUN MODE: Analyzing emails without creating reports");
             }
 
-            sorter.sort_emails()?;
+            sorter.sort_emails(None)?;
 
             let sort_report = sorter.generate_report();
 

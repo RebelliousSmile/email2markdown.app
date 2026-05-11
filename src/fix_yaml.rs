@@ -197,7 +197,11 @@ fn create_simple_frontmatter(content: &str) -> serde_yaml::Value {
 }
 
 /// Scan and fix directory for malformed email files.
-pub fn scan_and_fix_directory(directory: &Path, dry_run: bool) -> Result<FixStats> {
+pub fn scan_and_fix_directory(
+    directory: &Path,
+    dry_run: bool,
+    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+) -> Result<FixStats> {
     let mut stats = FixStats::default();
 
     let entries: Vec<PathBuf> = if directory.is_file() {
@@ -214,7 +218,12 @@ pub fn scan_and_fix_directory(directory: &Path, dry_run: bool) -> Result<FixStat
             .collect()
     };
 
-    for file_path in entries {
+    let total = entries.len();
+
+    for (i, file_path) in entries.into_iter().enumerate() {
+        if let Some(cb) = on_progress {
+            cb(i + 1, total, "Fix YAML");
+        }
         stats.total_scanned += 1;
 
         match fix_email_file(&file_path, dry_run) {
