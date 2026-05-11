@@ -79,6 +79,7 @@ fn run_window(report_path: PathBuf, account: String, sender: Sender<ActionResult
         .with_inner_size(LogicalSize::new(900.0f64, 620.0f64))
         .build(&event_loop)
         .context("failed to create review window")?;
+    window.set_focus();
 
     let _webview = WebViewBuilder::new(&window)
         .with_html(html)
