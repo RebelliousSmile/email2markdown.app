@@ -13,12 +13,18 @@ use wry::WebViewBuilder;
 
 use crate::progress::ProgressUpdate;
 
+enum AppEvent {
+    Progress(ProgressUpdate),
+    ActionRequested,
+}
+
 pub fn open(
     action_name: &str,
     progress_rx: Receiver<ProgressUpdate>,
     on_close: Option<Box<dyn FnOnce() + Send>>,
+    error_action: Option<Box<dyn FnOnce() + Send>>,
 ) {
-    if let Err(e) = run_window(action_name, progress_rx, on_close) {
+    if let Err(e) = run_window(action_name, progress_rx, on_close, error_action) {
         eprintln!("Progress window error: {}", e);
     }
 }
@@ -27,12 +33,13 @@ fn run_window(
     action_name: &str,
     progress_rx: Receiver<ProgressUpdate>,
     on_close: Option<Box<dyn FnOnce() + Send>>,
+    error_action: Option<Box<dyn FnOnce() + Send>>,
 ) -> anyhow::Result<()> {
     let html_template = include_str!("../assets/progress_window.html");
     let html = html_template.replace("__ACTION_NAME__", action_name);
 
     let mut event_loop = {
-        let mut builder = EventLoopBuilder::<ProgressUpdate>::with_user_event();
+        let mut builder = EventLoopBuilder::<AppEvent>::with_user_event();
         #[cfg(target_os = "windows")]
         {
             use tao::platform::windows::EventLoopBuilderExtWindows;
@@ -45,7 +52,7 @@ fn run_window(
     thread::spawn(move || {
         for update in progress_rx {
             let terminal = matches!(update, ProgressUpdate::Done { .. } | ProgressUpdate::Error { .. });
-            let _ = proxy.send_event(update);
+            let _ = proxy.send_event(AppEvent::Progress(update));
             if terminal {
                 break;
             }
@@ -59,16 +66,23 @@ fn run_window(
         .context("failed to create progress window")?;
     window.set_focus();
 
+    let proxy_ipc = event_loop.create_proxy();
     let webview = WebViewBuilder::new(&window)
         .with_html(html)
+        .with_ipc_handler(move |msg| {
+            if msg.body() == "action" {
+                let _ = proxy_ipc.send_event(AppEvent::ActionRequested);
+            }
+        })
         .build()
         .context("failed to create progress webview")?;
 
     let mut on_close = on_close;
+    let mut error_action = error_action;
     event_loop.run_return(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(update) => {
+            Event::UserEvent(AppEvent::Progress(update)) => {
                 let js = match &update {
                     ProgressUpdate::Step { current, total, message } => {
                         format!("step({},{},{:?})", current, total, message)
@@ -79,11 +93,17 @@ fn run_window(
                     ProgressUpdate::Done { summary } => {
                         format!("finish({:?})", summary)
                     }
-                    ProgressUpdate::Error { message } => {
-                        format!("error({:?})", message)
+                    ProgressUpdate::Error { message, action_label } => {
+                        format!("error({:?}, {:?})", message, action_label.as_deref().unwrap_or(""))
                     }
                 };
                 let _ = webview.evaluate_script(&js);
+            }
+            Event::UserEvent(AppEvent::ActionRequested) => {
+                if let Some(f) = error_action.take() {
+                    f();
+                }
+                *control_flow = ControlFlow::ExitWithCode(0);
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,

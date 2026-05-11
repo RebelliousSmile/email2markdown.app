@@ -33,6 +33,19 @@ pub enum ActionResult {
     },
 }
 
+fn classify_error(e: &anyhow::Error) -> Option<String> {
+    let msg = format!("{:#}", e).to_lowercase();
+    if msg.contains("no password found")
+        || msg.contains("not configured")
+        || msg.contains("failed to load configuration")
+        || (msg.contains("account") && msg.contains("not found"))
+    {
+        Some("Ouvrir la configuration".to_string())
+    } else {
+        None
+    }
+}
+
 /// Export emails for a specific account.
 ///
 /// Runs in a separate thread to avoid blocking the UI.
@@ -40,7 +53,12 @@ pub fn action_export(account_name: String, _result_sender: Sender<ActionResult>)
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
 
     thread::spawn(move || {
-        crate::tray_progress_window::open("Export", progress_rx, None);
+        crate::tray_progress_window::open(
+            "Export",
+            progress_rx,
+            None,
+            Some(Box::new(|| { let _ = action_open_config(); })),
+        );
     });
 
     thread::spawn(move || {
@@ -59,6 +77,7 @@ pub fn action_export(account_name: String, _result_sender: Sender<ActionResult>)
             Err(e) => {
                 let _ = progress_tx.send(ProgressUpdate::Error {
                     message: format!("Export error: {}", e),
+                    action_label: classify_error(&e),
                 });
             }
         }
@@ -119,7 +138,12 @@ pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
     }) as Box<dyn FnOnce() + Send>);
 
     thread::spawn(move || {
-        crate::tray_progress_window::open("Sort", progress_rx, on_close);
+        crate::tray_progress_window::open(
+            "Sort",
+            progress_rx,
+            on_close,
+            Some(Box::new(|| { let _ = action_open_config(); })),
+        );
     });
 
     thread::spawn(move || {
@@ -150,6 +174,7 @@ pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
             Err(e) => {
                 let _ = progress_tx.send(ProgressUpdate::Error {
                     message: format!("Sort error: {}", e),
+                    action_label: classify_error(&e),
                 });
             }
         }
@@ -218,7 +243,12 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
     }) as Box<dyn FnOnce() + Send>);
 
     thread::spawn(move || {
-        crate::tray_progress_window::open("Import Thunderbird", progress_rx, on_close);
+        crate::tray_progress_window::open(
+            "Import Thunderbird",
+            progress_rx,
+            on_close,
+            Some(Box::new(|| { let _ = action_open_config(); })),
+        );
     });
 
     thread::spawn(move || {
@@ -233,6 +263,7 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
             Err(e) => {
                 let _ = progress_tx.send(ProgressUpdate::Error {
                     message: format!("Import error: {}", e),
+                    action_label: classify_error(&e),
                 });
             }
         }
@@ -385,7 +416,12 @@ pub fn action_fix_yaml(account_name: String, _result_sender: Sender<ActionResult
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
 
     thread::spawn(move || {
-        crate::tray_progress_window::open("Fix YAML", progress_rx, None);
+        crate::tray_progress_window::open(
+            "Fix YAML",
+            progress_rx,
+            None,
+            Some(Box::new(|| { let _ = action_open_config(); })),
+        );
     });
 
     thread::spawn(move || {
@@ -404,6 +440,7 @@ pub fn action_fix_yaml(account_name: String, _result_sender: Sender<ActionResult
             Err(e) => {
                 let _ = progress_tx.send(ProgressUpdate::Error {
                     message: format!("Fix YAML error: {}", e),
+                    action_label: classify_error(&e),
                 });
             }
         }
@@ -438,7 +475,12 @@ pub fn action_fix_html(account_name: String, _result_sender: Sender<ActionResult
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
 
     thread::spawn(move || {
-        crate::tray_progress_window::open("Fix HTML", progress_rx, None);
+        crate::tray_progress_window::open(
+            "Fix HTML",
+            progress_rx,
+            None,
+            Some(Box::new(|| { let _ = action_open_config(); })),
+        );
     });
 
     thread::spawn(move || {
@@ -457,6 +499,7 @@ pub fn action_fix_html(account_name: String, _result_sender: Sender<ActionResult
             Err(e) => {
                 let _ = progress_tx.send(ProgressUpdate::Error {
                     message: format!("Fix HTML error: {}", e),
+                    action_label: classify_error(&e),
                 });
             }
         }

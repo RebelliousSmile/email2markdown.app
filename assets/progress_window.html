@@ -87,6 +87,7 @@
   <p id="status">Démarrage…</p>
   <div id="bar"><div id="fill"></div></div>
   <p id="summary"></p>
+  <button id="action-btn" hidden style="background:#1e88e5;color:#fff;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-size:14px;margin-right:8px;"></button>
   <button id="close" onclick="window.close()">Fermer</button>
 
 <script>
@@ -111,7 +112,7 @@
     document.getElementById("close").style.display = "inline-block";
   }
 
-  function error(message) {
+  function error(message, actionLabel) {
     document.getElementById("bar").style.display = "none";
     document.getElementById("status").style.display = "none";
     var el = document.getElementById("summary");
@@ -119,6 +120,12 @@
     el.classList.add("error-text");
     el.style.display = "block";
     document.getElementById("close").style.display = "inline-block";
+    var actionBtn = document.getElementById("action-btn");
+    if (actionLabel) {
+      actionBtn.textContent = actionLabel;
+      actionBtn.hidden = false;
+      actionBtn.onclick = function() { window.ipc.postMessage("action"); };
+    }
   }
 </script>
 </body>

@@ -3,5 +3,5 @@ pub enum ProgressUpdate {
     Step { message: String, current: usize, total: usize },
     Indeterminate { message: String },
     Done { summary: String },
-    Error { message: String },
+    Error { message: String, action_label: Option<String> },
 }
