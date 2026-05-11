@@ -115,7 +115,7 @@ impl Settings {
 
 /// A single account entry as stored in accounts.yaml.
 /// Contains only connection details; behaviour comes from settings.yaml.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawAccount {
     pub name: String,
     pub server: String,
@@ -125,9 +125,35 @@ pub struct RawAccount {
     pub ignored_folders: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct RawAccountsFile {
     accounts: Vec<RawAccount>,
+}
+
+/// Load the raw account list from `path` without merging settings.
+///
+/// Returns an empty vec if the file does not exist.
+pub fn load_raw_accounts(path: &Path) -> Result<Vec<RawAccount>, ConfigError> {
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let content = fs::read_to_string(path)?;
+    let raw_file: RawAccountsFile = serde_yaml::from_str(&content)?;
+    Ok(raw_file.accounts)
+}
+
+/// Persist a slice of `RawAccount` values to `path` as `accounts.yaml`.
+///
+/// Creates parent directories if needed — same pattern as `Settings::save`.
+pub fn save_accounts(accounts: &[RawAccount], path: &Path) -> Result<(), ConfigError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let raw_file = RawAccountsFile {
+        accounts: accounts.to_vec(),
+    };
+    fs::write(path, serde_yaml::to_string(&raw_file)?)?;
+    Ok(())
 }
 
 /// Merge a raw account with the app settings to produce a fully-resolved Account.

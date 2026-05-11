@@ -1,4 +1,4 @@
-//! WebView settings window for editing settings.yaml.
+//! WebView settings window for editing settings.yaml and accounts.yaml.
 //!
 //! Opens a wry WebView in a dedicated thread so the user can view and
 //! modify application settings without leaving the tray.
@@ -17,7 +17,7 @@ use tao::{
 };
 use wry::WebViewBuilder;
 
-use crate::config::{self, AccountBehavior, Settings};
+use crate::config::{self, AccountBehavior, RawAccount, Settings};
 use crate::tray_actions::{action_open_config, ActionResult};
 
 /// Guard that prevents duplicate config windows from opening simultaneously.
@@ -27,7 +27,7 @@ static CONFIG_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 #[derive(serde::Deserialize)]
 struct IpcMessage {
     action: String,
-    data: Option<SettingsData>,
+    data: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -45,6 +45,17 @@ struct DefaultsData {
     delete_after_export: Option<bool>,
     cleanup_empty_dirs: Option<bool>,
     organize_by_type: Option<bool>,
+}
+
+/// Account data sent from the "save_account" IPC action.
+#[derive(serde::Deserialize)]
+struct AccountData {
+    account_name: String,
+    server: String,
+    port: u16,
+    username: String,
+    #[serde(default)]
+    ignored_folders: Vec<String>,
 }
 
 /// Open the settings window.
@@ -70,11 +81,20 @@ fn run_window(sender: Sender<ActionResult>) -> anyhow::Result<()> {
     let settings_path = config::settings_path();
     let settings = Settings::load(&settings_path).unwrap_or_default();
 
-    // Inject settings JSON into the HTML template.
+    // Load current raw accounts (falls back to empty list if file is absent).
+    let accounts_path = config::accounts_yaml_path();
+    let raw_accounts =
+        config::load_raw_accounts(&accounts_path).unwrap_or_default();
+
+    // Inject settings and accounts JSON into the HTML template.
     let html_template = include_str!("../assets/config_window.html");
     let settings_json =
         serde_json::to_string(&settings).context("failed to serialize settings")?;
-    let html = html_template.replace("__SETTINGS_JSON__", &settings_json);
+    let accounts_json =
+        serde_json::to_string(&raw_accounts).context("failed to serialize accounts")?;
+    let html = html_template
+        .replace("__SETTINGS_JSON__", &settings_json)
+        .replace("__ACCOUNTS_JSON__", &accounts_json);
 
     // Shared flag: IPC handler signals "save succeeded" → window should close.
     let should_exit = Arc::new(AtomicBool::new(false));
@@ -146,7 +166,7 @@ fn run_window(sender: Sender<ActionResult>) -> anyhow::Result<()> {
 /// Parse the IPC JSON and act on it.
 ///
 /// Returns `Ok(Some(result))` when the window should close (save completed),
-/// `Ok(None)` for actions that keep the window open (open_raw),
+/// `Ok(None)` for actions that keep the window open (open_raw, save_account),
 /// and `Err` on I/O or parse failures.
 fn handle_ipc_message(body: &str) -> anyhow::Result<Option<ActionResult>> {
     let msg: IpcMessage =
@@ -154,9 +174,11 @@ fn handle_ipc_message(body: &str) -> anyhow::Result<Option<ActionResult>> {
 
     match msg.action.as_str() {
         "save" => {
-            let data = msg
+            let raw_data = msg
                 .data
                 .ok_or_else(|| anyhow::anyhow!("save action missing data field"))?;
+            let data: SettingsData = serde_json::from_value(raw_data)
+                .context("failed to parse settings data")?;
 
             // Preserve per-account overrides that are not exposed in the GUI.
             let path = config::settings_path();
@@ -182,6 +204,47 @@ fn handle_ipc_message(body: &str) -> anyhow::Result<Option<ActionResult>> {
                 "Param\u{00e8}tres".to_string(),
                 "Param\u{00e8}tres sauvegard\u{00e9}s".to_string(),
             )))
+        }
+        "save_account" => {
+            let raw_data = msg
+                .data
+                .ok_or_else(|| anyhow::anyhow!("save_account action missing data field"))?;
+            let data: AccountData = serde_json::from_value(raw_data)
+                .context("failed to parse account data")?;
+
+            let accounts_path = config::accounts_yaml_path();
+            let mut accounts =
+                config::load_raw_accounts(&accounts_path).unwrap_or_default();
+
+            // Find and update the matching account by name (case-insensitive).
+            let mut found = false;
+            for acct in accounts.iter_mut() {
+                if acct.name.eq_ignore_ascii_case(&data.account_name) {
+                    acct.server = data.server.clone();
+                    acct.port = data.port;
+                    acct.username = data.username.clone();
+                    acct.ignored_folders = data.ignored_folders.clone();
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                accounts.push(RawAccount {
+                    name: data.account_name,
+                    server: data.server,
+                    port: data.port,
+                    username: data.username,
+                    ignored_folders: data.ignored_folders,
+                });
+            }
+
+            config::save_accounts(&accounts, &accounts_path)
+                .with_context(|| {
+                    format!("failed to save accounts to {}", accounts_path.display())
+                })?;
+
+            // Window stays open — the JS side handles the UI transition.
+            Ok(None)
         }
         "open_raw" => {
             action_open_config()
