@@ -509,7 +509,10 @@ impl EmailSorter {
     }
 
     /// Sort all emails in the directory.
-    pub fn sort_emails(&mut self) -> Result<()> {
+    pub fn sort_emails(
+        &mut self,
+        on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+    ) -> Result<()> {
         println!("Sorting emails in: {}", self.base_directory.display());
 
         let entries: Vec<PathBuf> = WalkDir::new(&self.base_directory)
@@ -522,11 +525,16 @@ impl EmailSorter {
             .map(|e| e.path().to_path_buf())
             .collect();
 
+        let total = entries.len();
+
         // Pass 1: collect emails and count senders
         let mut collected: Vec<(EmailData, String)> = Vec::new();
         let mut sender_counts: HashMap<String, usize> = HashMap::new();
 
-        for file_path in &entries {
+        for (i, file_path) in entries.iter().enumerate() {
+            if let Some(cb) = on_progress {
+                cb(i + 1, total, "Tri");
+            }
             if let Some((email_data, body)) = self.analyze_email_file(file_path)? {
                 let sender_key = email_data.sender.to_lowercase();
                 *sender_counts.entry(sender_key).or_insert(0) += 1;

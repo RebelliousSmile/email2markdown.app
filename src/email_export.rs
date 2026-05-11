@@ -396,16 +396,27 @@ pub struct FixHtmlStats {
 /// and convert them to Markdown in place.
 ///
 /// When `dry_run` is true the files are detected but not modified.
-pub fn fix_html_bodies(directory: &Path, dry_run: bool) -> anyhow::Result<FixHtmlStats> {
+pub fn fix_html_bodies(
+    directory: &Path,
+    dry_run: bool,
+    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+) -> anyhow::Result<FixHtmlStats> {
     let mut stats = FixHtmlStats { fixed: 0, skipped: 0, errors: 0 };
 
-    for entry in WalkDir::new(directory)
+    let files: Vec<std::path::PathBuf> = WalkDir::new(directory)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
-    {
-        let path = entry.path();
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    let total = files.len();
+
+    for (i, path) in files.iter().enumerate() {
+        if let Some(cb) = on_progress {
+            cb(i + 1, total, "Fix HTML");
+        }
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => { stats.errors += 1; continue; }
@@ -864,7 +875,10 @@ impl ImapExporter {
     }
 
     /// Export all folders for the account.
-    pub fn export_account(&mut self) -> Result<HashMap<String, ExportStats>> {
+    pub fn export_account(
+        &mut self,
+        on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+    ) -> Result<HashMap<String, ExportStats>> {
         // Run the existing body in an IIFE so cleanup can run on every exit path.
         let run_result: Result<HashMap<String, ExportStats>> = (|| {
             let mut results = HashMap::new();
@@ -875,12 +889,19 @@ impl ImapExporter {
             };
 
             let folders = self.list_folders()?;
+            let total_folders = folders.len();
+            let mut folder_index = 0usize;
 
             for folder in folders {
                 // Skip ignored folders (matched against the decoded display name)
                 if self.account.ignored_folders.contains(&folder.display) {
                     println!("Ignored folder: {}", folder.display);
                     continue;
+                }
+
+                folder_index += 1;
+                if let Some(cb) = on_progress {
+                    cb(folder_index, total_folders, &folder.display);
                 }
 
                 println!("Exporting {} ...", folder.display);

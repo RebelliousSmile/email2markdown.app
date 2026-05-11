@@ -4,11 +4,13 @@
 //! interact with the system tray menu.
 
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use anyhow::{Context, Result};
 use rfd;
+
+use crate::progress::ProgressUpdate;
 
 use crate::config::{self, Config, SortConfig};
 use crate::email_export::{self, ImapExporter};
@@ -34,18 +36,39 @@ pub enum ActionResult {
 /// Export emails for a specific account.
 ///
 /// Runs in a separate thread to avoid blocking the UI.
-pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) {
+pub fn action_export(account_name: String, _result_sender: Sender<ActionResult>) {
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
+
     thread::spawn(move || {
-        let result = run_export(&account_name);
-        let action_result = match result {
-            Ok(message) => ActionResult::Success("Export terminé".to_string(), message),
-            Err(e) => ActionResult::Error(format!("Export error: {}", e)),
+        crate::tray_progress_window::open("Export", progress_rx, None);
+    });
+
+    thread::spawn(move || {
+        let progress_tx_clone = progress_tx.clone();
+        let on_progress = move |current: usize, total: usize, label: &str| {
+            let _ = progress_tx_clone.send(ProgressUpdate::Step {
+                current,
+                total,
+                message: label.to_string(),
+            });
         };
-        let _ = result_sender.send(action_result);
+        match run_export(&account_name, Some(&on_progress)) {
+            Ok(summary) => {
+                let _ = progress_tx.send(ProgressUpdate::Done { summary });
+            }
+            Err(e) => {
+                let _ = progress_tx.send(ProgressUpdate::Error {
+                    message: format!("Export error: {}", e),
+                });
+            }
+        }
     });
 }
 
-fn run_export(account_name: &str) -> Result<String> {
+fn run_export(
+    account_name: &str,
+    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+) -> Result<String> {
     dotenv::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
@@ -67,7 +90,7 @@ fn run_export(account_name: &str) -> Result<String> {
     exporter.connect().context("Failed to connect to IMAP server")?;
 
     let results = exporter
-        .export_account()
+        .export_account(on_progress)
         .context("Export failed")?;
 
     exporter.disconnect().ok();
@@ -77,8 +100,8 @@ fn run_export(account_name: &str) -> Result<String> {
     let total_errors: usize = results.values().map(|s| s.errors).sum();
 
     Ok(format!(
-        "{}: {} exported, {} skipped, {} errors",
-        account_name, total_exported, total_skipped, total_errors
+        "Export terminé — {} exportés, {} ignorés, {} erreurs",
+        total_exported, total_skipped, total_errors
     ))
 }
 
@@ -86,20 +109,57 @@ fn run_export(account_name: &str) -> Result<String> {
 ///
 /// Runs in a separate thread to avoid blocking the UI.
 pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
+    let (result_tx, result_rx) = mpsc::sync_channel::<ActionResult>(1);
+
+    let on_close = Some(Box::new(move || {
+        if let Ok(r) = result_rx.try_recv() {
+            let _ = result_sender.send(r);
+        }
+    }) as Box<dyn FnOnce() + Send>);
+
     thread::spawn(move || {
-        let result = run_sort(&account_name);
-        let action_result = match result {
-            Ok(report_path) => ActionResult::SortCompleted {
-                account: account_name.clone(),
-                report_path,
-            },
-            Err(e) => ActionResult::Error(format!("Sort error: {}", e)),
+        crate::tray_progress_window::open("Sort", progress_rx, on_close);
+    });
+
+    thread::spawn(move || {
+        let progress_tx_clone = progress_tx.clone();
+        let on_progress = move |current: usize, total: usize, label: &str| {
+            let _ = progress_tx_clone.send(ProgressUpdate::Step {
+                current,
+                total,
+                message: label.to_string(),
+            });
         };
-        let _ = result_sender.send(action_result);
+        match run_sort(&account_name, Some(&on_progress)) {
+            Ok((report_path, email_count)) => {
+                if email_count > 0 {
+                    let _ = result_tx.send(ActionResult::SortCompleted {
+                        account: account_name,
+                        report_path,
+                    });
+                    let _ = progress_tx.send(ProgressUpdate::Done {
+                        summary: format!("{} email(s) à réviser", email_count),
+                    });
+                } else {
+                    let _ = progress_tx.send(ProgressUpdate::Done {
+                        summary: "Tri terminé — rien à réviser".to_string(),
+                    });
+                }
+            }
+            Err(e) => {
+                let _ = progress_tx.send(ProgressUpdate::Error {
+                    message: format!("Sort error: {}", e),
+                });
+            }
+        }
     });
 }
 
-fn run_sort(account_name: &str) -> Result<PathBuf> {
+fn run_sort(
+    account_name: &str,
+    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+) -> Result<(PathBuf, usize)> {
     dotenv::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
@@ -112,16 +172,17 @@ fn run_sort(account_name: &str) -> Result<PathBuf> {
     let sort_config = SortConfig::default();
 
     let mut sorter = EmailSorter::new(sort_directory.clone(), sort_config);
-    sorter.sort_emails()?;
+    sorter.sort_emails(on_progress)?;
 
     let report = sorter.generate_report();
+    let email_count: usize = report.categories.values().map(|v| v.len()).sum();
     let report_path = sort_directory.join("sort_report.json");
     let path_str = report_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("sort report path contains non-UTF-8 characters"))?;
     sorter.save_report(&report, path_str).context("failed to save sort report")?;
 
-    Ok(report_path)
+    Ok((report_path, email_count))
 }
 
 /// Import accounts from Thunderbird.
@@ -147,13 +208,34 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
         _ => return, // Annuler
     };
 
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
+    let (result_tx, result_rx) = mpsc::sync_channel::<ActionResult>(1);
+
+    let on_close = Some(Box::new(move || {
+        if let Ok(r) = result_rx.try_recv() {
+            let _ = result_sender.send(r);
+        }
+    }) as Box<dyn FnOnce() + Send>);
+
     thread::spawn(move || {
-        let result = run_import_thunderbird(extract_passwords);
-        let action_result = match result {
-            Ok(message) => ActionResult::Imported(message),
-            Err(e) => ActionResult::Error(format!("Import error: {}", e)),
-        };
-        let _ = result_sender.send(action_result);
+        crate::tray_progress_window::open("Import Thunderbird", progress_rx, on_close);
+    });
+
+    thread::spawn(move || {
+        let _ = progress_tx.send(ProgressUpdate::Indeterminate {
+            message: "Import Thunderbird en cours…".to_string(),
+        });
+        match run_import_thunderbird(extract_passwords) {
+            Ok(message) => {
+                let _ = result_tx.send(ActionResult::Imported(message.clone()));
+                let _ = progress_tx.send(ProgressUpdate::Done { summary: message });
+            }
+            Err(e) => {
+                let _ = progress_tx.send(ProgressUpdate::Error {
+                    message: format!("Import error: {}", e),
+                });
+            }
+        }
     });
 }
 
@@ -299,18 +381,39 @@ defaults:
 }
 
 /// Fix YAML frontmatter for a specific account's export directory.
-pub fn action_fix_yaml(account_name: String, result_sender: Sender<ActionResult>) {
+pub fn action_fix_yaml(account_name: String, _result_sender: Sender<ActionResult>) {
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
+
     thread::spawn(move || {
-        let result = run_fix_yaml(&account_name);
-        let action_result = match result {
-            Ok(message) => ActionResult::Success("Fix YAML terminé".to_string(), message),
-            Err(e) => ActionResult::Error(format!("Fix YAML error: {}", e)),
+        crate::tray_progress_window::open("Fix YAML", progress_rx, None);
+    });
+
+    thread::spawn(move || {
+        let progress_tx_clone = progress_tx.clone();
+        let on_progress = move |current: usize, total: usize, label: &str| {
+            let _ = progress_tx_clone.send(ProgressUpdate::Step {
+                current,
+                total,
+                message: label.to_string(),
+            });
         };
-        let _ = result_sender.send(action_result);
+        match run_fix_yaml(&account_name, Some(&on_progress)) {
+            Ok(summary) => {
+                let _ = progress_tx.send(ProgressUpdate::Done { summary });
+            }
+            Err(e) => {
+                let _ = progress_tx.send(ProgressUpdate::Error {
+                    message: format!("Fix YAML error: {}", e),
+                });
+            }
+        }
     });
 }
 
-fn run_fix_yaml(account_name: &str) -> Result<String> {
+fn run_fix_yaml(
+    account_name: &str,
+    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+) -> Result<String> {
     dotenv::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
@@ -321,28 +424,49 @@ fn run_fix_yaml(account_name: &str) -> Result<String> {
 
     let dir = PathBuf::from(&account.export_directory);
 
-    let stats = fix_yaml::scan_and_fix_directory(&dir, false)
+    let stats = fix_yaml::scan_and_fix_directory(&dir, false, on_progress)
         .context("Failed to fix YAML frontmatter")?;
 
     Ok(format!(
-        "{}: {} fixed, {} rewritten, {} errors",
+        "{}: {} corrigés, {} réécrits, {} erreurs",
         account_name, stats.files_fixed, stats.files_rewritten, stats.errors
     ))
 }
 
 /// Fix HTML bodies to Markdown for a specific account's export directory.
-pub fn action_fix_html(account_name: String, result_sender: Sender<ActionResult>) {
+pub fn action_fix_html(account_name: String, _result_sender: Sender<ActionResult>) {
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
+
     thread::spawn(move || {
-        let result = run_fix_html(&account_name);
-        let action_result = match result {
-            Ok(message) => ActionResult::Success("Fix HTML→Markdown terminé".to_string(), message),
-            Err(e) => ActionResult::Error(format!("Fix HTML error: {}", e)),
+        crate::tray_progress_window::open("Fix HTML", progress_rx, None);
+    });
+
+    thread::spawn(move || {
+        let progress_tx_clone = progress_tx.clone();
+        let on_progress = move |current: usize, total: usize, label: &str| {
+            let _ = progress_tx_clone.send(ProgressUpdate::Step {
+                current,
+                total,
+                message: label.to_string(),
+            });
         };
-        let _ = result_sender.send(action_result);
+        match run_fix_html(&account_name, Some(&on_progress)) {
+            Ok(summary) => {
+                let _ = progress_tx.send(ProgressUpdate::Done { summary });
+            }
+            Err(e) => {
+                let _ = progress_tx.send(ProgressUpdate::Error {
+                    message: format!("Fix HTML error: {}", e),
+                });
+            }
+        }
     });
 }
 
-fn run_fix_html(account_name: &str) -> Result<String> {
+fn run_fix_html(
+    account_name: &str,
+    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+) -> Result<String> {
     dotenv::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
@@ -353,11 +477,11 @@ fn run_fix_html(account_name: &str) -> Result<String> {
 
     let dir = PathBuf::from(&account.export_directory);
 
-    let stats = email_export::fix_html_bodies(&dir, false)
+    let stats = email_export::fix_html_bodies(&dir, false, on_progress)
         .context("Failed to fix HTML bodies")?;
 
     Ok(format!(
-        "{}: {} fixed, {} skipped, {} errors",
+        "{}: {} convertis, {} ignorés, {} erreurs",
         account_name, stats.fixed, stats.skipped, stats.errors
     ))
 }
