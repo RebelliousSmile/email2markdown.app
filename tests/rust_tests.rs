@@ -426,6 +426,57 @@ accounts:
         assert!(sort_cfg.keep_with_attachments);
         assert_eq!(sort_cfg.recent_threshold_days, 30);
     }
+
+    #[test]
+    fn test_settings_account_behavior_overrides_round_trip() {
+        let temp = TempDir::new().expect("create tempdir");
+        let path = temp.path().join("settings.yaml");
+
+        let settings_yaml = r#"defaults:
+  organize_by_type: false
+accounts:
+  myaccount:
+    organize_by_type: true
+    delete_after_export: false
+    quote_depth: 5
+"#;
+        std::fs::write(&path, settings_yaml).expect("write settings.yaml");
+
+        let settings = Settings::load(&path).expect("load settings");
+
+        let behavior = settings.accounts.get("myaccount").expect("myaccount entry missing");
+        // Inclusive: fields set in YAML must round-trip correctly.
+        assert_eq!(behavior.organize_by_type, Some(true), "organize_by_type should be Some(true)");
+        assert_eq!(behavior.delete_after_export, Some(false), "delete_after_export should be Some(false)");
+        assert_eq!(behavior.quote_depth, Some(5), "quote_depth should be Some(5)");
+        // Exclusive: fields absent from YAML must not bleed in from defaults or other sources.
+        assert_eq!(behavior.skip_existing, None, "skip_existing must not bleed from YAML");
+        assert_eq!(behavior.collect_contacts, None, "collect_contacts must not bleed");
+        assert_eq!(behavior.folder_name, None, "folder_name should be None (not set)");
+        assert_eq!(settings.defaults.organize_by_type, Some(false), "defaults.organize_by_type should be Some(false)");
+    }
+
+    #[test]
+    fn test_settings_account_behavior_remove_entry_removes_from_yaml() {
+        let temp = TempDir::new().expect("create tempdir");
+        let path = temp.path().join("settings.yaml");
+
+        let mut settings = Settings::default();
+        settings.accounts.insert("myaccount".to_string(), AccountBehavior {
+            organize_by_type: Some(true),
+            ..AccountBehavior::default()
+        });
+        settings.save(&path).expect("save settings");
+
+        let saved_content = std::fs::read_to_string(&path).expect("read saved yaml");
+        assert!(saved_content.contains("myaccount"), "saved YAML should contain 'myaccount'");
+
+        settings.accounts.remove("myaccount");
+        settings.save(&path).expect("save settings after remove");
+
+        let reloaded = Settings::load(&path).expect("reload settings");
+        assert!(reloaded.accounts.is_empty(), "accounts map should be empty after removing the only entry");
+    }
 }
 
 mod email_export_tests {
