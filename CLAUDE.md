@@ -2,78 +2,82 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Build & test
+## Build & Test
 
-- **Build**: `rtk cargo build --release` — binary at `target/release/email-to-markdown.exe`
-- **Build with tray** (system tray icon, optional feature): `rtk cargo build --release --features tray`
-- **Tests**: `rtk cargo test` — 208 tests across 4 suites, ~0.1s
-- **Single module**: `rtk cargo test <module_name>` (e.g. `rtk cargo test config_tests`)
-- **Single test case**: `rtk cargo test test_env_var_name_gmail -- --exact`
-- **Lint**: `rtk cargo clippy --all-targets`
-- **Linux system deps before build**: `sudo apt-get install build-essential pkg-config libssl-dev`
+```bash
+# CLI build (no GUI)
+cargo build
+cargo build --release
 
-Unit tests are inline in each source module (`#[cfg(test)] mod tests`), integration tests live in `tests/rust_tests.rs` grouped by `mod`. Conventions: `.claude/rules/05-testing/5-rust-tests.md`.
+# Tray build (system tray + WebView UI)
+cargo build --features tray
+cargo run --features tray -- tray
+
+# Tests
+cargo test
+cargo test <test_name>     # single test by name fragment
+cargo clippy --features tray
+```
+
+The `tray` feature gates all GUI code (`tao`, `wry`, `tray-icon`, `rfd`). CLI builds are always available without it.
 
 ## Architecture
 
-### CLI dispatcher
+**Dual-mode app**: a CLI binary (`src/main.rs`, clap subcommands) and an optional tray application behind the `tray` feature flag.
 
-`main.rs` is a clap dispatcher routing to 5 subcommands: `import`, `export`, `fix`, `sort`, `tray`. Each subcommand uses named-field structs with `#[derive(Subcommand)]`. See `.claude/rules/03-frameworks-and-libraries/3-clap.md`.
+### CLI subcommands
 
-### 3-file config split
+| Command | Module | Purpose |
+|---------|--------|---------|
+| `export` | `email_export.rs` | IMAP → Markdown pipeline |
+| `sort` | `sort_emails.rs` | Score emails, write `sort_report.json` |
+| `sort-apply` | `sort_emails.rs` | Apply decisions from `sort_report.json` |
+| `fix` | `fix_yaml.rs` | Repair malformed YAML frontmatter |
+| `import` | `thunderbird.rs` | Import accounts/passwords from Thunderbird |
+| `tray` | `tray.rs` | Launch tray application |
 
-Config lives in a platform-aware directory (`%APPDATA%\email-to-markdown\` on Windows, `~/.config/email-to-markdown/` on Linux, `~/Library/Application Support/email-to-markdown/` on macOS) resolved by `config::app_config_dir()`. Never build these paths with string concatenation — always `PathBuf::join`.
+### IMAP → Markdown pipeline (`email_export.rs`)
 
-- `accounts.yaml` — pure IMAP connection info (server/port/username/ignored_folders)
-- `settings.yaml` — behaviour (`export_base_dir`, defaults, per-account overrides)
-- `.env` — passwords. Variables are `{SANITIZED_NAME}_PASSWORD` or `_APPLICATION_PASSWORD` (APPLICATION takes priority). The canonical sanitizer is `config::env_var_name()` — always reuse it, never reimplement the rule elsewhere (this was the source of a past bug).
+1. IMAP connect (native TLS) with retry/backoff (`network.rs`)
+2. Enumerate folders (skip `ignored_folders`, decode IMAP UTF-7)
+3. Parse email via `mailparse` (headers, MIME parts, attachments)
+4. Clean body via `cleaner.rs` pipeline: QP decode → HTML entities → URL repair → unwrap lines → extract links → decontaminate trackers
+5. HTML bodies converted with `htmd::convert()` inside `extract_body()`, never in `cleaner.rs`
+6. Classify email type (Direct/Group/Newsletter/MailingList)
+7. Write Markdown file with YAML frontmatter (`subject_hash` for dedup)
 
-`RawAccount` (read from YAML) is merged with `Settings` via `merge_account()` to produce resolved `Account` structs (concrete fields, not `Option<T>`). Details in `docs/memory-bank/configuration.md`.
+### Tray architecture (`tray.rs`, `tray_actions.rs`, `tray_sort_window.rs`)
 
-### Modules and dependencies
+- Main thread: `tao` event loop + MPSC receiver for results
+- Each menu action: spawns an OS thread, sends `ActionResult` back via MPSC
+- `ActionResult`: `Success`, `Error`, `Imported`, `SortCompleted`
+- Sort review window: separate OS thread, its own `tao::EventLoop` (required on Windows via `with_any_thread(true)`), `wry` WebView embeds `assets/sort_review.html`
+- WebView → Rust IPC: `window.ipc.postMessage(json)` (one-shot, triggers `should_exit` AtomicBool)
 
-```
-main.rs — clap dispatcher
- ├─ config.rs         — paths, Settings, Account, merge, validation
- ├─ email_export.rs   — ImapExporter, YAML frontmatter, ContactsCollector
- ├─ thunderbird.rs    — profiles, prefs.js, NSS password extraction, generate_*
- ├─ fix_yaml.rs       — Python-tag frontmatter repair (migration legacy)
- ├─ sort_emails.rs    — Delete/Summarize/Keep categorisation
- ├─ tray.rs           — tao event loop + dynamic menu       [feature: tray]
- └─ tray_actions.rs   — menu actions, spawned on threads    [feature: tray]
-```
+### Sort review window (`assets/sort_review.html`)
 
-Module-level detail in `docs/memory-bank/module_structure.md`.
+Vanilla JS (ES5), self-contained (no external deps). The `rows[]` model is the source of truth — `buildTable()` regenerates `<tbody>` only, so `<thead>` listeners survive re-renders. Report JSON is injected at load time via `__REPORT_JSON__` placeholder.
 
-### Feature-gated tray
+## Config system
 
-All tray code (`tray.rs`, `tray_actions.rs`) sits behind `#[cfg(feature = "tray")]`. Tray actions return an `ActionResult` (`Success(title, message)`, `Imported(message)`, `Error(message)`) — **never** propagate `Result` to the event loop or it panics. The menu rebuilds automatically after an import to reflect newly-added accounts.
+Three files in the platform config dir (`%APPDATA%\email-to-markdown\` on Windows):
 
-### Error handling
+- **`accounts.yaml`** — IMAP connection info (server, port, username, ignored folders)
+- **`settings.yaml`** — behaviour overrides per account and global defaults (export dir, quote depth, skip_existing, organize_by_type, sort weights)
+- **`.env`** — passwords (`ACCOUNTNAME_APPLICATION_PASSWORD` or `ACCOUNTNAME_PASSWORD`)
 
-- `thiserror` only for typed domain errors exported from a module (`ConfigError`)
-- `anyhow::Result<T>` everywhere else, with `.context("…")` on every `?` at module boundaries
-- No `.unwrap()` in `src/` outside test code
-- Tray actions convert `Err` to `ActionResult::Error(String)` — never propagate
+Password env var key = account name uppercased, `@` and `.` replaced by `_AT_` and `_`.
 
-See `.claude/rules/02-programming-languages/2-rust-errors.md`.
+Sort rules live in **`sort_config.json`** (same dir): keyword regexes, sender/subject whitelists, scoring weights, toggles.
 
-## Reference documentation
+## Test structure
 
-- `docs/memory-bank/` — detailed architecture (module_structure, configuration, cross_platform, error_handling, testing_strategy) — **human-facing, French**
-- `.claude/rules/` — active code rules (Rust errors/types, clap, serde, tests, mermaid, project-specific rules under `custom/`)
-- `README.md` — user-facing CLI reference (French)
+Single integration file: `tests/rust_tests.rs`, grouped by `mod` (e.g., `mod utils_tests`, `mod config_tests`). Unit tests inline as `#[cfg(test)] mod tests`. Always use `tempfile::TempDir` for filesystem tests. Naming: `test_<function>_<condition>`.
 
-## Language convention
+## Key constraints
 
-- LLM working files (this file, plans in `aidd_docs/tasks/`, rules) — **English**
-- Human documentation (README, memory-bank, CHANGELOG) — **French**
-
-## Project rules
-
-All files under `.claude/rules/` are active:
-
-- Rules with a `paths:` frontmatter auto-load when Claude Code opens matching files
-- Rules without `paths:` are always loaded (see `.claude/rules/04-tooling/ide-mapping.md`)
-
-Add new rules under `.claude/rules/custom/` — no CLAUDE.md edit required.
+- Regex on hot paths (per-line/per-email): use `static LazyLock<Regex>`, never `Regex::new` inside a function body.
+- No `.unwrap()` in `src/`; use `?` with `.context("…")` at module boundaries.
+- Filesystem helpers must never follow symlinks; treat them as opaque content.
+- Gmail IMAP: `SELECT [Gmail]/All Mail` + EXPUNGE; never EXPUNGE on the current folder.
+- `MailParseError` → `stats.skipped`, not `stats.errors`.

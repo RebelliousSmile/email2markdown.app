@@ -45,9 +45,13 @@ worktrees/
 .vscode/
 # Ignore tout dans .claude/ sauf commands/custom/
 .claude/*
-.github/
+.github/*
+!.github/agents/
+!.github/prompts/
+!.github/skills/
 CLAUDE.md
 AGENTS.md
 CONTRIBUTING.md
 migrate-docs.prompt.md
 # </AIDD>
+.aidd/cache/
