@@ -23,6 +23,10 @@
     font-weight: 600;
     flex-shrink: 0;
   }
+  .tabs { background:#fff; border-bottom:1px solid #ddd; padding:0 16px; display:flex; flex-shrink:0; }
+  .tab-btn { background:none; border:none; border-bottom:2px solid transparent; padding:10px 18px; cursor:pointer; font-size:13px; color:#666; font-weight:500; }
+  .tab-btn.active { color:#1e88e5; border-bottom-color:#1e88e5; }
+  .tab-btn:hover:not(.active) { color:#333; }
   .content {
     flex: 1;
     overflow-y: auto;
@@ -131,58 +135,269 @@
   }
   #btn-save:hover { background: #1565c0; border-color: #1565c0; }
   #btn-save:disabled { background: #90caf9; border-color: #90caf9; cursor: default; }
+
+  /* Accounts tab */
+  .acct-tab-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+  }
+  .acct-row {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .acct-row-name {
+    font-weight: 500;
+    color: #222;
+  }
+  .acct-empty {
+    color: #888;
+    font-size: 13px;
+    padding: 24px 0;
+    text-align: center;
+  }
+  .btn-secondary {
+    background: #fff;
+    border: 1px solid #1e88e5;
+    color: #1e88e5;
+    border-radius: 4px;
+    padding: 5px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .btn-secondary:hover { background: #e3f2fd; }
+  .btn-primary {
+    padding: 7px 20px;
+    border: 1px solid #1e88e5;
+    border-radius: 4px;
+    background: #1e88e5;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-primary:hover { background: #1565c0; border-color: #1565c0; }
+  .acct-detail-section {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .acct-detail-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eee;
+  }
+  .acct-field {
+    display: flex;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .acct-field:last-child { margin-bottom: 0; }
+  .acct-field label {
+    width: 180px;
+    flex-shrink: 0;
+    color: #333;
+  }
+  .acct-field input[type="text"],
+  .acct-field input[type="number"] {
+    flex: 1;
+    padding: 5px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    background: #fff;
+  }
+  .acct-field input[type="number"] {
+    flex: none;
+    width: 80px;
+  }
+  .acct-field input[type="text"]:focus,
+  .acct-field input[type="number"]:focus {
+    outline: none;
+    border-color: #1e88e5;
+    box-shadow: 0 0 0 2px rgba(30,136,229,0.15);
+  }
+  .chip-zone {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+    min-height: 28px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    background: #e3f2fd;
+    border: 1px solid #90caf9;
+    border-radius: 12px;
+    padding: 2px 8px 2px 10px;
+    font-size: 12px;
+    color: #1565c0;
+    gap: 4px;
+  }
+  .chip-remove {
+    background: none;
+    border: none;
+    color: #1565c0;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+  }
+  .chip-remove:hover { color: #d32f2f; }
+  .folder-add-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .folder-add-row input[type="text"] {
+    flex: 1;
+    padding: 5px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    background: #fff;
+  }
+  .folder-add-row input[type="text"]:focus {
+    outline: none;
+    border-color: #1e88e5;
+    box-shadow: 0 0 0 2px rgba(30,136,229,0.15);
+  }
+  .acct-error {
+    display: none;
+    color: #d32f2f;
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+  .acct-detail-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: flex-end;
+    margin-top: 4px;
+  }
+  .acct-saved-msg {
+    display: none;
+    color: #388e3c;
+    font-size: 12px;
+  }
 </style>
 </head>
 <body>
-<script>window.__SETTINGS_DATA__ = __SETTINGS_JSON__;</script>
+<script>
+  window.__SETTINGS_DATA__ = __SETTINGS_JSON__;
+  window.__ACCOUNTS_DATA__ = __ACCOUNTS_JSON__;
+</script>
 
 <header>Paramètres</header>
 
-<div class="content">
-  <div class="section">
-    <div class="section-title">Exportation</div>
-    <div class="field">
-      <label for="export-base-dir">Dossier de destination</label>
-      <input type="text" id="export-base-dir" placeholder="Chemin vers le dossier d'export (vide = non défini)">
-    </div>
-  </div>
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="general">Paramètres généraux</button>
+  <button class="tab-btn" data-tab="accounts">Comptes</button>
+</nav>
 
-  <div class="section">
-    <div class="section-title">Comportement par défaut</div>
-    <div class="field">
-      <label for="quote-depth">Profondeur des citations</label>
-      <input type="number" id="quote-depth" min="0" step="1" value="1">
-      <span class="field-hint">Entier ≥ 0</span>
+<div id="tab-general">
+  <div class="content">
+    <div class="section">
+      <div class="section-title">Exportation</div>
+      <div class="field">
+        <label for="export-base-dir">Dossier de destination</label>
+        <input type="text" id="export-base-dir" placeholder="Chemin vers le dossier d'export (vide = non défini)">
+      </div>
     </div>
-    <div id="quote-depth-error" class="error-msg">La profondeur doit être un entier ≥ 0.</div>
-    <div class="field">
-      <label for="skip-existing">Ne pas ré-exporter les emails existants</label>
-      <input type="checkbox" id="skip-existing">
-    </div>
-    <div class="field">
-      <label for="collect-contacts">Collecter les contacts</label>
-      <input type="checkbox" id="collect-contacts">
-    </div>
-    <div class="field">
-      <label for="skip-signature-images">Ignorer les images de signature</label>
-      <input type="checkbox" id="skip-signature-images">
-    </div>
-    <div class="field">
-      <label for="delete-after-export">Supprimer après exportation</label>
-      <input type="checkbox" id="delete-after-export">
-    </div>
-    <div class="field">
-      <label for="cleanup-empty-dirs">Nettoyer les dossiers vides</label>
-      <input type="checkbox" id="cleanup-empty-dirs">
-    </div>
-    <div class="field">
-      <label for="organize-by-type">Organiser par type</label>
-      <input type="checkbox" id="organize-by-type">
+
+    <div class="section">
+      <div class="section-title">Comportement par défaut</div>
+      <div class="field">
+        <label for="quote-depth">Profondeur des citations</label>
+        <input type="number" id="quote-depth" min="0" step="1" value="1">
+        <span class="field-hint">Entier ≥ 0</span>
+      </div>
+      <div id="quote-depth-error" class="error-msg">La profondeur doit être un entier ≥ 0.</div>
+      <div class="field">
+        <label for="skip-existing">Ne pas ré-exporter les emails existants</label>
+        <input type="checkbox" id="skip-existing">
+      </div>
+      <div class="field">
+        <label for="collect-contacts">Collecter les contacts</label>
+        <input type="checkbox" id="collect-contacts">
+      </div>
+      <div class="field">
+        <label for="skip-signature-images">Ignorer les images de signature</label>
+        <input type="checkbox" id="skip-signature-images">
+      </div>
+      <div class="field">
+        <label for="delete-after-export">Supprimer après exportation</label>
+        <input type="checkbox" id="delete-after-export">
+      </div>
+      <div class="field">
+        <label for="cleanup-empty-dirs">Nettoyer les dossiers vides</label>
+        <input type="checkbox" id="cleanup-empty-dirs">
+      </div>
+      <div class="field">
+        <label for="organize-by-type">Organiser par type</label>
+        <input type="checkbox" id="organize-by-type">
+      </div>
     </div>
   </div>
 </div>
 
-<div class="footer">
+<div id="tab-accounts" style="display:none">
+  <div class="acct-tab-content">
+    <div id="account-list-view">
+      <!-- rendered by JS -->
+    </div>
+    <div id="account-detail-view" style="display:none">
+      <div class="acct-detail-section">
+        <div class="acct-detail-title">Modifier le compte</div>
+        <input type="hidden" id="acct-name">
+        <div class="acct-field">
+          <label for="acct-server">Serveur IMAP</label>
+          <input type="text" id="acct-server" placeholder="imap.example.com">
+        </div>
+        <div class="acct-field">
+          <label for="acct-port">Port</label>
+          <input type="number" id="acct-port" min="1" max="65535" value="993">
+        </div>
+        <div class="acct-field">
+          <label for="acct-username">Identifiant</label>
+          <input type="text" id="acct-username" placeholder="user@example.com">
+        </div>
+        <div class="acct-field" style="align-items:flex-start">
+          <label style="padding-top:4px">Dossiers ignorés</label>
+          <div style="flex:1">
+            <div class="chip-zone" id="acct-chips"></div>
+            <div class="folder-add-row">
+              <input type="text" id="acct-folder-input" placeholder="Ajouter un dossier...">
+              <button class="btn-secondary" id="acct-folder-add">+</button>
+            </div>
+          </div>
+        </div>
+        <div class="acct-error" id="acct-error"></div>
+        <div class="acct-detail-footer">
+          <span class="acct-saved-msg" id="acct-saved-msg">Enregistré ✓</span>
+          <button class="btn-secondary" id="acct-cancel">Annuler</button>
+          <button class="btn-primary" id="acct-save">Sauvegarder</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer" id="main-footer">
   <button id="btn-open-raw">Ouvrir le fichier brut</button>
   <button id="btn-save">Sauvegarder</button>
 </div>
@@ -266,6 +481,190 @@
       window.ipc.postMessage(msg);
     }
   });
+
+  // ── Tab switching ────────────────────────────────────────────────────────────
+
+  var tabGeneral = document.getElementById('tab-general');
+  var tabAccounts = document.getElementById('tab-accounts');
+  var mainFooter = document.getElementById('main-footer');
+  var tabBtns = document.querySelectorAll('.tab-btn');
+
+  for (var i = 0; i < tabBtns.length; i++) {
+    tabBtns[i].addEventListener('click', function () {
+      var selectedTab = this.getAttribute('data-tab');
+      for (var j = 0; j < tabBtns.length; j++) {
+        tabBtns[j].className = tabBtns[j].className.replace(' active', '').replace('active', '');
+      }
+      this.className += ' active';
+      if (selectedTab === 'general') {
+        tabGeneral.style.display = '';
+        tabAccounts.style.display = 'none';
+        mainFooter.style.display = '';
+      } else {
+        tabGeneral.style.display = 'none';
+        tabAccounts.style.display = '';
+        mainFooter.style.display = 'none';
+      }
+    });
+  }
+
+  // ── Accounts tab ─────────────────────────────────────────────────────────────
+
+  var accounts = window.__ACCOUNTS_DATA__ || [];
+  var currentFolders = [];
+  var currentAccountIdx = -1;
+
+  function renderAccountList() {
+    var listView = document.getElementById('account-list-view');
+    if (!accounts || accounts.length === 0) {
+      listView.innerHTML = '<div class="acct-empty">Aucun compte configuré</div>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < accounts.length; i++) {
+      html += '<div class="acct-row" data-idx="' + i + '">';
+      html += '<span class="acct-row-name">' + escapeHtml(accounts[i].name) + '</span>';
+      html += '<button class="btn-secondary acct-edit-btn" data-idx="' + i + '">Modifier</button>';
+      html += '</div>';
+    }
+    listView.innerHTML = html;
+    var editBtns = listView.querySelectorAll('.acct-edit-btn');
+    for (var k = 0; k < editBtns.length; k++) {
+      editBtns[k].addEventListener('click', function () {
+        showAccountDetail(parseInt(this.getAttribute('data-idx'), 10));
+      });
+    }
+  }
+
+  function showAccountDetail(idx) {
+    currentAccountIdx = idx;
+    var acct = accounts[idx];
+    document.getElementById('acct-name').value = acct.name;
+    document.getElementById('acct-server').value = acct.server || '';
+    document.getElementById('acct-port').value = acct.port || 993;
+    document.getElementById('acct-username').value = acct.username || '';
+    currentFolders = (acct.ignored_folders || []).slice();
+    renderChips();
+    document.getElementById('acct-error').style.display = 'none';
+    document.getElementById('acct-error').textContent = '';
+    document.getElementById('acct-saved-msg').style.display = 'none';
+    document.getElementById('account-list-view').style.display = 'none';
+    document.getElementById('account-detail-view').style.display = '';
+  }
+
+  function renderChips() {
+    var zone = document.getElementById('acct-chips');
+    var html = '';
+    for (var i = 0; i < currentFolders.length; i++) {
+      html += '<span class="chip" data-folder-idx="' + i + '">';
+      html += escapeHtml(currentFolders[i]);
+      html += ' <button class="chip-remove" data-folder-idx="' + i + '" type="button">&#xD7;</button>';
+      html += '</span>';
+    }
+    zone.innerHTML = html;
+    var removeBtns = zone.querySelectorAll('.chip-remove');
+    for (var k = 0; k < removeBtns.length; k++) {
+      removeBtns[k].addEventListener('click', function () {
+        var folderIdx = parseInt(this.getAttribute('data-folder-idx'), 10);
+        currentFolders.splice(folderIdx, 1);
+        renderChips();
+      });
+    }
+  }
+
+  function addFolder() {
+    var input = document.getElementById('acct-folder-input');
+    var val = input.value.replace(/^\s+|\s+$/g, '');
+    if (val.length > 0) {
+      currentFolders.push(val);
+      input.value = '';
+      renderChips();
+    }
+    input.focus();
+  }
+
+  document.getElementById('acct-folder-add').addEventListener('click', addFolder);
+
+  document.getElementById('acct-folder-input').addEventListener('keydown', function (e) {
+    if (e.keyCode === 13) {
+      e.preventDefault();
+      addFolder();
+    }
+  });
+
+  document.getElementById('acct-cancel').addEventListener('click', function () {
+    document.getElementById('account-detail-view').style.display = 'none';
+    document.getElementById('account-list-view').style.display = '';
+    currentAccountIdx = -1;
+    currentFolders = [];
+  });
+
+  document.getElementById('acct-save').addEventListener('click', function () {
+    var errorEl = document.getElementById('acct-error');
+    errorEl.style.display = 'none';
+    errorEl.textContent = '';
+
+    var server = document.getElementById('acct-server').value.replace(/^\s+|\s+$/g, '');
+    var portVal = document.getElementById('acct-port').value.replace(/^\s+|\s+$/g, '');
+    var port = parseInt(portVal, 10);
+    var username = document.getElementById('acct-username').value.replace(/^\s+|\s+$/g, '');
+    var accountName = document.getElementById('acct-name').value;
+
+    if (server.length === 0) {
+      errorEl.textContent = 'Le serveur IMAP est obligatoire.';
+      errorEl.style.display = 'block';
+      document.getElementById('acct-server').focus();
+      return;
+    }
+    if (portVal === '' || isNaN(port) || port < 1 || port > 65535) {
+      errorEl.textContent = 'Le port doit être un entier entre 1 et 65535.';
+      errorEl.style.display = 'block';
+      document.getElementById('acct-port').focus();
+      return;
+    }
+    if (username.length === 0) {
+      errorEl.textContent = "L'identifiant est obligatoire.";
+      errorEl.style.display = 'block';
+      document.getElementById('acct-username').focus();
+      return;
+    }
+
+    var payload = {
+      action: 'save_account',
+      data: {
+        account_name: accountName,
+        server: server,
+        port: port,
+        username: username,
+        ignored_folders: currentFolders
+      }
+    };
+
+    if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      window.ipc.postMessage(JSON.stringify(payload));
+    }
+
+    var savedMsg = document.getElementById('acct-saved-msg');
+    savedMsg.style.display = 'inline';
+
+    setTimeout(function () {
+      savedMsg.style.display = 'none';
+      document.getElementById('account-detail-view').style.display = 'none';
+      document.getElementById('account-list-view').style.display = '';
+      currentAccountIdx = -1;
+      currentFolders = [];
+    }, 800);
+  });
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  renderAccountList();
 })();
 </script>
 </body>
