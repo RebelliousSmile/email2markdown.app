@@ -64,6 +64,11 @@
     white-space: nowrap;
     z-index: 1;
   }
+  thead th[data-col] {
+    cursor: pointer;
+    user-select: none;
+  }
+  thead th[data-col]:hover { background: #e0e0e0; }
   tbody tr:nth-child(even) { background: #fafafa; }
   tbody tr:hover { background: #e3f2fd; }
   tbody td {
@@ -145,12 +150,12 @@
     <thead>
       <tr>
         <th><input type="checkbox" id="header-check"></th>
-        <th>Expéditeur</th>
-        <th>Sujet</th>
-        <th>Date</th>
-        <th>Score</th>
-        <th>Type</th>
-        <th>Décision</th>
+        <th data-col="sender">Expéditeur</th>
+        <th data-col="subject">Sujet</th>
+        <th data-col="date">Date</th>
+        <th data-col="score">Score</th>
+        <th data-col="email_type">Type</th>
+        <th data-col="decision">Décision</th>
       </tr>
     </thead>
     <tbody id="email-table-body"></tbody>
@@ -179,7 +184,8 @@
         date: email.date || '',
         score: email.score != null ? email.score : '',
         email_type: email.type || email.email_type || '',
-        decision: cat
+        decision: cat,
+        checked: false
       });
     });
   });
@@ -189,6 +195,39 @@
   rows.sort(function (a, b) {
     return (order[a.decision] || 99) - (order[b.decision] || 99);
   });
+
+  // Column sort state
+  var sortCol = null;
+  var sortDir = 'asc';
+
+  var colLabels = {
+    sender: 'Expéditeur',
+    subject: 'Sujet',
+    date: 'Date',
+    score: 'Score',
+    email_type: 'Type',
+    decision: 'Décision'
+  };
+
+  function sortRows() {
+    rows.sort(function (a, b) {
+      var av = a[sortCol], bv = b[sortCol];
+      var cmp;
+      if (sortCol === 'score') {
+        cmp = Number(av) - Number(bv);
+      } else {
+        cmp = String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' });
+      }
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }
+
+  function updateSortIndicators() {
+    document.querySelectorAll('thead th[data-col]').forEach(function (th) {
+      var col = th.dataset.col;
+      th.textContent = colLabels[col] + (col === sortCol ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+    });
+  }
 
   var tbody = document.getElementById('email-table-body');
 
@@ -212,7 +251,7 @@
     rows.forEach(function (row, i) {
       var tr = document.createElement('tr');
       tr.innerHTML =
-        '<td><input type="checkbox" class="row-check" data-i="' + i + '"></td>' +
+        '<td><input type="checkbox" class="row-check" data-i="' + i + '"' + (row.checked ? ' checked' : '') + '></td>' +
         '<td class="sender" title="' + esc(row.sender) + '">' + esc(row.sender) + '</td>' +
         '<td class="subject" title="' + esc(row.subject) + '">' + esc(row.subject) + '</td>' +
         '<td>' + esc(row.date) + '</td>' +
@@ -232,6 +271,15 @@
         rows[parseInt(this.dataset.i)].decision = this.value;
         updateSelectStyle(this);
         updateSummary();
+      });
+    });
+
+    document.querySelectorAll('.row-check').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        rows[parseInt(this.dataset.i)].checked = this.checked;
+        var allChecked = rows.every(function (r) { return r.checked; });
+        document.getElementById('header-check').checked = allChecked;
+        document.getElementById('select-all').checked = allChecked;
       });
     });
 
@@ -255,14 +303,32 @@
   // Select all (header checkbox)
   document.getElementById('header-check').addEventListener('change', function () {
     var checked = this.checked;
+    rows.forEach(function (r) { r.checked = checked; });
     document.querySelectorAll('.row-check').forEach(function (cb) { cb.checked = checked; });
     document.getElementById('select-all').checked = checked;
   });
 
   document.getElementById('select-all').addEventListener('change', function () {
     var checked = this.checked;
+    rows.forEach(function (r) { r.checked = checked; });
     document.querySelectorAll('.row-check').forEach(function (cb) { cb.checked = checked; });
     document.getElementById('header-check').checked = checked;
+  });
+
+  // Column sort
+  document.querySelectorAll('thead th[data-col]').forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col = this.dataset.col;
+      if (sortCol === col) {
+        sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortCol = col;
+        sortDir = 'asc';
+      }
+      sortRows();
+      buildTable();
+      updateSortIndicators();
+    });
   });
 
   // Bulk apply
