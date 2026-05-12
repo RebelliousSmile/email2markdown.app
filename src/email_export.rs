@@ -729,7 +729,35 @@ impl ImapExporter {
             println!("Authenticating as {}...", self.account.username);
         }
 
-        let session = client.login(&self.account.username, password).map_err(|e| e.0)?;
+        let session = match client.login(&self.account.username, password) {
+            Ok(s) => s,
+            Err((login_err, client)) => {
+                if self.debug_mode {
+                    println!("LOGIN failed ({}), trying AUTHENTICATE PLAIN...", login_err);
+                }
+                struct PlainAuth {
+                    username: String,
+                    password: String,
+                }
+                impl imap::Authenticator for PlainAuth {
+                    type Response = Vec<u8>;
+                    fn process(&self, _challenge: &[u8]) -> Self::Response {
+                        let mut r = vec![0u8];
+                        r.extend_from_slice(self.username.as_bytes());
+                        r.push(0u8);
+                        r.extend_from_slice(self.password.as_bytes());
+                        r
+                    }
+                }
+                let mut auth = PlainAuth {
+                    username: self.account.username.clone(),
+                    password: password.to_string(),
+                };
+                client.authenticate("PLAIN", &mut auth).map_err(|(e, _)| {
+                    anyhow::anyhow!("Authentication failed (LOGIN: {login_err} / PLAIN: {e})")
+                })?
+            }
+        };
 
         if self.debug_mode {
             println!("Connected successfully!");
