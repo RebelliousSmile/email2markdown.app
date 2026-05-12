@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 
 use anyhow::{Context, Result};
@@ -39,6 +39,7 @@ pub enum AppCommand {
         on_close: Option<CloseCb>,
         error_action: Option<ActionCb>,
         sender: Sender<ActionResult>,
+        cancel_token: Option<Arc<AtomicBool>>,
     },
     OpenSort {
         report_path: PathBuf,
@@ -189,7 +190,8 @@ pub fn run_tray() -> Result<()> {
                 on_close,
                 error_action,
                 sender,
-            }) => match build_progress_window(target, &proxy, &action_name) {
+                cancel_token,
+            }) => match build_progress_window(target, &proxy, &action_name, cancel_token) {
                 Ok((window, webview, window_id)) => {
                     windows.insert(
                         window_id,
@@ -310,9 +312,17 @@ fn build_progress_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
     action_name: &str,
+    cancel_token: Option<Arc<AtomicBool>>,
 ) -> Result<(Window, WebView, WindowId)> {
+    let cancel_html = if cancel_token.is_some() {
+        r#"<button id="cancel" onclick="window.ipc.postMessage('cancel')">Annuler</button>"#
+    } else {
+        ""
+    };
     let html_template = include_str!("../assets/progress_window.html");
-    let html = html_template.replace("__ACTION_NAME__", action_name);
+    let html = html_template
+        .replace("__ACTION_NAME__", action_name)
+        .replace("__HAS_CANCEL__", cancel_html);
 
     let window = WindowBuilder::new()
         .with_title(format!("En cours — {}", action_name))
@@ -329,6 +339,12 @@ fn build_progress_window(
             match msg.body().as_str() {
                 "action" => { let _ = proxy_ipc.send_event(AppCommand::ActionRequested { window_id }); }
                 "close" => { let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id }); }
+                "cancel" => {
+                    if let Some(token) = &cancel_token {
+                        token.store(true, Ordering::Relaxed);
+                    }
+                    let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+                }
                 _ => {}
             }
         })

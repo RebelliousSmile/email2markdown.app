@@ -362,7 +362,7 @@ fn main() -> Result<()> {
 
                 match exporter.connect() {
                     Ok(_) => {
-                        match exporter.export_account(None) {
+                        match exporter.export_account(None, None) {
                             Ok(results) => {
                                 let total_exported: usize = results.values().map(|s| s.exported).sum();
                                 let total_skipped: usize = results.values().map(|s| s.skipped).sum();

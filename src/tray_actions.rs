@@ -4,7 +4,9 @@
 //! interact with the system tray menu.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread;
 
 use anyhow::{Context, Result};
@@ -51,6 +53,8 @@ fn classify_error(e: &anyhow::Error) -> Option<String> {
 /// Runs in a separate thread to avoid blocking the UI.
 pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) {
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
+    let cancel_token = Arc::new(AtomicBool::new(false));
+    let cancel_token_worker = Arc::clone(&cancel_token);
 
     if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
         action_name: "Export".to_string(),
@@ -58,6 +62,7 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
         on_close: None,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
         sender: result_sender.clone(),
+        cancel_token: Some(cancel_token),
     }) {
         let _ = result_sender.send(ActionResult::Error(format!(
             "Fenêtre de progression : {}",
@@ -75,7 +80,7 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
                 message: label.to_string(),
             });
         };
-        match run_export(&account_name, Some(&on_progress)) {
+        match run_export(&account_name, Some(&on_progress), cancel_token_worker) {
             Ok(summary) => {
                 let _ = progress_tx.send(ProgressUpdate::Done { summary });
             }
@@ -92,6 +97,7 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
 fn run_export(
     account_name: &str,
     on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+    cancel_token: Arc<AtomicBool>,
 ) -> Result<String> {
     dotenv::from_path(config::env_file_path()).ok();
 
@@ -114,18 +120,20 @@ fn run_export(
     exporter.connect().context("Failed to connect to IMAP server")?;
 
     let results = exporter
-        .export_account(on_progress)
+        .export_account(on_progress, Some(cancel_token.as_ref()))
         .context("Export failed")?;
 
     exporter.disconnect().ok();
 
+    let cancelled = cancel_token.load(Ordering::Relaxed);
     let total_exported: usize = results.values().map(|s| s.exported).sum();
     let total_skipped: usize = results.values().map(|s| s.skipped).sum();
     let total_errors: usize = results.values().map(|s| s.errors).sum();
 
+    let prefix = if cancelled { "Export annulé" } else { "Export terminé" };
     Ok(format!(
-        "Export terminé — {} exportés, {} ignorés, {} erreurs",
-        total_exported, total_skipped, total_errors
+        "{} — {} exportés, {} ignorés, {} erreurs",
+        prefix, total_exported, total_skipped, total_errors
     ))
 }
 
@@ -142,6 +150,7 @@ pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
         on_close: None,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
         sender: result_sender.clone(),
+        cancel_token: None,
     }) {
         let _ = result_sender.send(ActionResult::Error(format!(
             "Fenêtre de progression : {}",
@@ -252,6 +261,7 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
         on_close,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
         sender: sender_for_error.clone(),
+        cancel_token: None,
     }) {
         let _ = sender_for_error.send(ActionResult::Error(format!(
             "Fenêtre de progression : {}",
@@ -430,6 +440,7 @@ pub fn action_fix_yaml(account_name: String, result_sender: Sender<ActionResult>
         on_close: None,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
         sender: result_sender.clone(),
+        cancel_token: None,
     }) {
         let _ = result_sender.send(ActionResult::Error(format!(
             "Fenêtre de progression : {}",
@@ -494,6 +505,7 @@ pub fn action_fix_html(account_name: String, result_sender: Sender<ActionResult>
         on_close: None,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
         sender: result_sender.clone(),
+        cancel_token: None,
     }) {
         let _ = result_sender.send(ActionResult::Error(format!(
             "Fenêtre de progression : {}",

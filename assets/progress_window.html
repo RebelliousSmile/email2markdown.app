@@ -80,6 +80,19 @@
   }
 
   #close:hover { background: #2563eb; }
+
+  #cancel {
+    padding: 7px 20px;
+    font-size: 0.9rem;
+    background: transparent;
+    color: #555;
+    border: 1px solid #bbb;
+    border-radius: 5px;
+    cursor: pointer;
+    margin-right: 8px;
+  }
+
+  #cancel:hover { background: #eee; }
 </style>
 </head>
 <body>
@@ -88,6 +101,7 @@
   <div id="bar"><div id="fill"></div></div>
   <p id="summary"></p>
   <button id="action-btn" hidden style="background:#1e88e5;color:#fff;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-size:14px;margin-right:8px;"></button>
+  __HAS_CANCEL__
   <button id="close" onclick="window.ipc.postMessage('close')">Fermer</button>
 
 <script>
@@ -109,6 +123,7 @@
     var el = document.getElementById("summary");
     el.textContent = summary;
     el.style.display = "block";
+    var c = document.getElementById("cancel"); if (c) c.style.display = "none";
     document.getElementById("close").style.display = "inline-block";
   }
 
@@ -119,6 +134,7 @@
     el.textContent = message;
     el.classList.add("error-text");
     el.style.display = "block";
+    var c = document.getElementById("cancel"); if (c) c.style.display = "none";
     document.getElementById("close").style.display = "inline-block";
     var actionBtn = document.getElementById("action-btn");
     if (actionLabel) {

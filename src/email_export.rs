@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -784,6 +785,7 @@ impl ImapExporter {
         &mut self,
         folder: &FolderName,
         mut contacts_collector: Option<&mut ContactsCollector>,
+        cancel_token: Option<&AtomicBool>,
     ) -> Result<ExportStats> {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
         let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
@@ -811,6 +813,10 @@ impl ImapExporter {
             let mut stats = ExportStats::default();
 
             for (_idx, uid) in uids_vec.into_iter().enumerate() {
+                if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
+                    break;
+                }
+
                 // [4] Retry logic for fetch
                 let fetch_result = with_retry(&self.network_config, "fetch", || {
                     session.fetch(uid.to_string(), "RFC822")
@@ -914,6 +920,7 @@ impl ImapExporter {
     pub fn export_account(
         &mut self,
         on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+        cancel_token: Option<&AtomicBool>,
     ) -> Result<HashMap<String, ExportStats>> {
         // Run the existing body in an IIFE so cleanup can run on every exit path.
         let run_result: Result<HashMap<String, ExportStats>> = (|| {
@@ -942,13 +949,17 @@ impl ImapExporter {
 
                 println!("Exporting {} ...", folder.display);
 
-                let stats = self.export_folder(&folder, contacts_collector.as_mut())?;
+                let stats = self.export_folder(&folder, contacts_collector.as_mut(), cancel_token)?;
                 println!(
                     "  {} exported, {} skipped, {} errors",
                     stats.exported, stats.skipped, stats.errors
                 );
 
                 results.insert(folder.display, stats);
+
+                if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
+                    break;
+                }
             }
 
             // Generate contacts file if enabled
