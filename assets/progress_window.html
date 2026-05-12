@@ -15,11 +15,18 @@
     width: 500px;
   }
 
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
   h2 {
     font-size: 1.1rem;
     font-weight: 600;
-    margin-bottom: 16px;
     color: #111;
+    margin: 0;
   }
 
   #status {
@@ -107,21 +114,22 @@
   .warning-badge {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
     background: #fff8e1;
     border: 1px solid #f59e0b;
     color: #92400e;
     border-radius: 6px;
-    padding: 5px 10px;
-    font-size: 0.8rem;
+    padding: 3px 8px;
+    font-size: 0.75rem;
     font-weight: 500;
-    margin-bottom: 14px;
+    white-space: nowrap;
   }
 </style>
 </head>
 <body>
-  <h2 id="title">__ACTION_NAME__</h2>
-  __WARNING__
+  <div class="title-row">
+    <h2 id="title">__ACTION_NAME__</h2>
+    __WARNING__
+  </div>
   <p id="status">Démarrage…</p>
   <div id="bar"><div id="fill"></div></div>
   <p id="last-status">Récupération des en-têtes…</p>
