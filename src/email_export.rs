@@ -5,7 +5,7 @@ use crate::utils::{
     is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename, subject_extract,
 };
 use anyhow::{Context, Result};
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, FixedOffset};
 use imap::{ImapConnection, Session};
 use imap_proto::NameAttribute;
 use mailparse::{self, MailHeaderMap, ParsedMail};
@@ -93,13 +93,16 @@ impl ContactsCollector {
         };
     }
 
-    pub fn generate_csv(&self, base_dir: &Path, account_name: &str) -> Result<PathBuf> {
-        let date_str = Utc::now().format("%Y-%m-%d").to_string();
-        let filename = format!("contacts_{}_{}.csv", account_name, date_str);
-        let filepath = base_dir.join(&filename);
+    pub fn generate_csv(&self, contacts_dir: &Path, account_name: &str) -> Result<PathBuf> {
+        let safe_name = account_name.replace(['/', '\\', ':'], "_");
+        let filepath = contacts_dir.join(format!("{}.csv", safe_name));
 
-        let mut writer = csv::Writer::from_path(&filepath)?;
-        writer.write_record(["Name", "Email", "Type", "Source", "Notes"])?;
+        // UTF-8 BOM required by Thunderbird on Windows for correct encoding detection
+        let file = fs::File::create(&filepath)?;
+        let mut bom_writer = std::io::BufWriter::new(file);
+        std::io::Write::write_all(&mut bom_writer, b"\xEF\xBB\xBF")?;
+        let mut writer = csv::Writer::from_writer(bom_writer);
+        writer.write_record(["First Name", "Last Name", "Display Name", "Email", "Notes"])?;
 
         let categories = [
             (&self.direct, "Direct"),
@@ -111,7 +114,7 @@ impl ContactsCollector {
 
         for (contacts, contact_type) in categories {
             for contact in contacts {
-                let name = contact
+                let display_name: String = contact
                     .split('@')
                     .next()
                     .unwrap_or("")
@@ -127,12 +130,16 @@ impl ContactsCollector {
                     .collect::<Vec<_>>()
                     .join(" ");
 
+                let mut parts = display_name.splitn(2, ' ');
+                let first_name = parts.next().unwrap_or("").to_string();
+                let last_name = parts.next().unwrap_or("").to_string();
+
                 writer.write_record([
-                    &name,
+                    &first_name,
+                    &last_name,
+                    &display_name,
                     contact,
-                    contact_type,
-                    account_name,
-                    &format!("Collected from {} emails", account_name),
+                    &format!("{} - {}", account_name, contact_type),
                 ])?;
             }
         }
@@ -232,13 +239,17 @@ pub fn email_already_exported(
 }
 
 /// Check if an email should be skipped based on its raw headers alone.
-fn should_skip_from_headers(raw_headers: &[u8], export_dir: &Path) -> bool {
+/// Also returns the email analysis so callers can collect contacts without re-parsing.
+fn should_skip_from_headers(
+    raw_headers: &[u8],
+    export_dir: &Path,
+) -> (bool, Option<EmailAnalysis>) {
     if raw_headers.is_empty() {
-        return false;
+        return (false, None);
     }
     let mail = match mailparse::parse_mail(raw_headers) {
         Ok(m) => m,
-        Err(_) => return false,
+        Err(_) => return (false, None),
     };
     let from_field = mail.headers.get_first_value("From").unwrap_or_default();
     let to_field = mail.headers.get_first_value("To").unwrap_or_default();
@@ -257,7 +268,9 @@ fn should_skip_from_headers(raw_headers: &[u8], export_dir: &Path) -> bool {
         "no-subject".to_string()
     };
 
-    email_already_exported(&date_str, &sender_short, &recipient_short, &subject_hash, export_dir)
+    let skip = email_already_exported(&date_str, &sender_short, &recipient_short, &subject_hash, export_dir);
+    let analysis = analyze_email_type(&mail);
+    (skip, Some(analysis))
 }
 
 /// Parse email date string to DateTime.
@@ -891,11 +904,18 @@ impl ImapExporter {
                             if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
                                 break;
                             }
-                            if should_skip_from_headers(
+                            let (skip, analysis) = should_skip_from_headers(
                                 message.header().unwrap_or(&[]),
                                 &export_directory,
-                            ) {
+                            );
+                            if skip {
                                 skip_set.insert(message.message);
+                                // Collect contacts from skipped emails too
+                                if let (Some(collector), Some(a)) = (contacts_collector.as_deref_mut(), analysis) {
+                                    for contact in a.contacts {
+                                        collector.add(&a.email_type, contact);
+                                    }
+                                }
                             }
                         }
                         let skipped = skip_set.len();
@@ -1075,10 +1095,16 @@ impl ImapExporter {
                 }
             }
 
-            // Generate contacts file if enabled
+            // Generate contacts file if enabled — centralized in _local/contacts/
             if let Some(collector) = contacts_collector {
-                let base_dir = PathBuf::from(&self.account.export_directory);
-                let filepath = collector.generate_csv(&base_dir, &self.account.name)?;
+                let export_dir = PathBuf::from(&self.account.export_directory);
+                let contacts_dir = export_dir
+                    .parent()
+                    .unwrap_or(&export_dir)
+                    .join("_local")
+                    .join("contacts");
+                fs::create_dir_all(&contacts_dir)?;
+                let filepath = collector.generate_csv(&contacts_dir, &self.account.name)?;
                 println!("Generated contacts file: {}", filepath.display());
             }
 
