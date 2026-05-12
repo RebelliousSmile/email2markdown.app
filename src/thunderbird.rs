@@ -256,6 +256,7 @@ fn default_ignored_folders(name: &str) -> Vec<String> {
             "[Gmail]/Trash".to_string(),
             "[Gmail]/All Mail".to_string(),
             "[Gmail]/Drafts".to_string(),
+            "[Gmail]/Important".to_string(),
         ]
     } else if name_lower.contains("outlook") || name_lower.contains("hotmail") {
         vec![
