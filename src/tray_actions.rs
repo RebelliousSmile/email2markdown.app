@@ -106,7 +106,7 @@ fn run_export(
     on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
     cancel_token: Arc<AtomicBool>,
 ) -> Result<String> {
-    dotenv::from_path(config::env_file_path()).ok();
+    dotenvy::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
 
@@ -204,7 +204,7 @@ fn run_sort(
     account_name: &str,
     on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
 ) -> Result<(PathBuf, usize)> {
-    dotenv::from_path(config::env_file_path()).ok();
+    dotenvy::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
 
@@ -483,7 +483,7 @@ fn run_fix_yaml(
     account_name: &str,
     on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
 ) -> Result<String> {
-    dotenv::from_path(config::env_file_path()).ok();
+    dotenvy::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
 
@@ -548,7 +548,7 @@ fn run_fix_html(
     account_name: &str,
     on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
 ) -> Result<String> {
-    dotenv::from_path(config::env_file_path()).ok();
+    dotenvy::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
 
@@ -569,7 +569,7 @@ fn run_fix_html(
 
 /// Get the list of configured accounts.
 pub fn get_account_names() -> Result<Vec<String>> {
-    dotenv::from_path(config::env_file_path()).ok();
+    dotenvy::from_path(config::env_file_path()).ok();
 
     let config_path = config::accounts_yaml_path();
 

@@ -151,7 +151,7 @@ enum Commands {
 
 fn main() -> Result<()> {
     // Load .env from the platform config directory
-    dotenv::from_path(config::env_file_path()).ok();
+    dotenvy::from_path(config::env_file_path()).ok();
 
     let cli = Cli::parse();
 

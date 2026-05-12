@@ -630,7 +630,8 @@ pub fn write_passwords_to_env(
         };
 
         let env_key = format!("{}_PASSWORD", crate::config::env_var_name(&account.name));
-        let env_line = format!("{}={}", env_key, pw.password);
+        let escaped = pw.password.replace('\'', "'\\''");
+        let env_line = format!("{}='{}'", env_key, escaped);
         let key_prefix = format!("{}=", env_key);
 
         if let Some(pos) = lines.iter().position(|l| l.starts_with(&key_prefix)) {
