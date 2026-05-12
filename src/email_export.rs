@@ -1030,11 +1030,6 @@ impl ImapExporter {
                 println!("Exporting {} ...", folder.display);
 
                 let stats = self.export_folder(&folder, contacts_collector.as_mut(), cancel_token)?;
-                println!(
-                    "  {} exported, {} skipped, {} errors",
-                    stats.exported, stats.skipped, stats.errors
-                );
-
                 results.insert(folder.display, stats);
 
                 if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {

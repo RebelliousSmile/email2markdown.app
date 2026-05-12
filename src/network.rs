@@ -137,20 +137,20 @@ impl ProgressIndicator {
     pub fn finish(&self) {
         if self.show_percentage && self.total > 0 {
             eprintln!(
-                "\r  {} [{}] {}/{} (100%)",
+                "\x1B[2K\r  {} [{}] {}/{} (100%)",
                 self.label,
                 "=".repeat(30),
                 self.total,
                 self.total
             );
         } else {
-            eprintln!("\r  {} {} - Done", self.label, self.current);
+            eprintln!("\x1B[2K\r  {} {} - Done", self.label, self.current);
         }
     }
 
     /// Finish with custom message
     pub fn finish_with_message(&self, msg: &str) {
-        eprintln!("\r  {} - {}", self.label, msg);
+        eprintln!("\x1B[2K\r  {} - {}", self.label, msg);
     }
 }
 
