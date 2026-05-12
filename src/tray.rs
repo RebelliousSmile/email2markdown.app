@@ -27,6 +27,7 @@ use crate::config::{self, settings_path, AccountBehavior, RawAccount, Settings};
 use crate::progress::ProgressUpdate;
 use crate::sort_emails::{apply_report, EmailSummary, SortReport};
 use crate::tray_actions::{self, action_open_config, ActionResult};
+use crate::updater;
 
 type CloseCb = Box<dyn FnOnce() + Send>;
 type ActionCb = Box<dyn FnOnce() + Send>;
@@ -50,6 +51,8 @@ pub enum AppCommand {
     OpenConfig {
         sender: Sender<ActionResult>,
     },
+    OpenUpdate,
+    UpdateMsg(String),
     /// Forwarded by the bridge thread that drains `progress_rx`.
     ProgressUpdate {
         window_id: WindowId,
@@ -93,14 +96,25 @@ struct ConfigState {
     window: Window,
 }
 
+/// Per-update-window state. Same drop-order discipline as `ProgressState`.
+struct UpdateState {
+    webview: WebView,
+    #[allow(dead_code)]
+    window: Window,
+}
+
 enum WState {
     Progress(ProgressState),
     Sort(#[allow(dead_code)] SortState),
     Config(#[allow(dead_code)] ConfigState),
+    Update(UpdateState),
 }
 
 /// Prevents duplicate config windows from opening simultaneously.
 static CONFIG_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// Prevents duplicate update windows from opening simultaneously.
+static UPDATE_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 
 static APP_PROXY: OnceLock<EventLoopProxy<AppCommand>> = OnceLock::new();
 
@@ -119,6 +133,7 @@ mod menu_ids {
     pub const CHOOSE_EXPORT_DIR: &str = "choose_export_dir";
     pub const OPEN_CONFIG: &str = "open_config";
     pub const OPEN_DOCUMENTATION: &str = "open_documentation";
+    pub const UPDATE: &str = "update";
     pub const QUIT: &str = "quit";
     pub const EXPORT_PREFIX: &str = "export_";
     pub const SORT_PREFIX: &str = "sort_";
@@ -253,6 +268,36 @@ pub fn run_tray() -> Result<()> {
                     }
                 }
             }
+            Event::UserEvent(AppCommand::OpenUpdate) => {
+                if UPDATE_WINDOW_OPEN
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    // Already open — ignore.
+                } else {
+                    match build_update_window(target, &proxy) {
+                        Ok((window, webview, window_id)) => {
+                            windows.insert(window_id, WState::Update(UpdateState { webview, window }));
+                        }
+                        Err(e) => {
+                            UPDATE_WINDOW_OPEN.store(false, Ordering::Release);
+                            eprintln!("Fenêtre de mise à jour : {:#}", e);
+                        }
+                    }
+                }
+            }
+            Event::UserEvent(AppCommand::UpdateMsg(msg)) => {
+                for state in windows.values() {
+                    if let WState::Update(update_state) = state {
+                        // Serialize the JSON string as a JS string literal (handles all escapes).
+                        if let Ok(js_str) = serde_json::to_string(&msg) {
+                            let js = format!("window_msg({})", js_str);
+                            let _ = update_state.webview.evaluate_script(&js);
+                        }
+                        break;
+                    }
+                }
+            }
             Event::UserEvent(AppCommand::OpenSort {
                 report_path,
                 account,
@@ -282,8 +327,14 @@ pub fn run_tray() -> Result<()> {
                 }
             }
             Event::UserEvent(AppCommand::CloseWindow { window_id }) => {
-                if let Some(WState::Config(_)) = windows.remove(&window_id) {
-                    CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
+                match windows.remove(&window_id) {
+                    Some(WState::Config(_)) => {
+                        CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
+                    }
+                    Some(WState::Update(_)) => {
+                        UPDATE_WINDOW_OPEN.store(false, Ordering::Release);
+                    }
+                    _ => {}
                 }
             }
             Event::WindowEvent {
@@ -299,6 +350,9 @@ pub fn run_tray() -> Result<()> {
                 Some(WState::Sort(_)) => {}
                 Some(WState::Config(_)) => {
                     CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
+                }
+                Some(WState::Update(_)) => {
+                    UPDATE_WINDOW_OPEN.store(false, Ordering::Release);
                 }
                 None => {}
             },
@@ -596,6 +650,106 @@ fn build_config_window(
     Ok((window, webview, window_id))
 }
 
+// ── Update window ─────────────────────────────────────────────────────────────
+
+/// Build an update window inline on the main event loop thread.
+fn build_update_window(
+    target: &EventLoopWindowTarget<AppCommand>,
+    proxy: &EventLoopProxy<AppCommand>,
+) -> Result<(Window, WebView, WindowId)> {
+    let html = include_str!("../assets/update_window.html");
+
+    let window = WindowBuilder::new()
+        .with_title("Email to Markdown \u{2014} Mise \u{00e0} jour")
+        .with_inner_size(LogicalSize::new(700.0f64, 500.0f64))
+        .build(target)
+        .context("failed to create update window")?;
+    window.set_focus();
+    let window_id = window.id();
+
+    let proxy_ipc = proxy.clone();
+    let webview = WebViewBuilder::new(&window)
+        .with_html(html)
+        .with_ipc_handler(move |req: wry::http::Request<String>| {
+            let body = req.body().clone();
+            let parsed: serde_json::Value = match serde_json::from_str(&body) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            if parsed.get("action").and_then(|v| v.as_str()) == Some("update-confirm") {
+                if let Some(asset_url) = parsed.get("asset_url").and_then(|v| v.as_str()) {
+                    let asset_url = asset_url.to_string();
+                    let proxy_dl = proxy_ipc.clone();
+                    thread::spawn(move || {
+                        let result = updater::download_and_apply(&asset_url, |msg| {
+                            let json = serde_json::json!({ "type": "msg", "text": msg }).to_string();
+                            let _ = proxy_dl.send_event(AppCommand::UpdateMsg(json));
+                        });
+                        match result {
+                            Ok(()) => {
+                                let json = serde_json::json!({
+                                    "type": "msg",
+                                    "text": "Mise à jour terminée — veuillez relancer l'application."
+                                })
+                                .to_string();
+                                let _ = proxy_dl.send_event(AppCommand::UpdateMsg(json));
+                                std::thread::sleep(std::time::Duration::from_millis(300));
+                                std::process::exit(0);
+                            }
+                            Err(e) => {
+                                let json = serde_json::json!({
+                                    "type": "msg",
+                                    "text": format!("Erreur : {:#}", e)
+                                })
+                                .to_string();
+                                let _ = proxy_dl.send_event(AppCommand::UpdateMsg(json));
+                            }
+                        }
+                    });
+                }
+            }
+        })
+        .build()
+        .context("failed to create update webview")?;
+
+    let proxy_check = proxy.clone();
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    thread::spawn(move || {
+        match updater::check_update(&current_version) {
+            Ok(None) => {
+                let json = serde_json::json!({
+                    "type": "check_result",
+                    "current": current_version,
+                    "latest": serde_json::Value::Null
+                })
+                .to_string();
+                let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
+            }
+            Ok(Some(release)) => {
+                let json = serde_json::json!({
+                    "type": "check_result",
+                    "current": current_version,
+                    "latest": release.tag_name,
+                    "body": release.body,
+                    "asset_url": release.asset_url
+                })
+                .to_string();
+                let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
+            }
+            Err(e) => {
+                let json = serde_json::json!({
+                    "type": "msg",
+                    "text": format!("Erreur : {:#}", e)
+                })
+                .to_string();
+                let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
+            }
+        }
+    });
+
+    Ok((window, webview, window_id))
+}
+
 /// Parse a config IPC message and act on it synchronously.
 ///
 /// Returns `(Option<ActionResult>, bool)` — the bool is `should_close`.
@@ -867,6 +1021,15 @@ fn create_menu() -> Result<Menu> {
         no_accel.clone(),
     ));
 
+    let _ = outils_submenu.append(&PredefinedMenuItem::separator());
+
+    let _ = outils_submenu.append(&MenuItem::with_id(
+        menu_ids::UPDATE,
+        "Mise à jour…",
+        true,
+        no_accel.clone(),
+    ));
+
     let _ = outils_submenu.append(&MenuItem::with_id(
         menu_ids::OPEN_DOCUMENTATION,
         "Documentation",
@@ -902,6 +1065,11 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
                 sender: result_sender.clone(),
             }) {
                 eprintln!("Failed to open config window: {:#}", e);
+            }
+        }
+        menu_ids::UPDATE => {
+            if let Err(e) = send_command(AppCommand::OpenUpdate) {
+                eprintln!("Failed to open update window: {:#}", e);
             }
         }
         menu_ids::OPEN_DOCUMENTATION => {
