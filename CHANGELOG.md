@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-05-12
+
+### Added
+
+- Settings GUI: per-account behavior overrides (organize by type, delete after export, cleanup empty dirs, skip existing, collect contacts, skip signature images, quote depth) in the Accounts tab.
+- Sort: output of `sort-apply` now lands in a configurable `_local/` subfolder under the export base directory, keeping account folders and processing folders cleanly separated.
+
+### Fixed
+
+- Tray: all GUI windows (progress, sort review, settings) now run on the main-thread `tao` EventLoop instead of dedicated OS threads, eliminating tray freezes on Windows caused by per-thread `EventLoop` teardown.
+- Tray: sort review window opens immediately when the scan completes — progress window closes automatically instead of requiring a manual "Fermer" click.
+- Tray: "Fermer" and "Annuler" buttons in progress and sort review windows now work correctly (replaced non-functional `window.close()` with WebView2 IPC).
+- Tray: stale proxy cleanup that incorrectly cleared newer window proxies on re-open.
+- Export: Gmail "All Mail" folder is now discovered via RFC 6154 `\All` special-use attribute with locale-aware name fallback, fixing `[NONEXISTENT]` errors on non-English Gmail accounts.
+- Cleaner: URL warnings suppressed for fragment-only anchors (`#`) and Markdown links with a title attribute (`[text](url "title")`); warning is now reserved for genuinely malformed absolute URLs.
+
+### Changed
+
+- Tray: `tray_progress_window`, `tray_sort_window`, and `tray_config_window` modules removed; window logic consolidated into `tray.rs`.
+
 ## [0.3.0] - 2026-04-16
 
 ### Added
