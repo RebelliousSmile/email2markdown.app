@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows x86_64
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('Cargo.toml') }}
+          restore-keys: windows-cargo-
+
+      - name: Build release (tray)
+        run: cargo build --release --features tray
+
+      - name: Rename binary
+        shell: pwsh
+        run: Copy-Item target\release\email-to-markdown.exe "email-to-markdown-${{ github.ref_name }}-windows-x86_64.exe"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: email-to-markdown-${{ github.ref_name }}-windows-x86_64.exe
+          generate_release_notes: false
