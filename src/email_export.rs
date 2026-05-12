@@ -706,10 +706,46 @@ impl ImapExporter {
     }
 
     fn expunge_gmail_all_mail(&mut self) -> Result<()> {
+        let raw_name = self.find_gmail_all_mail_folder()?;
         let session = self.session.as_mut().context("Not connected")?;
-        session.select("[Gmail]/All Mail").context("select [Gmail]/All Mail")?;
-        session.expunge().context("expunge [Gmail]/All Mail")?;
+        session
+            .select(&raw_name)
+            .with_context(|| format!("select {}", raw_name))?;
+        session
+            .expunge()
+            .with_context(|| format!("expunge {}", raw_name))?;
         Ok(())
+    }
+
+    /// Find the Gmail "All Mail" mailbox by SPECIAL-USE `\All` flag (RFC 6154),
+    /// falling back to known localized names for servers that omit SPECIAL-USE.
+    fn find_gmail_all_mail_folder(&mut self) -> Result<String> {
+        let session = self.session.as_mut().context("Not connected")?;
+        let folders = session
+            .list(None, Some("*"))
+            .context("list folders for \\All discovery")?;
+
+        if let Some(f) = folders
+            .iter()
+            .find(|f| f.attributes().contains(&NameAttribute::All))
+        {
+            return Ok(f.name().to_string());
+        }
+
+        const KNOWN: &[&str] = &[
+            "[Gmail]/All Mail",
+            "[Gmail]/Tous les messages",
+            "[Google Mail]/All Mail",
+        ];
+        for candidate in KNOWN {
+            if folders.iter().any(|f| f.name() == *candidate) {
+                return Ok((*candidate).to_string());
+            }
+        }
+
+        anyhow::bail!(
+            "Gmail \\All mailbox not found (SPECIAL-USE missing and no known name match)"
+        )
     }
 
     /// List all folders.
