@@ -890,7 +890,8 @@ impl ImapExporter {
             };
 
             // [3] Progress indicator
-            let mut progress = ProgressIndicator::new(&folder.display, filtered_uids.len());
+            let total_to_process = filtered_uids.len();
+            let mut progress = ProgressIndicator::new(&folder.display, total_to_process);
             let mut stats = ExportStats::default();
             stats.skipped += pre_skipped;
 
@@ -1031,9 +1032,6 @@ impl ImapExporter {
                 }
 
                 println!("Exporting {} ...", folder.display);
-                if let Some(s) = on_status {
-                    s("Récupération des en-têtes…");
-                }
 
                 let stats = self.export_folder(&folder, contacts_collector.as_mut(), cancel_token)?;
                 if let Some(s) = on_status {

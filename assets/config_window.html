@@ -39,6 +39,17 @@
     margin-bottom: 16px;
     padding: 16px 20px;
   }
+  .behavior-group {
+    font-size: 11px;
+    font-weight: 600;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 14px 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #eee;
+  }
+  .behavior-group:first-child { margin-top: 0; }
   .section-title {
     font-size: 12px;
     font-weight: 600;
@@ -349,6 +360,7 @@
 
     <div class="section">
       <div class="section-title">Comportement par défaut</div>
+      <div class="behavior-group">Export</div>
       <div class="field">
         <label for="quote-depth">Profondeur des citations</label>
         <input type="number" id="quote-depth" min="0" step="1" value="1">
@@ -375,6 +387,7 @@
         <label for="cleanup-empty-dirs">Nettoyer les dossiers vides</label>
         <input type="checkbox" id="cleanup-empty-dirs">
       </div>
+      <div class="behavior-group">Tri</div>
       <div class="field">
         <label for="organize-by-type">Organiser par type</label>
         <input type="checkbox" id="organize-by-type">
@@ -416,30 +429,7 @@
         </div>
         <fieldset class="acct-behavior-fieldset">
           <legend class="acct-behavior-legend">Comportement</legend>
-          <div class="acct-field">
-            <label for="acct-organize-by-type">Organiser par type</label>
-            <select id="acct-organize-by-type">
-              <option value="">Hériter</option>
-              <option value="true">Oui</option>
-              <option value="false">Non</option>
-            </select>
-          </div>
-          <div class="acct-field">
-            <label for="acct-delete-after-export">Supprimer après export</label>
-            <select id="acct-delete-after-export">
-              <option value="">Hériter</option>
-              <option value="true">Oui</option>
-              <option value="false">Non</option>
-            </select>
-          </div>
-          <div class="acct-field">
-            <label for="acct-cleanup-empty-dirs">Nettoyer dossiers vides</label>
-            <select id="acct-cleanup-empty-dirs">
-              <option value="">Hériter</option>
-              <option value="true">Oui</option>
-              <option value="false">Non</option>
-            </select>
-          </div>
+          <div class="behavior-group">Export</div>
           <div class="acct-field">
             <label for="acct-skip-existing">Ignorer les existants</label>
             <select id="acct-skip-existing">
@@ -465,8 +455,33 @@
             </select>
           </div>
           <div class="acct-field">
+            <label for="acct-delete-after-export">Supprimer après export</label>
+            <select id="acct-delete-after-export">
+              <option value="">Hériter</option>
+              <option value="true">Oui</option>
+              <option value="false">Non</option>
+            </select>
+          </div>
+          <div class="acct-field">
+            <label for="acct-cleanup-empty-dirs">Nettoyer dossiers vides</label>
+            <select id="acct-cleanup-empty-dirs">
+              <option value="">Hériter</option>
+              <option value="true">Oui</option>
+              <option value="false">Non</option>
+            </select>
+          </div>
+          <div class="acct-field">
             <label for="acct-quote-depth">Profondeur citations</label>
             <input type="number" id="acct-quote-depth" min="0" placeholder="Hériter (vide)">
+          </div>
+          <div class="behavior-group">Tri</div>
+          <div class="acct-field">
+            <label for="acct-organize-by-type">Organiser par type</label>
+            <select id="acct-organize-by-type">
+              <option value="">Hériter</option>
+              <option value="true">Oui</option>
+              <option value="false">Non</option>
+            </select>
           </div>
         </fieldset>
         <div class="acct-error" id="acct-error"></div>
