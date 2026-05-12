@@ -35,6 +35,7 @@ type ActionCb = Box<dyn FnOnce() + Send>;
 pub enum AppCommand {
     OpenProgress {
         action_name: String,
+        warning: Option<String>,
         progress_rx: mpsc::Receiver<ProgressUpdate>,
         on_close: Option<CloseCb>,
         error_action: Option<ActionCb>,
@@ -186,12 +187,13 @@ pub fn run_tray() -> Result<()> {
         match event {
             Event::UserEvent(AppCommand::OpenProgress {
                 action_name,
+                warning,
                 progress_rx,
                 on_close,
                 error_action,
                 sender,
                 cancel_token,
-            }) => match build_progress_window(target, &proxy, &action_name, cancel_token) {
+            }) => match build_progress_window(target, &proxy, &action_name, warning.as_deref(), cancel_token) {
                 Ok((window, webview, window_id)) => {
                     windows.insert(
                         window_id,
@@ -312,6 +314,7 @@ fn build_progress_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
     action_name: &str,
+    warning: Option<&str>,
     cancel_token: Option<Arc<AtomicBool>>,
 ) -> Result<(Window, WebView, WindowId)> {
     let cancel_html = if cancel_token.is_some() {
@@ -319,9 +322,14 @@ fn build_progress_window(
     } else {
         ""
     };
+    let warning_html = match warning {
+        Some(msg) => format!(r#"<div class="warning-badge">⚠ {}</div>"#, msg),
+        None => String::new(),
+    };
     let html_template = include_str!("../assets/progress_window.html");
     let html = html_template
         .replace("__ACTION_NAME__", action_name)
+        .replace("__WARNING__", &warning_html)
         .replace("__HAS_CANCEL__", cancel_html);
 
     let window = WindowBuilder::new()

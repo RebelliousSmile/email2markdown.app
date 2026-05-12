@@ -103,10 +103,25 @@
   }
 
   #cancel:hover { background: #eee; }
+
+  .warning-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #fff8e1;
+    border: 1px solid #f59e0b;
+    color: #92400e;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    margin-bottom: 14px;
+  }
 </style>
 </head>
 <body>
   <h2 id="title">__ACTION_NAME__</h2>
+  __WARNING__
   <p id="status">Démarrage…</p>
   <div id="bar"><div id="fill"></div></div>
   <p id="last-status">Récupération des en-têtes…</p>

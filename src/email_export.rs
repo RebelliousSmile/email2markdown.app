@@ -895,7 +895,7 @@ impl ImapExporter {
             let uids_vec: Vec<_> = uids.into_iter().collect();
 
             // Pre-filter: batch fetch headers, skip already-exported without downloading body
-            let (filtered_uids, pre_skipped) = if self.account.skip_existing && !uids_vec.is_empty() {
+            let (filtered_uids, pre_skipped, already_exported_uids) = if self.account.skip_existing && !uids_vec.is_empty() {
                 let seq_set = uids_vec.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
                 match session.fetch(&seq_set, "RFC822.HEADER") {
                     Ok(headers) => {
@@ -919,22 +919,23 @@ impl ImapExporter {
                             }
                         }
                         let skipped = skip_set.len();
+                        let already_exported: Vec<u32> = skip_set.iter().copied().collect();
                         let filtered = uids_vec
                             .iter()
                             .filter(|u| !skip_set.contains(u))
                             .copied()
                             .collect::<Vec<_>>();
-                        (filtered, skipped)
+                        (filtered, skipped, already_exported)
                     }
                     Err(e) => {
                         if self.debug_mode {
                             eprintln!("  Header pre-fetch failed, falling back to full fetch: {:#}", e);
                         }
-                        (uids_vec, 0)
+                        (uids_vec, 0, vec![])
                     }
                 }
             } else {
-                (uids_vec, 0)
+                (uids_vec, 0, vec![])
             };
 
             // [3] Progress indicator
@@ -1022,6 +1023,18 @@ impl ImapExporter {
 
                 // [3] Update progress
                 progress.inc();
+            }
+
+            // Mark already-exported (skipped) messages for deletion too.
+            // They were safely archived in a previous run; with delete_after_export
+            // the intent is to clean up the server, not just newly exported messages.
+            if self.account.delete_after_export && !already_exported_uids.is_empty() {
+                let seq_set = already_exported_uids
+                    .iter()
+                    .map(|u| u.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                session.store(&seq_set, "+FLAGS (\\Deleted)")?;
             }
 
             // [3] Finish progress indicator

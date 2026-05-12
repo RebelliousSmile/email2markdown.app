@@ -56,8 +56,22 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
     let cancel_token = Arc::new(AtomicBool::new(false));
     let cancel_token_worker = Arc::clone(&cancel_token);
 
+    let delete_warning = {
+        dotenvy::from_path(config::env_file_path()).ok();
+        Config::load(&config::accounts_yaml_path())
+            .ok()
+            .and_then(|cfg| cfg.get_account(&account_name).cloned())
+            .map(|acct| acct.delete_after_export)
+            .unwrap_or(false)
+    };
+
     if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
         action_name: "Export".to_string(),
+        warning: if delete_warning {
+            Some("Les emails seront supprimés du serveur après export".to_string())
+        } else {
+            None
+        },
         progress_rx,
         on_close: None,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
@@ -153,6 +167,7 @@ pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
 
     if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
         action_name: "Sort".to_string(),
+        warning: None,
         progress_rx,
         on_close: None,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
@@ -264,6 +279,7 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
 
     if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
         action_name: "Import Thunderbird".to_string(),
+        warning: None,
         progress_rx,
         on_close,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
@@ -443,6 +459,7 @@ pub fn action_fix_yaml(account_name: String, result_sender: Sender<ActionResult>
 
     if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
         action_name: "Fix YAML".to_string(),
+        warning: None,
         progress_rx,
         on_close: None,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
@@ -508,6 +525,7 @@ pub fn action_fix_html(account_name: String, result_sender: Sender<ActionResult>
 
     if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
         action_name: "Fix HTML".to_string(),
+        warning: None,
         progress_rx,
         on_close: None,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
