@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-05-12
+
+### Added
+
+- Config GUI: "Comportement" settings split into two labeled subsections — "Export" (organize by type, delete after export, cleanup empty dirs, skip existing, collect contacts, skip signature images, quote depth) and "Tri" (organize by type for sort) — in both global defaults and per-account fieldsets.
+
+### Fixed
+
+- IMAP auth: automatically fall back to `AUTHENTICATE PLAIN` (SASL) when the server rejects the plain `LOGIN` command. Accommodates servers such as alwaysdata that disable LOGIN and require SASL mechanisms.
+- Config: migrated from `dotenv` to `dotenvy` (maintained fork). `dotenv` 0.15 silently truncates passwords containing `#` (treated as comment) and drops `$` inside double-quoted values (variable substitution). Passwords written by `--extract-passwords` are now quoted with single quotes to prevent all substitution.
+- Thunderbird import: `[Gmail]/Important` added to the default ignored folders list for Gmail accounts.
+
 ## [0.7.0] - 2026-05-12
 
 ### Added
