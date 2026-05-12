@@ -4,4 +4,6 @@ pub enum ProgressUpdate {
     Indeterminate { message: String },
     Done { summary: String },
     Error { message: String, action_label: Option<String> },
+    /// Close the progress window immediately without showing a summary.
+    AutoClose,
 }

@@ -203,6 +203,10 @@ pub fn run_tray() -> Result<()> {
                     let bridge_proxy = proxy.clone();
                     thread::spawn(move || {
                         for update in progress_rx {
+                            if matches!(update, ProgressUpdate::AutoClose) {
+                                let _ = bridge_proxy.send_event(AppCommand::CloseWindow { window_id });
+                                break;
+                            }
                             let terminal = matches!(
                                 update,
                                 ProgressUpdate::Done { .. } | ProgressUpdate::Error { .. }
@@ -322,8 +326,10 @@ fn build_progress_window(
     let webview = WebViewBuilder::new(&window)
         .with_html(html)
         .with_ipc_handler(move |msg| {
-            if msg.body() == "action" {
-                let _ = proxy_ipc.send_event(AppCommand::ActionRequested { window_id });
+            match msg.body().as_str() {
+                "action" => { let _ = proxy_ipc.send_event(AppCommand::ActionRequested { window_id }); }
+                "close" => { let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id }); }
+                _ => {}
             }
         })
         .build()
@@ -734,6 +740,8 @@ fn format_progress_js(update: &ProgressUpdate) -> String {
                 action_label.as_deref().unwrap_or("")
             )
         }
+        // AutoClose is consumed by the bridge thread before reaching here.
+        ProgressUpdate::AutoClose => String::new(),
     }
 }
 

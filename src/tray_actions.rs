@@ -134,23 +134,16 @@ fn run_export(
 /// Runs in a separate thread to avoid blocking the UI.
 pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
-    let (result_tx, result_rx) = mpsc::sync_channel::<ActionResult>(1);
-
-    let sender_for_error = result_sender.clone();
-    let on_close = Some(Box::new(move || {
-        if let Ok(r) = result_rx.try_recv() {
-            let _ = result_sender.send(r);
-        }
-    }) as Box<dyn FnOnce() + Send>);
+    let result_sender_worker = result_sender.clone();
 
     if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
         action_name: "Sort".to_string(),
         progress_rx,
-        on_close,
+        on_close: None,
         error_action: Some(Box::new(|| { let _ = action_open_config(); })),
-        sender: sender_for_error.clone(),
+        sender: result_sender.clone(),
     }) {
-        let _ = sender_for_error.send(ActionResult::Error(format!(
+        let _ = result_sender.send(ActionResult::Error(format!(
             "Fenêtre de progression : {}",
             e
         )));
@@ -169,13 +162,12 @@ pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
         match run_sort(&account_name, Some(&on_progress)) {
             Ok((report_path, email_count)) => {
                 if email_count > 0 {
-                    let _ = result_tx.send(ActionResult::SortCompleted {
+                    // Send result directly — progress window closes automatically.
+                    let _ = result_sender_worker.send(ActionResult::SortCompleted {
                         account: account_name,
                         report_path,
                     });
-                    let _ = progress_tx.send(ProgressUpdate::Done {
-                        summary: format!("{} email(s) à réviser", email_count),
-                    });
+                    let _ = progress_tx.send(ProgressUpdate::AutoClose);
                 } else {
                     let _ = progress_tx.send(ProgressUpdate::Done {
                         summary: "Tri terminé — rien à réviser".to_string(),

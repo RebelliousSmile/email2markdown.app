@@ -88,7 +88,7 @@
   <div id="bar"><div id="fill"></div></div>
   <p id="summary"></p>
   <button id="action-btn" hidden style="background:#1e88e5;color:#fff;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-size:14px;margin-right:8px;"></button>
-  <button id="close" onclick="window.close()">Fermer</button>
+  <button id="close" onclick="window.ipc.postMessage('close')">Fermer</button>
 
 <script>
   function step(current, total, message) {
