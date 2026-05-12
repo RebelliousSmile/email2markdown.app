@@ -56,6 +56,16 @@
     100% { transform: translateX(350%); }
   }
 
+  #last-status {
+    font-size: 0.78rem;
+    color: #999;
+    margin-bottom: 12px;
+    min-height: 1.1em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   #summary {
     display: none;
     font-size: 0.9rem;
@@ -99,6 +109,7 @@
   <h2 id="title">__ACTION_NAME__</h2>
   <p id="status">Démarrage…</p>
   <div id="bar"><div id="fill"></div></div>
+  <p id="last-status"></p>
   <p id="summary"></p>
   <button id="action-btn" hidden style="background:#1e88e5;color:#fff;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-size:14px;margin-right:8px;"></button>
   __HAS_CANCEL__
@@ -117,9 +128,14 @@
     document.getElementById("status").textContent = message;
   }
 
+  function statusLine(text) {
+    document.getElementById("last-status").textContent = text;
+  }
+
   function finish(summary) {
     document.getElementById("bar").style.display = "none";
     document.getElementById("status").style.display = "none";
+    document.getElementById("last-status").style.display = "none";
     var el = document.getElementById("summary");
     el.textContent = summary;
     el.style.display = "block";
@@ -130,6 +146,7 @@
   function error(message, actionLabel) {
     document.getElementById("bar").style.display = "none";
     document.getElementById("status").style.display = "none";
+    document.getElementById("last-status").style.display = "none";
     var el = document.getElementById("summary");
     el.textContent = message;
     el.classList.add("error-text");

@@ -80,7 +80,13 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
                 message: label.to_string(),
             });
         };
-        match run_export(&account_name, Some(&on_progress), cancel_token_worker) {
+        let progress_tx_status = progress_tx.clone();
+        let on_status = move |text: &str| {
+            let _ = progress_tx_status.send(ProgressUpdate::StatusLine {
+                text: text.to_string(),
+            });
+        };
+        match run_export(&account_name, Some(&on_progress), Some(&on_status), cancel_token_worker) {
             Ok(summary) => {
                 let _ = progress_tx.send(ProgressUpdate::Done { summary });
             }
@@ -97,6 +103,7 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
 fn run_export(
     account_name: &str,
     on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+    on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
     cancel_token: Arc<AtomicBool>,
 ) -> Result<String> {
     dotenv::from_path(config::env_file_path()).ok();
@@ -120,7 +127,7 @@ fn run_export(
     exporter.connect().context("Failed to connect to IMAP server")?;
 
     let results = exporter
-        .export_account(on_progress, Some(cancel_token.as_ref()))
+        .export_account(on_progress, on_status, Some(cancel_token.as_ref()))
         .context("Export failed")?;
 
     exporter.disconnect().ok();

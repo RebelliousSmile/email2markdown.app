@@ -1000,6 +1000,7 @@ impl ImapExporter {
     pub fn export_account(
         &mut self,
         on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+        on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
         cancel_token: Option<&AtomicBool>,
     ) -> Result<HashMap<String, ExportStats>> {
         // Run the existing body in an IIFE so cleanup can run on every exit path.
@@ -1030,6 +1031,12 @@ impl ImapExporter {
                 println!("Exporting {} ...", folder.display);
 
                 let stats = self.export_folder(&folder, contacts_collector.as_mut(), cancel_token)?;
+                if let Some(s) = on_status {
+                    s(&format!(
+                        "{} — {} exportés, {} ignorés, {} erreurs",
+                        folder.display, stats.exported, stats.skipped, stats.errors
+                    ));
+                }
                 results.insert(folder.display, stats);
 
                 if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {

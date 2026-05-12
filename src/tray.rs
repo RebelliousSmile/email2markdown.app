@@ -756,6 +756,9 @@ fn format_progress_js(update: &ProgressUpdate) -> String {
                 action_label.as_deref().unwrap_or("")
             )
         }
+        ProgressUpdate::StatusLine { text } => {
+            format!("statusLine({:?})", text)
+        }
         // AutoClose is consumed by the bridge thread before reaching here.
         ProgressUpdate::AutoClose => String::new(),
     }
