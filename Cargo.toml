@@ -3,6 +3,7 @@ name = "email-to-markdown"
 version = "0.9.0"
 edition = "2021"
 authors = ["FX Guillois"]
+repository = "https://github.com/fxguillois/email-to-markdown"
 description = "Export emails from IMAP accounts to Markdown files with YAML frontmatter"
 license = "MIT"
 keywords = ["email", "imap", "markdown", "export"]
@@ -60,6 +61,18 @@ csv = "1.3"
 thiserror = "1.0"
 anyhow = "1.0"
 
+# HTTP client for update checks (tray only — not needed in CLI mode)
+ureq = { version = "2", features = ["json"], optional = true }
+
+# In-place binary self-replacement (for auto-update, tray only)
+self-replace = { version = "1", optional = true }
+
+# Temporary files (used by updater for atomic binary download)
+tempfile = "3"
+
+# Semver version comparison (tiny pure-Rust, unconditional)
+semver = "1"
+
 # Dynamic library loading (for NSS/Thunderbird password extraction)
 libloading = "0.8"
 
@@ -86,10 +99,9 @@ image = { version = "0.25", optional = true }
 
 [features]
 default = []
-tray = ["tray-icon", "tao", "wry", "rfd", "image"]
+tray = ["tray-icon", "tao", "wry", "rfd", "image", "dep:ureq", "dep:self-replace"]
 
 [dev-dependencies]
-tempfile = "3.10"
 
 [[bin]]
 name = "email-to-markdown"

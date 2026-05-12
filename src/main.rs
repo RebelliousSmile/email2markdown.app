@@ -15,7 +15,7 @@ use email_to_markdown::tray;
 #[derive(Parser)]
 #[command(name = "email-to-markdown")]
 #[command(author = "FX Guillois")]
-#[command(version = "0.1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Export emails from IMAP accounts to Markdown files", long_about = None)]
 struct Cli {
     #[command(subcommand)]
