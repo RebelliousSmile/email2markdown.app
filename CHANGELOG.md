@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-05-12
+
+### Added
+
+- Export: virtual IMAP folders (Junk, Trash, Drafts, All Mail, Starred/Flagged, Important) are now automatically excluded via RFC 6154 SPECIAL-USE attributes, eliminating redundant downloads and locale-specific folder name maintenance.
+- Export: when `skip_existing = true`, all message headers are fetched in a single IMAP batch call before downloading any body. Full RFC 822 fetch is issued only for messages not yet exported, drastically reducing network traffic on re-exports.
+
 ## [0.5.0] - 2026-05-12
 
 ### Added
