@@ -1,22 +1,115 @@
 //! System tray module for Email to Markdown.
 //!
 //! This module provides a system tray icon with a context menu
-//! for easy access to common operations without using the CLI.
+//! and owns the application's single GUI event loop on the main
+//! thread. All windows (progress, sort review, settings) live in
+//! this loop and are routed by `WindowId`.
 
-use std::sync::mpsc;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
+use std::sync::OnceLock;
 use std::thread;
 
 use anyhow::{Context, Result};
-use tao::event::{Event, StartCause};
-use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::dpi::LogicalSize;
+use tao::event::{Event, StartCause, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
+use tao::window::{Window, WindowBuilder, WindowId};
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu, accelerator::Accelerator},
     TrayIcon, TrayIconBuilder,
 };
+use wry::{WebView, WebViewBuilder};
 
-use crate::tray_actions::{
-    self, ActionResult,
-};
+use crate::config::{self, settings_path, AccountBehavior, RawAccount, Settings};
+use crate::progress::ProgressUpdate;
+use crate::sort_emails::{apply_report, EmailSummary, SortReport};
+use crate::tray_actions::{self, action_open_config, ActionResult};
+
+type CloseCb = Box<dyn FnOnce() + Send>;
+type ActionCb = Box<dyn FnOnce() + Send>;
+
+/// Commands routed through the main event loop's user-event channel.
+pub enum AppCommand {
+    OpenProgress {
+        action_name: String,
+        progress_rx: mpsc::Receiver<ProgressUpdate>,
+        on_close: Option<CloseCb>,
+        error_action: Option<ActionCb>,
+        sender: Sender<ActionResult>,
+    },
+    OpenSort {
+        report_path: PathBuf,
+        account: String,
+        sender: Sender<ActionResult>,
+    },
+    OpenConfig {
+        sender: Sender<ActionResult>,
+    },
+    /// Forwarded by the bridge thread that drains `progress_rx`.
+    ProgressUpdate {
+        window_id: WindowId,
+        update: ProgressUpdate,
+    },
+    /// IPC "action" from a progress window → run `error_action` then close.
+    ActionRequested {
+        window_id: WindowId,
+    },
+    /// Programmatic close (e.g. sent by an IPC handler after a save).
+    CloseWindow {
+        window_id: WindowId,
+    },
+}
+
+/// Per-progress-window state. Fields declared in drop order:
+/// callbacks first (cheap), then webview (must release WebView2 before
+/// the parent HWND is destroyed), then window.
+struct ProgressState {
+    on_close: Option<CloseCb>,
+    error_action: Option<ActionCb>,
+    webview: WebView,
+    // Kept alive for its Drop side-effect — webview must drop before window.
+    #[allow(dead_code)]
+    window: Window,
+}
+
+/// Per-sort-window state. Same drop-order discipline as `ProgressState`.
+struct SortState {
+    #[allow(dead_code)]
+    webview: WebView,
+    #[allow(dead_code)]
+    window: Window,
+}
+
+/// Per-config-window state. Same drop-order discipline as `ProgressState`.
+struct ConfigState {
+    #[allow(dead_code)]
+    webview: WebView,
+    #[allow(dead_code)]
+    window: Window,
+}
+
+enum WState {
+    Progress(ProgressState),
+    Sort(#[allow(dead_code)] SortState),
+    Config(#[allow(dead_code)] ConfigState),
+}
+
+/// Prevents duplicate config windows from opening simultaneously.
+static CONFIG_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+
+static APP_PROXY: OnceLock<EventLoopProxy<AppCommand>> = OnceLock::new();
+
+/// Send a command to the main event loop. Returns Err if the loop is not running yet.
+pub fn send_command(cmd: AppCommand) -> Result<()> {
+    APP_PROXY
+        .get()
+        .context("tray event loop not initialised")?
+        .send_event(cmd)
+        .map_err(|_| anyhow::anyhow!("tray event loop closed"))
+}
 
 /// Menu item identifiers.
 mod menu_ids {
@@ -33,49 +126,40 @@ mod menu_ids {
 
 /// Run the system tray application.
 pub fn run_tray() -> Result<()> {
-    // Create event loop
-    let event_loop = EventLoopBuilder::new().build();
+    let event_loop = EventLoopBuilder::<AppCommand>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    APP_PROXY
+        .set(proxy.clone())
+        .map_err(|_| anyhow::anyhow!("APP_PROXY already initialised"))?;
 
-    // Channel for receiving action results
     let (result_sender, result_receiver) = mpsc::channel::<ActionResult>();
-
-    // Menu event receiver
     let menu_channel = MenuEvent::receiver();
 
-    // Tray icon must be created after event loop on some platforms
     let mut tray_icon: Option<TrayIcon> = None;
+    let mut windows: HashMap<WindowId, WState> = HashMap::new();
 
-    // Run the event loop
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Poll;
 
-        match event {
-            Event::NewEvents(StartCause::Init) => {
-                // Create tray icon on init
-                match create_tray_icon() {
-                    Ok(icon) => {
-                        tray_icon = Some(icon);
-                        println!("Tray icon created successfully");
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to create tray icon: {}", e);
-                    }
+        if let Event::NewEvents(StartCause::Init) = event {
+            match create_tray_icon() {
+                Ok(icon) => {
+                    tray_icon = Some(icon);
+                    println!("Tray icon created successfully");
+                }
+                Err(e) => {
+                    eprintln!("Failed to create tray icon: {}", e);
                 }
             }
-            _ => {}
         }
 
-        // Handle menu events
-        if let Ok(event) = menu_channel.try_recv() {
-            eprintln!("[diag] menu event received: '{}'", &event.id.0);
-            handle_menu_event(&event.id.0, result_sender.clone());
+        if let Ok(menu_event) = menu_channel.try_recv() {
+            handle_menu_event(&menu_event.id.0, result_sender.clone());
         }
 
-        // Handle action results (notifications)
         if let Ok(result) = result_receiver.try_recv() {
             match &result {
-                crate::tray_actions::ActionResult::Imported(_) => {
-                    // Rebuild menu so Export/Sort submenus reflect new accounts
+                ActionResult::Imported(_) => {
                     if let Some(ref icon) = tray_icon {
                         match create_menu() {
                             Ok(new_menu) => icon.set_menu(Some(Box::new(new_menu))),
@@ -83,13 +167,14 @@ pub fn run_tray() -> Result<()> {
                         }
                     }
                 }
-                crate::tray_actions::ActionResult::SortCompleted { report_path, account } => {
-                    let sender = result_sender.clone();
-                    let path = report_path.clone();
-                    let account = account.clone();
-                    thread::spawn(move || {
-                        crate::tray_sort_window::open(path, account, sender);
-                    });
+                ActionResult::SortCompleted { report_path, account } => {
+                    if let Err(e) = send_command(AppCommand::OpenSort {
+                        report_path: report_path.clone(),
+                        account: account.clone(),
+                        sender: result_sender.clone(),
+                    }) {
+                        eprintln!("Failed to open sort window: {:#}", e);
+                    }
                 }
                 _ => {
                     show_notification(&result);
@@ -97,24 +182,571 @@ pub fn run_tray() -> Result<()> {
             }
         }
 
-        // Keep the tray icon alive
+        match event {
+            Event::UserEvent(AppCommand::OpenProgress {
+                action_name,
+                progress_rx,
+                on_close,
+                error_action,
+                sender,
+            }) => match build_progress_window(target, &proxy, &action_name) {
+                Ok((window, webview, window_id)) => {
+                    windows.insert(
+                        window_id,
+                        WState::Progress(ProgressState {
+                            on_close,
+                            error_action,
+                            webview,
+                            window,
+                        }),
+                    );
+                    let bridge_proxy = proxy.clone();
+                    thread::spawn(move || {
+                        for update in progress_rx {
+                            let terminal = matches!(
+                                update,
+                                ProgressUpdate::Done { .. } | ProgressUpdate::Error { .. }
+                            );
+                            let _ = bridge_proxy.send_event(AppCommand::ProgressUpdate {
+                                window_id,
+                                update,
+                            });
+                            if terminal {
+                                break;
+                            }
+                        }
+                    });
+                }
+                Err(e) => {
+                    let _ = sender.send(ActionResult::Error(format!(
+                        "Fenêtre de progression : {}",
+                        e
+                    )));
+                }
+            },
+            Event::UserEvent(AppCommand::OpenConfig { sender }) => {
+                if CONFIG_WINDOW_OPEN
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    // Already open — ignore.
+                } else {
+                    match build_config_window(target, &proxy, sender.clone()) {
+                        Ok((window, webview, window_id)) => {
+                            windows.insert(window_id, WState::Config(ConfigState { webview, window }));
+                        }
+                        Err(e) => {
+                            CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
+                            let _ = sender.send(ActionResult::Error(format!(
+                                "Fenêtre de paramètres : {:#}",
+                                e
+                            )));
+                        }
+                    }
+                }
+            }
+            Event::UserEvent(AppCommand::OpenSort {
+                report_path,
+                account,
+                sender,
+            }) => match build_sort_window(target, &proxy, &report_path, &account, sender.clone()) {
+                Ok((window, webview, window_id)) => {
+                    windows.insert(window_id, WState::Sort(SortState { webview, window }));
+                }
+                Err(e) => {
+                    let _ = sender.send(ActionResult::Error(format!(
+                        "Fenêtre de révision : {:#}",
+                        e
+                    )));
+                }
+            },
+            Event::UserEvent(AppCommand::ProgressUpdate { window_id, update }) => {
+                if let Some(WState::Progress(state)) = windows.get(&window_id) {
+                    let js = format_progress_js(&update);
+                    let _ = state.webview.evaluate_script(&js);
+                }
+            }
+            Event::UserEvent(AppCommand::ActionRequested { window_id }) => {
+                if let Some(WState::Progress(mut state)) = windows.remove(&window_id) {
+                    if let Some(f) = state.error_action.take() {
+                        f();
+                    }
+                }
+            }
+            Event::UserEvent(AppCommand::CloseWindow { window_id }) => {
+                if let Some(WState::Config(_)) = windows.remove(&window_id) {
+                    CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
+                }
+            }
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::CloseRequested,
+                ..
+            } => match windows.remove(&window_id) {
+                Some(WState::Progress(mut state)) => {
+                    if let Some(f) = state.on_close.take() {
+                        f();
+                    }
+                }
+                Some(WState::Sort(_)) => {}
+                Some(WState::Config(_)) => {
+                    CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
+                }
+                None => {}
+            },
+            _ => {}
+        }
+
         let _ = &tray_icon;
     });
+}
+
+/// Build a progress window inline on the main event loop thread.
+fn build_progress_window(
+    target: &EventLoopWindowTarget<AppCommand>,
+    proxy: &EventLoopProxy<AppCommand>,
+    action_name: &str,
+) -> Result<(Window, WebView, WindowId)> {
+    let html_template = include_str!("../assets/progress_window.html");
+    let html = html_template.replace("__ACTION_NAME__", action_name);
+
+    let window = WindowBuilder::new()
+        .with_title(format!("En cours — {}", action_name))
+        .with_inner_size(LogicalSize::new(500.0f64, 220.0f64))
+        .build(target)
+        .context("failed to create progress window")?;
+    window.set_focus();
+    let window_id = window.id();
+
+    let proxy_ipc = proxy.clone();
+    let webview = WebViewBuilder::new(&window)
+        .with_html(html)
+        .with_ipc_handler(move |msg| {
+            if msg.body() == "action" {
+                let _ = proxy_ipc.send_event(AppCommand::ActionRequested { window_id });
+            }
+        })
+        .build()
+        .context("failed to create progress webview")?;
+
+    Ok((window, webview, window_id))
+}
+
+/// IPC payload from the sort review window.
+#[derive(serde::Deserialize)]
+struct IpcDecisions {
+    decisions: Vec<IpcDecision>,
+}
+
+#[derive(serde::Deserialize)]
+struct IpcDecision {
+    file: String,
+    action: String,
+}
+
+/// Build a sort review window inline on the main event loop thread.
+///
+/// The IPC handler spawns a worker thread for `apply_report` (I/O-heavy) and
+/// signals window close via `AppCommand::CloseWindow` once the work completes.
+fn build_sort_window(
+    target: &EventLoopWindowTarget<AppCommand>,
+    proxy: &EventLoopProxy<AppCommand>,
+    report_path: &Path,
+    account: &str,
+    sender: Sender<ActionResult>,
+) -> Result<(Window, WebView, WindowId)> {
+    let json = std::fs::read_to_string(report_path)
+        .with_context(|| format!("failed to read report: {}", report_path.display()))?;
+    let report: SortReport =
+        serde_json::from_str(&json).context("failed to parse sort report")?;
+
+    let html_template = include_str!("../assets/sort_review.html");
+    let report_json = serde_json::to_string(&report.categories)
+        .context("failed to serialize report")?;
+    let html = html_template.replace("__REPORT_JSON__", &report_json);
+
+    let window = WindowBuilder::new()
+        .with_title(format!("Révision du tri — {}", account))
+        .with_inner_size(LogicalSize::new(900.0f64, 620.0f64))
+        .build(target)
+        .context("failed to create review window")?;
+    window.set_focus();
+    let window_id = window.id();
+
+    let proxy_ipc = proxy.clone();
+    let report_path_ipc = report_path.to_path_buf();
+    let account_ipc = account.to_string();
+
+    let webview = WebViewBuilder::new(&window)
+        .with_html(html)
+        .with_ipc_handler(move |req: wry::http::Request<String>| {
+            let body = req.body().clone();
+            if body == "cancel" {
+                let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+                return;
+            }
+            let report_path = report_path_ipc.clone();
+            let account = account_ipc.clone();
+            let sender = sender.clone();
+            let proxy = proxy_ipc.clone();
+            thread::spawn(move || {
+                let result = apply_sort_decisions(&body, &report_path, &account)
+                    .unwrap_or_else(|e| {
+                        ActionResult::Error(format!("Erreur d'application : {:#}", e))
+                    });
+                let _ = sender.send(result);
+                let _ = proxy.send_event(AppCommand::CloseWindow { window_id });
+            });
+        })
+        .build()
+        .context("failed to create review webview")?;
+
+    Ok((window, webview, window_id))
+}
+
+/// Parse decisions, rewrite the report, and run `apply_report`. Runs on a worker thread.
+fn apply_sort_decisions(
+    body: &str,
+    report_path: &Path,
+    account: &str,
+) -> Result<ActionResult> {
+    let payload: IpcDecisions =
+        serde_json::from_str(body).context("failed to parse IPC decisions")?;
+
+    let mut new_categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
+    new_categories.insert("delete".to_string(), Vec::new());
+    new_categories.insert("summarize".to_string(), Vec::new());
+    new_categories.insert("keep".to_string(), Vec::new());
+
+    let json = std::fs::read_to_string(report_path)
+        .context("failed to re-read report for apply")?;
+    let mut report: SortReport =
+        serde_json::from_str(&json).context("failed to re-parse report for apply")?;
+
+    let all_emails: HashMap<String, EmailSummary> = report
+        .categories
+        .values()
+        .flatten()
+        .map(|e| (e.file.clone(), e.clone()))
+        .collect();
+
+    for decision in &payload.decisions {
+        match decision.action.as_str() {
+            "delete" | "summarize" | "keep" => {}
+            other => {
+                anyhow::bail!(
+                    "unknown action '{}' in IPC decision for file '{}'",
+                    other,
+                    decision.file
+                );
+            }
+        }
+        if let Some(email) = all_emails.get(&decision.file) {
+            new_categories
+                .entry(decision.action.clone())
+                .or_default()
+                .push(email.clone());
+        }
+    }
+
+    report.categories = new_categories;
+
+    let updated_json = serde_json::to_string_pretty(&report)
+        .context("failed to serialize updated report")?;
+    std::fs::write(report_path, updated_json).with_context(|| {
+        format!("failed to write updated report to {}", report_path.display())
+    })?;
+
+    let settings = Settings::load(&settings_path()).unwrap_or_default();
+    let stats = apply_report(&report, settings.local_folder())
+        .context("failed to apply sort report")?;
+
+    Ok(ActionResult::Success(
+        format!("Tri appliqué — {}", account),
+        format!(
+            "Supprimés : {} | Résumés : {} | Conservés : {}",
+            stats.deleted, stats.moved, stats.skipped
+        ),
+    ))
+}
+
+// ── Config window ────────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct ConfigIpcMessage {
+    action: String,
+    data: Option<serde_json::Value>,
+}
+
+#[derive(serde::Deserialize)]
+struct SettingsData {
+    export_base_dir: Option<String>,
+    defaults: DefaultsData,
+}
+
+#[derive(serde::Deserialize)]
+struct DefaultsData {
+    quote_depth: Option<usize>,
+    skip_existing: Option<bool>,
+    collect_contacts: Option<bool>,
+    skip_signature_images: Option<bool>,
+    delete_after_export: Option<bool>,
+    cleanup_empty_dirs: Option<bool>,
+    organize_by_type: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+struct AccountData {
+    account_name: String,
+    server: String,
+    port: u16,
+    username: String,
+    #[serde(default)]
+    ignored_folders: Vec<String>,
+    #[serde(default)]
+    organize_by_type: Option<bool>,
+    #[serde(default)]
+    delete_after_export: Option<bool>,
+    #[serde(default)]
+    cleanup_empty_dirs: Option<bool>,
+    #[serde(default)]
+    skip_existing: Option<bool>,
+    #[serde(default)]
+    collect_contacts: Option<bool>,
+    #[serde(default)]
+    skip_signature_images: Option<bool>,
+    #[serde(default)]
+    quote_depth: Option<usize>,
+}
+
+/// Build a config window inline on the main event loop thread.
+fn build_config_window(
+    target: &EventLoopWindowTarget<AppCommand>,
+    proxy: &EventLoopProxy<AppCommand>,
+    sender: Sender<ActionResult>,
+) -> Result<(Window, WebView, WindowId)> {
+    let settings_path = config::settings_path();
+    let settings = Settings::load(&settings_path).unwrap_or_default();
+    let accounts_path = config::accounts_yaml_path();
+    let raw_accounts = config::load_raw_accounts(&accounts_path).unwrap_or_default();
+
+    let html_template = include_str!("../assets/config_window.html");
+    let settings_json =
+        serde_json::to_string(&settings).context("failed to serialize settings")?;
+    let accounts_json =
+        serde_json::to_string(&raw_accounts).context("failed to serialize accounts")?;
+    let html = html_template
+        .replace("__SETTINGS_JSON__", &settings_json)
+        .replace("__ACCOUNTS_JSON__", &accounts_json);
+
+    let window = WindowBuilder::new()
+        .with_title("Email to Markdown \u{2014} Param\u{00e8}tres")
+        .with_inner_size(LogicalSize::new(700.0f64, 500.0f64))
+        .build(target)
+        .context("failed to create config window")?;
+    window.set_focus();
+    let window_id = window.id();
+
+    let proxy_ipc = proxy.clone();
+    let webview = WebViewBuilder::new(&window)
+        .with_html(html)
+        .with_ipc_handler(move |req: wry::http::Request<String>| {
+            let body = req.body().clone();
+            let (result, should_close) = handle_config_ipc(&body);
+            if let Some(r) = result {
+                let _ = sender.send(r);
+            }
+            if should_close {
+                let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+            }
+        })
+        .build()
+        .context("failed to create config webview")?;
+
+    Ok((window, webview, window_id))
+}
+
+/// Parse a config IPC message and act on it synchronously.
+///
+/// Returns `(Option<ActionResult>, bool)` — the bool is `should_close`.
+fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
+    let msg: ConfigIpcMessage = match serde_json::from_str(body) {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                Some(ActionResult::Error(format!("failed to parse IPC message: {}", e))),
+                true,
+            );
+        }
+    };
+
+    match msg.action.as_str() {
+        "save" => {
+            let result = (|| -> anyhow::Result<ActionResult> {
+                let raw_data = msg
+                    .data
+                    .ok_or_else(|| anyhow::anyhow!("save action missing data field"))?;
+                let data: SettingsData =
+                    serde_json::from_value(raw_data).context("failed to parse settings data")?;
+
+                let path = config::settings_path();
+                let mut settings = Settings::load(&path).unwrap_or_default();
+                settings.export_base_dir = data.export_base_dir;
+                settings.defaults = AccountBehavior {
+                    folder_name: settings.defaults.folder_name,
+                    quote_depth: data.defaults.quote_depth,
+                    skip_existing: data.defaults.skip_existing,
+                    collect_contacts: data.defaults.collect_contacts,
+                    skip_signature_images: data.defaults.skip_signature_images,
+                    delete_after_export: data.defaults.delete_after_export,
+                    cleanup_empty_dirs: data.defaults.cleanup_empty_dirs,
+                    organize_by_type: data.defaults.organize_by_type,
+                    sort: settings.defaults.sort,
+                };
+                settings
+                    .save(&path)
+                    .with_context(|| format!("failed to save settings to {}", path.display()))?;
+
+                Ok(ActionResult::Success(
+                    "Param\u{00e8}tres".to_string(),
+                    "Param\u{00e8}tres sauvegard\u{00e9}s".to_string(),
+                ))
+            })();
+            match result {
+                Ok(r) => (Some(r), true),
+                Err(e) => (
+                    Some(ActionResult::Error(format!("Erreur de sauvegarde : {:#}", e))),
+                    true,
+                ),
+            }
+        }
+        "save_account" => {
+            let result = (|| -> anyhow::Result<()> {
+                let raw_data = msg
+                    .data
+                    .ok_or_else(|| anyhow::anyhow!("save_account action missing data field"))?;
+                let data: AccountData =
+                    serde_json::from_value(raw_data).context("failed to parse account data")?;
+
+                let accounts_path = config::accounts_yaml_path();
+                let mut accounts = config::load_raw_accounts(&accounts_path).unwrap_or_default();
+
+                let mut found = false;
+                for acct in accounts.iter_mut() {
+                    if acct.name.eq_ignore_ascii_case(&data.account_name) {
+                        acct.server = data.server.clone();
+                        acct.port = data.port;
+                        acct.username = data.username.clone();
+                        acct.ignored_folders = data.ignored_folders.clone();
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    accounts.push(RawAccount {
+                        name: data.account_name.clone(),
+                        server: data.server.clone(),
+                        port: data.port,
+                        username: data.username.clone(),
+                        ignored_folders: data.ignored_folders.clone(),
+                    });
+                }
+
+                config::save_accounts(&accounts, &accounts_path).with_context(|| {
+                    format!("failed to save accounts to {}", accounts_path.display())
+                })?;
+
+                let settings_path = config::settings_path();
+                let mut settings = Settings::load(&settings_path).unwrap_or_default();
+
+                let canonical_key = settings
+                    .accounts
+                    .keys()
+                    .find(|k| k.eq_ignore_ascii_case(&data.account_name))
+                    .cloned()
+                    .unwrap_or_else(|| data.account_name.clone());
+
+                let mut behavior =
+                    settings.accounts.get(&canonical_key).cloned().unwrap_or_default();
+                behavior.organize_by_type = data.organize_by_type;
+                behavior.delete_after_export = data.delete_after_export;
+                behavior.cleanup_empty_dirs = data.cleanup_empty_dirs;
+                behavior.skip_existing = data.skip_existing;
+                behavior.collect_contacts = data.collect_contacts;
+                behavior.skip_signature_images = data.skip_signature_images;
+                behavior.quote_depth = data.quote_depth;
+
+                let is_empty = serde_json::to_value(&behavior)
+                    .map(|v| v.as_object().map(|o| o.is_empty()).unwrap_or(false))
+                    .unwrap_or(false);
+
+                if is_empty {
+                    settings.accounts.remove(&canonical_key);
+                } else {
+                    settings.accounts.insert(canonical_key, behavior);
+                }
+
+                settings.save(&settings_path).with_context(|| {
+                    format!("failed to save settings to {}", settings_path.display())
+                })?;
+
+                Ok(())
+            })();
+            match result {
+                Ok(()) => (None, false),
+                Err(e) => (
+                    Some(ActionResult::Error(format!("Erreur de sauvegarde : {:#}", e))),
+                    false,
+                ),
+            }
+        }
+        "open_raw" => {
+            if let Err(e) =
+                action_open_config().context("failed to open settings file in editor")
+            {
+                return (Some(ActionResult::Error(format!("Erreur : {:#}", e))), false);
+            }
+            (None, false)
+        }
+        other => (
+            Some(ActionResult::Error(format!("unknown IPC action '{}'", other))),
+            true,
+        ),
+    }
+}
+
+/// Format a JS call for the progress webview.
+fn format_progress_js(update: &ProgressUpdate) -> String {
+    match update {
+        ProgressUpdate::Step { current, total, message } => {
+            format!("step({},{},{:?})", current, total, message)
+        }
+        ProgressUpdate::Indeterminate { message } => {
+            format!("indeterminate({:?})", message)
+        }
+        ProgressUpdate::Done { summary } => {
+            format!("finish({:?})", summary)
+        }
+        ProgressUpdate::Error { message, action_label } => {
+            format!(
+                "error({:?}, {:?})",
+                message,
+                action_label.as_deref().unwrap_or("")
+            )
+        }
+    }
 }
 
 /// Create the system tray icon with menu.
 fn create_tray_icon() -> Result<TrayIcon> {
     let menu = create_menu()?;
-
     let icon = load_icon()?;
-
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("Email to Markdown")
         .with_icon(icon)
         .build()
         .context("Failed to create tray icon")?;
-
     Ok(tray_icon)
 }
 
@@ -122,13 +754,11 @@ fn create_tray_icon() -> Result<TrayIcon> {
 fn create_menu() -> Result<Menu> {
     let menu = Menu::new();
 
-    // Get account names for submenus
     let accounts = tray_actions::get_account_names().unwrap_or_default();
     let has_accounts = !accounts.is_empty();
 
     let no_accel: Option<Accelerator> = None;
 
-    // Export submenu — disabled until at least one account is configured
     let export_submenu = Submenu::new("Export compte", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::EXPORT_PREFIX, account);
@@ -141,7 +771,6 @@ fn create_menu() -> Result<Menu> {
     }
     menu.append(&export_submenu)?;
 
-    // Sort submenu — disabled until at least one account is configured
     let sort_submenu = Submenu::new("Trier emails", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::SORT_PREFIX, account);
@@ -154,10 +783,8 @@ fn create_menu() -> Result<Menu> {
     }
     menu.append(&sort_submenu)?;
 
-    // Outils submenu
     let outils_submenu = Submenu::new("Outils", true);
 
-    // Fix YAML submenu — one entry per account
     let fixyaml_submenu = Submenu::new("Fix YAML", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::FIXYAML_PREFIX, account);
@@ -170,7 +797,6 @@ fn create_menu() -> Result<Menu> {
     }
     let _ = outils_submenu.append(&fixyaml_submenu);
 
-    // Fix HTML→Markdown submenu — one entry per account
     let fixhtml_submenu = Submenu::new("Fix HTML→Markdown", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::FIXHTML_PREFIX, account);
@@ -215,10 +841,8 @@ fn create_menu() -> Result<Menu> {
 
     menu.append(&outils_submenu)?;
 
-    // Separator
     menu.append(&PredefinedMenuItem::separator())?;
 
-    // Quit
     menu.append(&MenuItem::with_id(
         menu_ids::QUIT,
         "Quitter",
@@ -239,7 +863,11 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
             tray_actions::action_choose_export_dir(result_sender);
         }
         menu_ids::OPEN_CONFIG => {
-            crate::tray_config_window::open(result_sender.clone());
+            if let Err(e) = send_command(AppCommand::OpenConfig {
+                sender: result_sender.clone(),
+            }) {
+                eprintln!("Failed to open config window: {:#}", e);
+            }
         }
         menu_ids::OPEN_DOCUMENTATION => {
             if let Err(e) = tray_actions::action_open_documentation() {
@@ -278,7 +906,6 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
 
 /// Load the tray icon.
 fn load_icon() -> Result<tray_icon::Icon> {
-    // Try to load from file first
     let icon_paths = [
         "assets/icon.ico",
         "assets/icon.png",
@@ -292,11 +919,9 @@ fn load_icon() -> Result<tray_icon::Icon> {
         }
     }
 
-    // Fall back to embedded icon
     create_default_icon()
 }
 
-/// Load icon from a file.
 fn load_icon_from_file(path: &str) -> Result<tray_icon::Icon> {
     let img = image::open(path).context("Failed to load icon image")?;
     let rgba = img.to_rgba8();
@@ -306,12 +931,10 @@ fn load_icon_from_file(path: &str) -> Result<tray_icon::Icon> {
         .context("Failed to create icon from image")
 }
 
-/// Create a default envelope icon (16x16).
 fn create_default_icon() -> Result<tray_icon::Icon> {
     let size = 16u32;
     let mut rgba = vec![0u8; (size * size * 4) as usize];
 
-    // Blue background
     for chunk in rgba.chunks_exact_mut(4) {
         chunk.copy_from_slice(&[30u8, 136, 229, 255]);
     }
@@ -323,7 +946,6 @@ fn create_default_icon() -> Result<tray_icon::Icon> {
         }
     };
 
-    // Envelope rectangle border: (1,2) to (14,13)
     for x in 1u32..15 {
         set(&mut rgba, x, 2);
         set(&mut rgba, x, 13);
@@ -333,10 +955,9 @@ fn create_default_icon() -> Result<tray_icon::Icon> {
         set(&mut rgba, 14, y);
     }
 
-    // Flap: V shape from top corners down to centre
     for i in 0u32..6 {
-        set(&mut rgba, 2 + i, 3 + i);   // left diagonal
-        set(&mut rgba, 13 - i, 3 + i);  // right diagonal
+        set(&mut rgba, 2 + i, 3 + i);
+        set(&mut rgba, 13 - i, 3 + i);
     }
 
     tray_icon::Icon::from_rgba(rgba, size, size).context("Failed to create default icon")
@@ -357,8 +978,7 @@ fn show_notification(result: &ActionResult) {
             rfd::MessageLevel::Error,
         ),
         ActionResult::SortCompleted { .. } => {
-            // SortCompleted is handled by the event loop before reaching show_notification
-            unreachable!("SortCompleted should never be forwarded to show_notification")
+            unreachable!("SortCompleted is routed before reaching show_notification")
         }
     };
 

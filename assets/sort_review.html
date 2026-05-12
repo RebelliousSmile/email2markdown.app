@@ -350,7 +350,9 @@
 
   // Cancel
   document.getElementById('btn-cancel').addEventListener('click', function () {
-    window.close();
+    if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      window.ipc.postMessage('cancel');
+    }
   });
 
   // Apply

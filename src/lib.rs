@@ -13,10 +13,4 @@ pub mod tray;
 #[cfg(feature = "tray")]
 pub mod tray_actions;
 #[cfg(feature = "tray")]
-pub mod tray_sort_window;
-#[cfg(feature = "tray")]
-pub mod tray_config_window;
-#[cfg(feature = "tray")]
 pub mod progress;
-#[cfg(feature = "tray")]
-mod tray_progress_window;
