@@ -1,0 +1,29 @@
+ollama:
+  url: "http://localhost:11434"
+  model: "qwen3:8b"
+
+thresholds:
+  travail_days: 30
+  notification_days: 7
+  newsletter_days: 14
+
+paths:
+  input_dir: "C:/Users/fxgui/Documents/Emails/_local/to-summarize"
+  processed_dir: "C:/Users/fxgui/Documents/Emails/processed"
+  notes_dir: "C:/Users/fxgui/Public/Notes/Thunderbird"
+
+classify:
+  input_dirs:
+    - "C:/Users/fxgui/Documents/Emails/fx.rebellious.smile@gmail.com"
+    - "C:/Users/fxgui/Documents/Emails/fxguillois@lilo.org"
+    - "C:/Users/fxgui/Documents/Emails/info@cabinet-partage.fr"
+  exclude_dirs:
+    - "trash"
+    - "attachments"
+    - "sent"
+    - "[Gmail]"
+  output_dir: "C:/Users/fxgui/Public/Notes/Thunderbird"
+  confidence_threshold: 0.75
+  min_samples_before_ml: 20
+  data_dir: "data"
+  cold_start_model: "qwen3:8b"

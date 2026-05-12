@@ -679,6 +679,55 @@ mod sort_emails_tests {
         let stats = sorter.stats();
         assert_eq!(stats.total_emails, 0);
     }
+
+    #[test]
+    fn test_join_safe_segments_nested_path() {
+        let root = PathBuf::from("/notes");
+        let joined = join_safe_segments(&root, "Travail/Projets/Client A").unwrap();
+        assert_eq!(joined, root.join("Travail").join("Projets").join("Client A"));
+    }
+
+    #[test]
+    fn test_join_safe_segments_accented_segment_allowed() {
+        let root = PathBuf::from("/notes");
+        let joined = join_safe_segments(&root, "Été/Réunions").unwrap();
+        assert_eq!(joined, root.join("Été").join("Réunions"));
+    }
+
+    #[test]
+    fn test_join_safe_segments_empty_and_trim_segments_skipped() {
+        let root = PathBuf::from("/notes");
+        let joined = join_safe_segments(&root, "/Travail//Projets/ ").unwrap();
+        assert_eq!(joined, root.join("Travail").join("Projets"));
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_parent_traversal() {
+        let root = PathBuf::from("/notes");
+        let err = join_safe_segments(&root, "Travail/../etc").unwrap_err();
+        assert!(err.to_string().contains(".."));
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_dot_segment() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/./Projets").is_err());
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_backslash() {
+        let root = PathBuf::from("/notes");
+        let err = join_safe_segments(&root, "Travail\\Projets").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Travail") || msg.contains("forbidden") || msg.contains("invalid"));
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_forbidden_characters() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/Projets:Secrets").is_err());
+        assert!(join_safe_segments(&root, "Travail/Projets*").is_err());
+    }
 }
 
 mod edge_case_tests {
@@ -1042,6 +1091,9 @@ mod sort_apply_tests {
             size: 1000,
             attachments: 0,
             breakdown: vec![],
+            notes_destination: None,
+            classify_confidence: None,
+            classify_method: None,
         }
     }
 
@@ -1080,7 +1132,7 @@ mod sort_apply_tests {
             vec![("summarize", make_email_summary("test_email.md", "sender@example.com"))],
         );
 
-        let stats = apply_report(&report, "_local").unwrap();
+        let stats = apply_report(&report, "_local", None).unwrap();
 
         assert_eq!(stats.moved, 1);
         assert_eq!(stats.deleted, 0);
@@ -1105,7 +1157,7 @@ mod sort_apply_tests {
             vec![("keep", make_email_summary("some_email.md", "sender@example.com"))],
         );
 
-        let stats = apply_report(&report, "_local").unwrap();
+        let stats = apply_report(&report, "_local", None).unwrap();
 
         assert_eq!(stats.skipped, 1);
         assert_eq!(stats.deleted, 0);
@@ -1125,7 +1177,7 @@ mod sort_apply_tests {
             vec![("summarize", make_email_summary("test_email.md", "sender@example.com"))],
         );
 
-        apply_report(&report, "_archive").unwrap();
+        apply_report(&report, "_archive", None).unwrap();
 
         // File should exist at _archive/to-summarize/ destination (custom folder)
         let dest = temp.path().join("_archive").join("to-summarize").join("test_email.md");
@@ -1148,7 +1200,7 @@ mod sort_apply_tests {
         );
 
         // Missing files are silently skipped — deleted count stays 0
-        let stats = apply_report(&report, "_local").unwrap();
+        let stats = apply_report(&report, "_local", None).unwrap();
         assert_eq!(stats.deleted, 0);
     }
 
@@ -1169,7 +1221,7 @@ mod sort_apply_tests {
             details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
             categories,
         };
-        let stats = apply_report(&report, "_local").unwrap();
+        let stats = apply_report(&report, "_local", None).unwrap();
         assert_eq!(stats.moved, 1);
     }
 
@@ -1190,7 +1242,7 @@ mod sort_apply_tests {
             details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
             categories,
         };
-        apply_report(&report, "_local").unwrap();
+        apply_report(&report, "_local", None).unwrap();
         assert!(base.join("newsletter").join("email_test.md").exists());
     }
 
@@ -1212,7 +1264,7 @@ mod sort_apply_tests {
             details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
             categories,
         };
-        let stats = apply_report(&report, "_local").unwrap();
+        let stats = apply_report(&report, "_local", None).unwrap();
         assert_eq!(stats.skipped, 1);
     }
 
@@ -1234,7 +1286,84 @@ mod sort_apply_tests {
             details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
             categories,
         };
-        apply_report(&report, "_local").unwrap();
+        apply_report(&report, "_local", None).unwrap();
         assert!(newsletter_dir.join("email_test.md").exists());
+    }
+
+    #[test]
+    fn test_apply_report_summarize_routes_to_notes_destination() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        fs::create_dir_all(&base).unwrap();
+        let md_file = base.join("a.md");
+        fs::write(&md_file, "---\nsubject: A\n---\nBody").unwrap();
+
+        let notes_root = temp.path().join("notes");
+        fs::create_dir_all(&notes_root).unwrap();
+
+        let mut summary = make_email_summary("a.md", "x@y");
+        summary.notes_destination = Some("Travail/Projets/ClientX".to_string());
+
+        let report = make_sort_report(
+            &base.to_string_lossy(),
+            vec![("summarize", summary)],
+        );
+
+        apply_report(&report, "_local", Some(&notes_root)).unwrap();
+
+        let dest = notes_root.join("Travail").join("Projets").join("ClientX").join("a.md");
+        assert!(dest.exists(), "file should land under notes_dir/<dest>/");
+        let wrong = temp.path().join("_local").join("to-summarize").join("a.md");
+        assert!(!wrong.exists(), "must not fall back to to-summarize when notes_destination is set");
+    }
+
+    #[test]
+    fn test_apply_report_rejects_path_traversal_in_destination() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        fs::create_dir_all(&base).unwrap();
+        let md_file = base.join("a.md");
+        fs::write(&md_file, "---\nsubject: A\n---\nBody").unwrap();
+
+        let notes_root = temp.path().join("notes");
+        fs::create_dir_all(&notes_root).unwrap();
+
+        let mut summary = make_email_summary("a.md", "x@y");
+        summary.notes_destination = Some("Travail/../../escape".to_string());
+
+        let report = make_sort_report(
+            &base.to_string_lossy(),
+            vec![("summarize", summary)],
+        );
+
+        let result = apply_report(&report, "_local", Some(&notes_root));
+        assert!(result.is_err(), "path traversal must be rejected");
+        let msg = format!("{:#}", result.err().unwrap());
+        assert!(
+            msg.contains("invalid path segment") || msg.contains("forbidden"),
+            "unexpected error: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_apply_report_summarize_falls_back_to_to_summarize_without_notes_dir() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("a.md"), "---\nsubject: A\n---\nBody").unwrap();
+
+        let mut summary = make_email_summary("a.md", "x@y");
+        // destination set but no notes_dir → must still fall back
+        summary.notes_destination = Some("Travail/Projets/Client".to_string());
+
+        let report = make_sort_report(
+            &base.to_string_lossy(),
+            vec![("summarize", summary)],
+        );
+
+        apply_report(&report, "_local", None).unwrap();
+        let fallback = temp.path().join("_local").join("to-summarize").join("a.md");
+        assert!(fallback.exists(), "must fall back to to-summarize when notes_dir is absent");
     }
 }

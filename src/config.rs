@@ -88,6 +88,20 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_folder_name: Option<String>,
 
+    /// Path to a Python virtualenv used to run `tools/scripts/*.py` subprocesses.
+    /// Expected layout: `{venv}/Scripts/python.exe` (Windows) or `{venv}/bin/python` (Unix).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub python_venv_path: Option<String>,
+
+    /// Root directory of the user's notes tree (target of classify / summarize / organize).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes_dir: Option<String>,
+
+    /// Path to the `tools/` directory bundled with the binary.
+    /// Resolved at runtime: this override → `{exe_dir}/tools` → `{cwd}/tools`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools_dir: Option<String>,
+
     /// Default behaviour applied to every account unless overridden.
     #[serde(default)]
     pub defaults: AccountBehavior,
@@ -118,6 +132,72 @@ impl Settings {
         fs::write(path, serde_yaml::to_string(self)?)?;
         Ok(())
     }
+}
+
+// ── Python tools resolution ──────────────────────────────────────────────────
+
+/// Resolves a subdirectory of `tools/` using a 3-step fallback:
+/// `settings.tools_dir/<sub>` → `{exe_dir}/tools/<sub>` → `{cwd}/tools/<sub>`.
+fn resolve_tools_subdir(settings: &Settings, sub: &str) -> Result<PathBuf, ConfigError> {
+    if let Some(dir) = &settings.tools_dir {
+        let p = PathBuf::from(dir).join(sub);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    let candidates = [
+        env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|p| p.to_path_buf())),
+        env::current_dir().ok(),
+    ];
+    for base in candidates.into_iter().flatten() {
+        let p = base.join("tools").join(sub);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    Err(ConfigError::ToolsDirNotFound(sub.to_string()))
+}
+
+/// Returns `tools/scripts/` — Python entry-point scripts.
+pub fn resolve_tools_scripts_dir(settings: &Settings) -> Result<PathBuf, ConfigError> {
+    resolve_tools_subdir(settings, "scripts")
+}
+
+/// Returns `tools/templates/` — Jinja2 templates for the Organize window.
+pub fn resolve_tools_templates_dir(settings: &Settings) -> Result<PathBuf, ConfigError> {
+    resolve_tools_subdir(settings, "templates")
+}
+
+/// Returns `tools/data/` — corpus, model, vectorizer, known_classes.
+pub fn resolve_tools_data_dir(settings: &Settings) -> Result<PathBuf, ConfigError> {
+    resolve_tools_subdir(settings, "data")
+}
+
+/// Returns the path to the Python interpreter inside the configured venv.
+/// Errors with an actionable message if `python_venv_path` is unset or the binary is missing.
+pub fn find_python(settings: &Settings) -> Result<PathBuf, ConfigError> {
+    let venv = settings
+        .python_venv_path
+        .as_deref()
+        .ok_or(ConfigError::PythonVenvNotConfigured)?;
+    let venv = PathBuf::from(venv);
+    let python = if cfg!(windows) {
+        venv.join("Scripts").join("python.exe")
+    } else {
+        venv.join("bin").join("python")
+    };
+    if !python.exists() {
+        return Err(ConfigError::PythonNotFound(python));
+    }
+    Ok(python)
+}
+
+/// Returns `{root}/{settings.local_folder()}` — the work-folder where intermediate
+/// outputs go (`to-summarize/`, `_generated/`, `.archive/`). Never the root itself.
+pub fn work_dir(root: &Path, settings: &Settings) -> PathBuf {
+    root.join(settings.local_folder())
 }
 
 // ── Raw accounts.yaml (connection info only) ─────────────────────────────────
@@ -210,6 +290,12 @@ pub enum ConfigError {
     NoPassword(String),
     #[error("Configuration validation error: {0}")]  // [6]
     ValidationError(String),
+    #[error("python_venv_path not set in settings.yaml — configure a Python virtualenv")]
+    PythonVenvNotConfigured,
+    #[error("python binary not found at {0:?} — check python_venv_path in settings.yaml")]
+    PythonNotFound(PathBuf),
+    #[error("tools/{0} directory not found — set tools_dir in settings.yaml or place tools/ next to the binary")]
+    ToolsDirNotFound(String),
 }
 
 /// Fully-resolved account used by the exporter.
@@ -653,5 +739,55 @@ mod tests {
         assert!(config.is_whitelisted("anyone@company.com"));
         assert!(config.is_whitelisted("boss@anywhere.com"));
         assert!(!config.is_whitelisted("random@other.com"));
+    }
+
+    #[test]
+    fn test_resolve_tools_subdir_explicit_dir() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let tools = temp.path().join("custom-tools");
+        std::fs::create_dir_all(tools.join("scripts")).unwrap();
+
+        let mut settings = Settings::default();
+        settings.tools_dir = Some(tools.to_string_lossy().into_owned());
+
+        let resolved = resolve_tools_scripts_dir(&settings).unwrap();
+        assert_eq!(resolved, tools.join("scripts"));
+    }
+
+    #[test]
+    fn test_find_python_not_configured() {
+        let settings = Settings::default();
+        let err = find_python(&settings).unwrap_err();
+        assert!(matches!(err, ConfigError::PythonVenvNotConfigured));
+    }
+
+    #[test]
+    fn test_find_python_binary_missing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut settings = Settings::default();
+        settings.python_venv_path = Some(temp.path().to_string_lossy().into_owned());
+
+        let err = find_python(&settings).unwrap_err();
+        assert!(matches!(err, ConfigError::PythonNotFound(_)));
+    }
+
+    #[test]
+    fn test_find_python_happy_path() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (subdir, bin) = if cfg!(windows) {
+            ("Scripts", "python.exe")
+        } else {
+            ("bin", "python")
+        };
+        let bin_dir = temp.path().join(subdir);
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin_path = bin_dir.join(bin);
+        std::fs::write(&bin_path, b"").unwrap();
+
+        let mut settings = Settings::default();
+        settings.python_venv_path = Some(temp.path().to_string_lossy().into_owned());
+
+        let resolved = find_python(&settings).unwrap();
+        assert_eq!(resolved, bin_path);
     }
 }

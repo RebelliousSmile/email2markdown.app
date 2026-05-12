@@ -35,6 +35,12 @@ tests/test_emails/sort_report.json
 .archive/
 archive/
 
+# Python tools — runtime artifacts only (data/ is versioned)
+tools/**/__pycache__/
+tools/**/*.pyc
+tools/**/*.egg-info/
+tools/.venv/
+
 # <AIDD>
 .mcp.json
 aidd*

@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Organiser les notes</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    background: #f5f5f5;
+    color: #222;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    background: #6a1b9a;
+    color: #fff;
+    padding: 10px 16px;
+    font-size: 15px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #fff;
+    border-bottom: 1px solid #ddd;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .toolbar label { display: flex; align-items: center; gap: 4px; }
+  .toolbar select,
+  .toolbar button,
+  .toolbar input[type="text"] {
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 13px;
+  }
+  .toolbar input[type="text"] { min-width: 140px; }
+  .toolbar button {
+    cursor: pointer;
+    background: #6a1b9a;
+    color: #fff;
+    border-color: #6a1b9a;
+  }
+  .toolbar button:hover { background: #4a148c; }
+  .toolbar button.alt { background: #fff; color: #6a1b9a; }
+  .toolbar button.alt:hover { background: #f3e5f5; }
+  .toolbar .group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-left: 1px solid #ddd;
+  }
+  .toolbar .group:first-child { border-left: 0; padding-left: 0; }
+  .table-wrap {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+  }
+  thead th {
+    position: sticky;
+    top: 0;
+    background: #eee;
+    font-weight: 600;
+    padding: 7px 10px;
+    text-align: left;
+    border-bottom: 1px solid #ccc;
+    white-space: nowrap;
+    z-index: 1;
+  }
+  thead th[data-col] { cursor: pointer; user-select: none; }
+  thead th[data-col]:hover { background: #e0e0e0; }
+  tbody tr:nth-child(even) { background: #fafafa; }
+  tbody tr:hover { background: #f3e5f5; }
+  tbody tr.selected { background: #e1bee7 !important; }
+  tbody td {
+    padding: 5px 10px;
+    border-bottom: 1px solid #eee;
+    vertical-align: middle;
+  }
+  tbody td.subject  { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.sender   { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.to       { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.notes    { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; font-size: 12px; }
+  .footer {
+    padding: 10px 16px;
+    background: #fff;
+    border-top: 1px solid #ddd;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .footer .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .footer button {
+    padding: 7px 14px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    background: #fff;
+  }
+  .footer button:hover { background: #eee; }
+  .footer button.primary {
+    background: #6a1b9a;
+    color: #fff;
+    border-color: #6a1b9a;
+  }
+  .footer button.primary:hover { background: #4a148c; }
+  .footer button.danger {
+    background: #fff;
+    color: #c62828;
+    border-color: #c62828;
+  }
+  .footer button.danger:hover { background: #ffebee; }
+  .footer button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #6a1b9a;
+    color: #fff;
+  }
+  #status-bar {
+    color: #555;
+    font-size: 12px;
+  }
+  /* Preview modal */
+  .modal-bg {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 10;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-bg.show { display: flex; }
+  .modal {
+    background: #fff;
+    width: 80%;
+    max-width: 900px;
+    max-height: 80vh;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .modal header { background: #6a1b9a; }
+  .modal .body { flex: 1; overflow-y: auto; padding: 16px; }
+  .modal pre {
+    background: #f5f5f5;
+    padding: 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .modal .actions {
+    padding: 10px 16px;
+    border-top: 1px solid #ddd;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+</style>
+</head>
+<body>
+<script>
+  window.__NOTES_DATA__ = __NOTES_JSON__;
+  window.__KNOWN_CLASSES__ = __KNOWN_CLASSES_JSON__;
+  window.__TEMPLATES__ = __TEMPLATES_JSON__;
+</script>
+
+<header>Organiser les notes <span id="root-label"></span></header>
+
+<div class="toolbar">
+  <div class="group">
+    <label><input type="checkbox" id="select-all"> Tout</label>
+    <span id="selection-count" class="badge">0</span>
+  </div>
+  <div class="group">
+    <input type="text" id="filter-text" placeholder="Recherche sujet/expéditeur">
+    <input type="text" id="filter-sender" placeholder="Expéditeur">
+    <select id="filter-type"><option value="">— Type —</option></select>
+  </div>
+  <div class="group" style="margin-left:auto">
+    <span id="status-bar"></span>
+  </div>
+</div>
+
+<datalist id="known-classes"></datalist>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="header-check"></th>
+        <th data-col="subject">Sujet</th>
+        <th data-col="from">Expéditeur</th>
+        <th data-col="date">Date</th>
+        <th data-col="to">Destinataires</th>
+        <th data-col="cc">Copie</th>
+        <th data-col="email_type">Type</th>
+        <th data-col="notes_path">Chemin notes</th>
+      </tr>
+    </thead>
+    <tbody id="note-table-body"></tbody>
+  </table>
+</div>
+
+<div class="footer">
+  <span id="status-bar-bottom"></span>
+  <div class="actions">
+    <button id="btn-classify">Classifier…</button>
+    <button id="btn-summarize" class="primary">Résumer</button>
+    <button id="btn-group">Grouper</button>
+    <button id="btn-template" class="primary">Appliquer template…</button>
+    <button id="btn-archive" class="danger">Archiver</button>
+    <button id="btn-delete" class="danger">Supprimer…</button>
+    <button id="btn-close" class="alt">Fermer</button>
+  </div>
+</div>
+
+<!-- Classify modal -->
+<div class="modal-bg" id="modal-classify">
+  <div class="modal">
+    <header>Classifier la sélection</header>
+    <div class="body">
+      <p>Saisir le chemin de destination (Niv1/Niv2/Niv3). Appliqué à <span id="classify-count">0</span> note(s).</p>
+      <p style="margin-top:8px">
+        <input type="text" id="classify-input" list="known-classes" placeholder="Travail/Projets/ClientX" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px; font-size:13px">
+      </p>
+    </div>
+    <div class="actions">
+      <button class="modal-cancel">Annuler</button>
+      <button class="primary" id="classify-go">Appliquer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Template modal -->
+<div class="modal-bg" id="modal-template">
+  <div class="modal">
+    <header>Appliquer un template</header>
+    <div class="body">
+      <p>Template appliqué à <span id="template-count">0</span> note(s).</p>
+      <p style="margin-top:8px">
+        <select id="template-select" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px; font-size:13px"></select>
+      </p>
+      <div id="template-preview-wrap" style="margin-top:12px; display:none">
+        <strong>Aperçu :</strong>
+        <pre id="template-preview"></pre>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="modal-cancel">Annuler</button>
+      <button id="template-preview-btn">Aperçu</button>
+      <button class="primary" id="template-go">Générer</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var notes = Array.isArray(window.__NOTES_DATA__) ? window.__NOTES_DATA__ : [];
+  var knownClasses = Array.isArray(window.__KNOWN_CLASSES__) ? window.__KNOWN_CLASSES__ : [];
+  var templates = Array.isArray(window.__TEMPLATES__) ? window.__TEMPLATES__ : [];
+
+  notes.forEach(function (n, i) { n._idx = i; n._sel = false; });
+
+  // Datalist
+  var dl = document.getElementById('known-classes');
+  knownClasses.forEach(function (cls) {
+    var o = document.createElement('option');
+    o.value = cls;
+    dl.appendChild(o);
+  });
+
+  // Template dropdown
+  var tplSel = document.getElementById('template-select');
+  templates.forEach(function (t) {
+    var o = document.createElement('option');
+    o.value = t;
+    o.textContent = t.split(/[\\\/]/).pop();
+    tplSel.appendChild(o);
+  });
+
+  // Type filter — populate from data
+  var typeSet = {};
+  notes.forEach(function (n) { if (n.email_type) { typeSet[n.email_type] = true; } });
+  var typeSel = document.getElementById('filter-type');
+  Object.keys(typeSet).sort().forEach(function (t) {
+    var o = document.createElement('option');
+    o.value = t;
+    o.textContent = t;
+    typeSel.appendChild(o);
+  });
+
+  var tbody = document.getElementById('note-table-body');
+  var sortCol = 'date';
+  var sortDir = 'asc';
+
+  var colLabels = {
+    subject: 'Sujet',
+    from: 'Expéditeur',
+    date: 'Date',
+    to: 'Destinataires',
+    cc: 'Copie',
+    email_type: 'Type',
+    notes_path: 'Chemin notes'
+  };
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function getFiltered() {
+    var txt = document.getElementById('filter-text').value.trim().toLowerCase();
+    var sender = document.getElementById('filter-sender').value.trim().toLowerCase();
+    var type = document.getElementById('filter-type').value;
+    return notes.filter(function (n) {
+      if (txt) {
+        var hay = ((n.subject || '') + ' ' + (n.from || '')).toLowerCase();
+        if (hay.indexOf(txt) < 0) { return false; }
+      }
+      if (sender && (n.from || '').toLowerCase().indexOf(sender) < 0) { return false; }
+      if (type && n.email_type !== type) { return false; }
+      return true;
+    });
+  }
+
+  function sortRows(arr) {
+    arr.sort(function (a, b) {
+      var av, bv;
+      if (sortCol === 'to') {
+        av = (a.to || []).join(', ');
+        bv = (b.to || []).join(', ');
+      } else {
+        av = a[sortCol] || '';
+        bv = b[sortCol] || '';
+      }
+      var cmp = String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }
+
+  function updateSortIndicators() {
+    document.querySelectorAll('thead th[data-col]').forEach(function (th) {
+      var col = th.dataset.col;
+      th.textContent = colLabels[col] + (col === sortCol ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+    });
+  }
+
+  function getSelectedNotes() {
+    return notes.filter(function (n) { return n._sel; });
+  }
+
+  function updateSelectionCount() {
+    var n = getSelectedNotes().length;
+    document.getElementById('selection-count').textContent = n;
+    document.getElementById('status-bar').textContent = n + ' / ' + notes.length + ' note(s) sélectionnée(s)';
+    var disabled = (n === 0);
+    ['btn-classify', 'btn-summarize', 'btn-group', 'btn-template', 'btn-archive', 'btn-delete'].forEach(function (id) {
+      document.getElementById(id).disabled = disabled;
+    });
+    // group requires at least 2 notes
+    document.getElementById('btn-group').disabled = (n < 2);
+  }
+
+  function buildTable() {
+    var filtered = sortRows(getFiltered().slice());
+    tbody.innerHTML = '';
+    filtered.forEach(function (n) {
+      var tr = document.createElement('tr');
+      tr.dataset.i = n._idx;
+      if (n._sel) { tr.classList.add('selected'); }
+      var toStr = (n.to || []).join(', ');
+      var ccStr = (n.cc || []).join(', ');
+      tr.innerHTML =
+        '<td><input type="checkbox" class="row-check" data-i="' + n._idx + '"' + (n._sel ? ' checked' : '') + '></td>' +
+        '<td class="subject" title="' + esc(n.subject) + '">' + esc(n.subject) + '</td>' +
+        '<td class="sender" title="' + esc(n.from) + '">' + esc(n.from) + '</td>' +
+        '<td>' + esc(n.date) + '</td>' +
+        '<td class="to" title="' + esc(toStr) + '">' + esc(toStr) + '</td>' +
+        '<td class="cc" title="' + esc(ccStr) + '">' + esc(ccStr) + '</td>' +
+        '<td>' + esc(n.email_type) + '</td>' +
+        '<td class="notes" title="' + esc(n.notes_path) + '">' + esc(n.notes_path) + '</td>';
+      tbody.appendChild(tr);
+    });
+
+    document.querySelectorAll('.row-check').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var i = parseInt(this.dataset.i);
+        notes[i]._sel = this.checked;
+        var tr = this.closest('tr');
+        if (this.checked) { tr.classList.add('selected'); } else { tr.classList.remove('selected'); }
+        updateSelectionCount();
+        syncHeaderCheck();
+      });
+    });
+    syncHeaderCheck();
+    updateSelectionCount();
+  }
+
+  function syncHeaderCheck() {
+    var filtered = getFiltered();
+    var allChecked = filtered.length > 0 && filtered.every(function (n) { return n._sel; });
+    document.getElementById('header-check').checked = allChecked;
+    document.getElementById('select-all').checked = allChecked;
+  }
+
+  // Filters refresh
+  ['filter-text', 'filter-sender', 'filter-type'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', buildTable);
+    document.getElementById(id).addEventListener('change', buildTable);
+  });
+
+  // Header checkbox toggles only the currently-filtered rows
+  function toggleAll(checked) {
+    getFiltered().forEach(function (n) { n._sel = checked; });
+    buildTable();
+  }
+  document.getElementById('header-check').addEventListener('change', function () { toggleAll(this.checked); });
+  document.getElementById('select-all').addEventListener('change', function () { toggleAll(this.checked); });
+
+  // Column sort
+  document.querySelectorAll('thead th[data-col]').forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col = this.dataset.col;
+      if (sortCol === col) {
+        sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortCol = col;
+        sortDir = 'asc';
+      }
+      buildTable();
+      updateSortIndicators();
+    });
+  });
+
+  // ---- IPC helpers ----
+  function ipcSend(payload) {
+    if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      window.ipc.postMessage(JSON.stringify(payload));
+    } else {
+      alert('IPC non disponible.');
+    }
+  }
+
+  function selectedFiles() {
+    return getSelectedNotes().map(function (n) { return n.path; });
+  }
+
+  // ---- Action: Classify ----
+  document.getElementById('btn-classify').addEventListener('click', function () {
+    var sel = getSelectedNotes();
+    if (!sel.length) { return; }
+    document.getElementById('classify-count').textContent = sel.length;
+    document.getElementById('classify-input').value = sel[0].notes_path || '';
+    document.getElementById('modal-classify').classList.add('show');
+  });
+  document.getElementById('classify-go').addEventListener('click', function () {
+    var dest = document.getElementById('classify-input').value.trim();
+    if (!dest) { alert('Destination requise.'); return; }
+    ipcSend({ action: 'classify', files: selectedFiles(), destination: dest });
+    document.getElementById('modal-classify').classList.remove('show');
+  });
+
+  // ---- Action: Summarize ----
+  document.getElementById('btn-summarize').addEventListener('click', function () {
+    if (!confirm('Résumer ' + getSelectedNotes().length + ' note(s) ?')) { return; }
+    ipcSend({ action: 'summarize', files: selectedFiles() });
+  });
+
+  // ---- Action: Group ----
+  document.getElementById('btn-group').addEventListener('click', function () {
+    var n = getSelectedNotes().length;
+    if (n < 2) { alert('Sélectionnez au moins 2 notes pour grouper.'); return; }
+    var name = prompt('Nom du fichier groupé (sans extension) :', 'groupe');
+    if (!name) { return; }
+    ipcSend({ action: 'group', files: selectedFiles(), name: name });
+  });
+
+  // ---- Action: Apply template ----
+  document.getElementById('btn-template').addEventListener('click', function () {
+    if (!templates.length) { alert('Aucun template disponible dans tools/templates/.'); return; }
+    document.getElementById('template-count').textContent = getSelectedNotes().length;
+    document.getElementById('template-preview-wrap').style.display = 'none';
+    document.getElementById('modal-template').classList.add('show');
+  });
+  document.getElementById('template-preview-btn').addEventListener('click', function () {
+    ipcSend({
+      action: 'template_preview',
+      files: selectedFiles(),
+      template: tplSel.value
+    });
+  });
+  document.getElementById('template-go').addEventListener('click', function () {
+    ipcSend({
+      action: 'template_apply',
+      files: selectedFiles(),
+      template: tplSel.value
+    });
+    document.getElementById('modal-template').classList.remove('show');
+  });
+
+  // ---- Action: Archive ----
+  document.getElementById('btn-delete').addEventListener('click', function () {
+    var n = selectedFiles().length;
+    if (n === 0) { setStatus('Aucune sélection.'); return; }
+    if (!confirm('Supprimer ' + n + ' note(s) ? Les fichiers seront envoyés à la corbeille.')) { return; }
+    ipcSend({ action: 'delete', files: selectedFiles() });
+  });
+
+  document.getElementById('btn-archive').addEventListener('click', function () {
+    var n = getSelectedNotes().length;
+    if (!confirm('Archiver ' + n + ' note(s) ? Les fichiers seront déplacés vers _local/.archive/.')) { return; }
+    ipcSend({ action: 'archive', files: selectedFiles() });
+  });
+
+  // ---- Close ----
+  document.getElementById('btn-close').addEventListener('click', function () {
+    ipcSend({ action: 'close' });
+  });
+
+  // Modal close
+  document.querySelectorAll('.modal-cancel').forEach(function (b) {
+    b.addEventListener('click', function () {
+      this.closest('.modal-bg').classList.remove('show');
+    });
+  });
+
+  // ---- Streaming endpoints called from Rust ----
+  window.notesRemove = function (files) {
+    var set = {};
+    files.forEach(function (f) { set[f] = true; });
+    notes = notes.filter(function (n) { return !set[n.path]; });
+    notes.forEach(function (n, i) { n._idx = i; });
+    buildTable();
+  };
+
+  window.notesUpdatePath = function (file, newPath) {
+    var n = notes.find(function (x) { return x.path === file; });
+    if (n) { n.notes_path = newPath; buildTable(); }
+  };
+
+  window.showPreview = function (text) {
+    document.getElementById('template-preview').textContent = text;
+    document.getElementById('template-preview-wrap').style.display = 'block';
+  };
+
+  window.setStatus = function (msg) {
+    document.getElementById('status-bar-bottom').textContent = msg || '';
+  };
+
+  buildTable();
+  updateSortIndicators();
+})();
+</script>
+</body>
+</html>

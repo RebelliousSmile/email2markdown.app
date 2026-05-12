@@ -31,9 +31,10 @@
     background: #fff;
     border-bottom: 1px solid #ddd;
     flex-shrink: 0;
+    flex-wrap: wrap;
   }
   .toolbar label { display: flex; align-items: center; gap: 4px; }
-  .toolbar select, .toolbar button {
+  .toolbar select, .toolbar button, .toolbar input[type="text"] {
     padding: 4px 8px;
     border: 1px solid #ccc;
     border-radius: 4px;
@@ -41,6 +42,7 @@
     cursor: pointer;
     font-size: 13px;
   }
+  .toolbar input[type="text"] { cursor: text; min-width: 200px; }
   .toolbar button { background: #1e88e5; color: #fff; border-color: #1e88e5; }
   .toolbar button:hover { background: #1565c0; }
   .table-wrap {
@@ -76,8 +78,18 @@
     border-bottom: 1px solid #eee;
     vertical-align: middle;
   }
-  tbody td.subject { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  tbody td.sender { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.subject { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.sender { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.dest { min-width: 240px; }
+  tbody td.dest input.dest-input {
+    width: 100%;
+    padding: 3px 6px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 12px;
+    background: #fff;
+  }
+  tbody td.dest input.dest-input:disabled { background: #f0f0f0; color: #999; }
   select.decision {
     padding: 2px 4px;
     border: 1px solid #ccc;
@@ -124,10 +136,28 @@
   .badge-delete    { background: #f44336; }
   .badge-summarize { background: #ff9800; }
   .badge-keep      { background: #4caf50; }
+  .method-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #fff;
+    vertical-align: middle;
+  }
+  .method-ml      { background: #2e7d32; }
+  .method-ollama  { background: #6a1b9a; }
+  .method-error   { background: #c62828; }
+  .method-pending { background: #9e9e9e; }
 </style>
 </head>
 <body>
-<script>window.__REPORT_DATA__ = __REPORT_JSON__;</script>
+<script>
+  window.__REPORT_DATA__ = __REPORT_JSON__;
+  window.__KNOWN_CLASSES__ = __KNOWN_CLASSES_JSON__;
+  window.__NOTES_ENABLED__ = __NOTES_ENABLED__;
+</script>
 
 <header id="page-title">Révision du tri</header>
 
@@ -141,9 +171,13 @@
     <option value="summarize">Résumer</option>
     <option value="keep">Conserver</option>
   </select>
-  <button id="btn-bulk">Appliquer aux sélectionnés</button>
+  <button id="btn-bulk">Appliquer décision</button>
+  <input type="text" id="bulk-dest" list="known-classes" placeholder="Destination (Niv1/Niv2/Niv3)">
+  <button id="btn-bulk-dest">Assigner destination</button>
   <span style="margin-left:auto; color:#666;" id="summary-badge"></span>
 </div>
+
+<datalist id="known-classes"></datalist>
 
 <div class="table-wrap">
   <table>
@@ -156,6 +190,7 @@
         <th data-col="score">Score</th>
         <th data-col="email_type">Type</th>
         <th data-col="decision">Décision</th>
+        <th data-col="notes_destination">Destination notes</th>
       </tr>
     </thead>
     <tbody id="email-table-body"></tbody>
@@ -170,14 +205,34 @@
 <script>
 (function () {
   var data = window.__REPORT_DATA__ || {};
+  var knownClasses = Array.isArray(window.__KNOWN_CLASSES__) ? window.__KNOWN_CLASSES__ : [];
+  var notesEnabled = window.__NOTES_ENABLED__ === true;
+  if (!notesEnabled) {
+    // Hide bulk-dest input/button and the destination column when notes_dir is not configured.
+    var bulkDest = document.getElementById('bulk-dest');
+    if (bulkDest) bulkDest.style.display = 'none';
+    var bulkBtn = document.getElementById('btn-bulk-dest');
+    if (bulkBtn) bulkBtn.style.display = 'none';
+    document.querySelectorAll('[data-col="notes_destination"]').forEach(function (th) {
+      th.style.display = 'none';
+    });
+  }
+
+  // Populate datalist for autocomplete
+  var datalist = document.getElementById('known-classes');
+  knownClasses.forEach(function (cls) {
+    var opt = document.createElement('option');
+    opt.value = cls;
+    datalist.appendChild(opt);
+  });
 
   // Flatten all categories into rows
   var rows = [];
-  var categoryNames = Object.keys(data);
-  categoryNames.forEach(function (cat) {
+  var byFile = {};
+  Object.keys(data).forEach(function (cat) {
     var emails = data[cat] || [];
     emails.forEach(function (email) {
-      rows.push({
+      var row = {
         file: email.file,
         subject: email.subject || '',
         sender: email.sender || '',
@@ -185,8 +240,13 @@
         score: email.score != null ? email.score : '',
         email_type: email.type || email.email_type || '',
         decision: cat,
+        notes_destination: email.notes_destination || '',
+        classify_method: email.classify_method || '',
+        classify_confidence: email.classify_confidence != null ? email.classify_confidence : null,
         checked: false
-      });
+      };
+      rows.push(row);
+      byFile[row.file] = row;
     });
   });
 
@@ -206,7 +266,8 @@
     date: 'Date',
     score: 'Score',
     email_type: 'Type',
-    decision: 'Décision'
+    decision: 'Décision',
+    notes_destination: 'Destination notes'
   };
 
   function sortRows() {
@@ -235,6 +296,17 @@
     sel.dataset.val = sel.value;
   }
 
+  function methodBadgeHtml(method, conf) {
+    if (!method) { return ''; }
+    var cls = 'method-pending';
+    var txt = method;
+    if (method === 'ml') { cls = 'method-ml'; txt = 'ML'; }
+    else if (method === 'ollama') { cls = 'method-ollama'; txt = 'Ollama'; }
+    else if (method === 'error') { cls = 'method-error'; txt = 'Erreur'; }
+    var confTxt = (conf != null && conf > 0) ? (' ' + Math.round(conf * 100) + '%') : '';
+    return '<span class="method-badge ' + cls + '">' + txt + confTxt + '</span>';
+  }
+
   function updateSummary() {
     var counts = { delete: 0, summarize: 0, keep: 0 };
     document.querySelectorAll('select.decision').forEach(function (s) {
@@ -250,6 +322,8 @@
     tbody.innerHTML = '';
     rows.forEach(function (row, i) {
       var tr = document.createElement('tr');
+      tr.dataset.file = row.file;
+      var destDisabled = (row.decision !== 'summarize') ? ' disabled' : '';
       tr.innerHTML =
         '<td><input type="checkbox" class="row-check" data-i="' + i + '"' + (row.checked ? ' checked' : '') + '></td>' +
         '<td class="sender" title="' + esc(row.sender) + '">' + esc(row.sender) + '</td>' +
@@ -261,16 +335,32 @@
           opt('delete',    'Supprimer',  row.decision) +
           opt('summarize', 'Résumer',    row.decision) +
           opt('keep',      'Conserver',  row.decision) +
-        '</select></td>';
+        '</select></td>' +
+        '<td class="dest">' +
+          '<input type="text" class="dest-input" list="known-classes" data-i="' + i + '" value="' + esc(row.notes_destination) + '"' + destDisabled + ' placeholder="Niv1/Niv2/Niv3">' +
+          '<span class="method-slot">' + methodBadgeHtml(row.classify_method, row.classify_confidence) + '</span>' +
+        '</td>';
       tbody.appendChild(tr);
     });
 
     document.querySelectorAll('select.decision').forEach(function (sel) {
       updateSelectStyle(sel);
       sel.addEventListener('change', function () {
-        rows[parseInt(this.dataset.i)].decision = this.value;
+        var i = parseInt(this.dataset.i);
+        rows[i].decision = this.value;
         updateSelectStyle(this);
+        // Toggle the destination input on the same row.
+        var destInput = this.closest('tr').querySelector('.dest-input');
+        if (destInput) {
+          destInput.disabled = (this.value !== 'summarize');
+        }
         updateSummary();
+      });
+    });
+
+    document.querySelectorAll('input.dest-input').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        rows[parseInt(this.dataset.i)].notes_destination = this.value;
       });
     });
 
@@ -299,6 +389,35 @@
   }
 
   buildTable();
+
+  // Streaming endpoint — called from Rust via WebView.evaluate_script as
+  // each classify result arrives.
+  window.notesDestUpdate = function (file, path, method, confidence) {
+    var row = byFile[file];
+    if (!row) { return; }
+    // Only overwrite if the user has not typed something already
+    if (!row.notes_destination) {
+      row.notes_destination = path;
+    }
+    row.classify_method = method;
+    row.classify_confidence = confidence;
+    var tr = tbody.querySelector('tr[data-file="' + safeCssEscape(file) + '"]');
+    if (!tr) { return; }
+    var inp = tr.querySelector('.dest-input');
+    if (inp && !inp.value) { inp.value = path; }
+    var slot = tr.querySelector('.method-slot');
+    if (slot) { slot.innerHTML = methodBadgeHtml(method, confidence); }
+  };
+
+  // Use CSS.escape (native, RFC-compliant) when available; fall back to a minimal
+  // backslash-escaping shim for older WebViews. Real selector escaping covers many
+  // more characters than just `"` and `\`.
+  function safeCssEscape(s) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+      return CSS.escape(String(s));
+    }
+    return String(s).replace(/(["\\])/g, '\\$1');
+  }
 
   // Select all (header checkbox)
   document.getElementById('header-check').addEventListener('change', function () {
@@ -331,7 +450,7 @@
     });
   });
 
-  // Bulk apply
+  // Bulk apply decision
   document.getElementById('btn-bulk').addEventListener('click', function () {
     var decision = document.getElementById('bulk-decision').value;
     if (!decision) { alert('Choisissez une décision en masse d\'abord.'); return; }
@@ -340,12 +459,22 @@
       rows[i].decision = decision;
       var sel = document.querySelector('select.decision[data-i="' + i + '"]');
       if (sel) { sel.value = decision; updateSelectStyle(sel); }
+      var destInp = document.querySelector('input.dest-input[data-i="' + i + '"]');
+      if (destInp) { destInp.disabled = (decision !== 'summarize'); }
     });
     updateSummary();
-    rows.forEach(function (r) { r.checked = false; });
-    document.querySelectorAll('.row-check').forEach(function (cb) { cb.checked = false; });
-    document.getElementById('header-check').checked = false;
-    document.getElementById('select-all').checked = false;
+  });
+
+  // Bulk assign destination
+  document.getElementById('btn-bulk-dest').addEventListener('click', function () {
+    var dest = document.getElementById('bulk-dest').value.trim();
+    if (!dest) { alert('Saisissez une destination d\'abord.'); return; }
+    document.querySelectorAll('.row-check:checked').forEach(function (cb) {
+      var i = parseInt(cb.dataset.i);
+      rows[i].notes_destination = dest;
+      var inp = document.querySelector('input.dest-input[data-i="' + i + '"]');
+      if (inp) { inp.value = dest; }
+    });
   });
 
   // Cancel
@@ -358,7 +487,11 @@
   // Apply
   document.getElementById('btn-apply').addEventListener('click', function () {
     var decisions = rows.map(function (r) {
-      return { file: r.file, action: r.decision };
+      var d = { file: r.file, action: r.decision };
+      if (r.decision === 'summarize' && r.notes_destination) {
+        d.notes_destination = r.notes_destination;
+      }
+      return d;
     });
     var msg = JSON.stringify({ decisions: decisions });
     if (window.ipc && typeof window.ipc.postMessage === 'function') {

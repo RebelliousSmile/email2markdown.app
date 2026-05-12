@@ -1,0 +1,13 @@
+llm:
+  api_key: "your-anthropic-api-key"
+  model: "claude-sonnet-4-6"
+
+thresholds:
+  travail_days: 30
+  notification_days: 7
+  newsletter_days: 14
+
+paths:
+  input_dir: "C:/Users/fxgui/Documents/Emails/to-summarize"
+  processed_dir: "C:/Users/fxgui/Documents/Emails/processed"
+  notes_dir: "C:/Users/fxgui/Public/Notes/Thunderbird"

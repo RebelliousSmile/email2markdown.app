@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-05-12
+
+### Added
+
+- Python tooling integration: the `email-to-markdown-tools` Python pipeline is now bundled under `tools/` and invoked via `std::process::Command`. New settings `python_venv_path`, `notes_dir`, `tools_dir` configure the venv interpreter and resolution paths. Helpers `resolve_tools_scripts_dir`, `resolve_tools_templates_dir`, `resolve_tools_data_dir`, `find_python` cascade `tools_dir → {exe_dir}/tools → {cwd}/tools` and fail with `ConfigError::ToolsDirNotFound` / `PythonVenvNotConfigured` / `PythonNotFound`.
+- CLI: new `summarize` subcommand runs `tools/scripts/summarize.py` against one account's export directory (or all configured accounts when omitted). Streams stdout/stderr through the parent process and reloads `.env` explicitly so the Python child sees fresh `ANTHROPIC_API_KEY`.
+- Tray: per-account "Résumer" entry and a new top-level "Organiser les notes" menu (folder or files picker via `rfd::FileDialog`). New "Choisir répertoire de notes…" config entry, mirroring "Choisir répertoire d'export".
+- Sort review window: emails in the `summarize` category now get a "Destination notes" column pre-filled by `classify.py --batch` (with `ml` / `ollama` / `imap` / `fallback` / `error` badge and confidence). Supports multi-select bulk-assign, filter-then-assign on visible rows, "↓ vers les lignes du même expéditeur", and `<datalist>` autocomplete from `known_classes.json`. User confirmations feed back into the corpus via `classify.py --record-decision`.
+- Organize notes window (post-export workflow): walks `.md` notes, parses frontmatter, displays a sortable / filterable table with multi-select. Available bulk actions: Classify, Summarize, Group, Apply template, Archive, Delete. New `apply_template.py` script renders Jinja2 templates (`StrictUndefined`, `trim_blocks`, `lstrip_blocks`) and supports `--input-files-stdin` for batches too large for argv.
+- Templates: `tools/templates/sent_digest.md` (aperçu + détail des envois sur période) and `tools/templates/meeting_recap.md` (participants, fil chronologique, décisions à remplir).
+- Apply-sort: when a `summarize` row has a confirmed `notes_destination`, the email is moved into `{notes_dir}/{destination}` instead of the generic `to-summarize/` bucket.
+- Path-traversal guard: shared `sort_emails::join_safe_segments(root, dest)` rejects `..`, `.`, backslash, and characters outside `[A-Za-z0-9À-ſ _.\-]`. Used by both the sort apply and the Organize Classify action.
+
+### Changed
+
+- `EmailSummary.classify_method` is now a typed `Option<ClassifyMethod>` (serde tagged, `snake_case`) with a forward-compatible `#[serde(other)] Unknown` variant — replaces the prior `Option<String>` field.
+- `folder_classifier.py` cold-start: prompts include locked IMAP hint levels (short-circuit when 3 levels are known), a reuse-first instruction over `known_classes`, and a single retry constrained to existing labels before falling back to rule-based paths. Eliminates duplicate label variants (`Travail/Projets/ClientX` vs `Pro/Projets/Client-X`) on repeated classification sessions.
+
+### Tests
+
+- Unit tests added for `join_safe_segments` (7 cases: nested paths, accented segments, empty/trim handling, `..`/`.` rejection, backslash rejection, forbidden chars), `find_python` (3 cases: not configured, binary missing, happy path), `resolve_tools_scripts_dir` happy path, and the tray helpers `ensure_unique_path`, `work_root`, `sanitize_name` (8 cases covering notes_dir present/missing, common-parent fallback, multi-parent bail, empty input bail, collision increments).
+
 ## [0.9.0] - 2026-05-12
 
 ### Added

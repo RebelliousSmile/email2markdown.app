@@ -14,6 +14,40 @@ use walkdir::WalkDir;
 static UNSUBSCRIBE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)https?://[^\s)>\]]*unsubscribe[^\s)>\]]*").expect("static regex"));
 
+/// Safe path-segment shape — alphanumerics, space, dash, underscore, dot.
+/// Used to validate user-typed notes destinations against path-traversal.
+static SAFE_PATH_SEGMENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9À-ſ _.\-]+$").expect("static regex"));
+
+/// Join `dest` (user-typed `Travail/Projets/X`) onto `root` safely.
+///
+/// Rejects segments that:
+/// - contain a Windows separator `\`
+/// - are `..` or `.` (path-traversal)
+/// - contain any character outside `SAFE_PATH_SEGMENT_RE`
+///
+/// Returns the joined `PathBuf` on success, or an error naming the bad segment.
+pub fn join_safe_segments(root: &Path, dest: &str) -> anyhow::Result<PathBuf> {
+    let mut out = root.to_path_buf();
+    for raw in dest.split('/') {
+        let seg = raw.trim();
+        if seg.is_empty() {
+            continue;
+        }
+        if seg == ".." || seg == "." || seg.contains('\\') {
+            anyhow::bail!("invalid path segment in notes destination: {:?}", seg);
+        }
+        if !SAFE_PATH_SEGMENT_RE.is_match(seg) {
+            anyhow::bail!(
+                "notes destination segment contains forbidden characters: {:?}",
+                seg
+            );
+        }
+        out = out.join(seg);
+    }
+    Ok(out)
+}
+
 /// Email sorting category.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -121,6 +155,23 @@ pub struct SortDetails {
     pub by_date: HashMap<String, usize>,
 }
 
+/// Source of a classification suggestion attached to a summarized email.
+///
+/// Mirrors the `method` field emitted by `tools/scripts/classify.py` NDJSON output.
+/// The `Unknown` variant catches forward-incompatible Python additions so a new
+/// label does not break the whole apply pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassifyMethod {
+    Ml,
+    Ollama,
+    Imap,
+    Fallback,
+    Error,
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailSummary {
     pub file: String,
@@ -134,6 +185,12 @@ pub struct EmailSummary {
     pub attachments: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub breakdown: Vec<(String, i32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes_destination: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classify_confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classify_method: Option<ClassifyMethod>,
 }
 
 /// Email sorter.
@@ -640,6 +697,9 @@ impl EmailSorter {
                     size: e.file_size,
                     attachments: e.attachment_count,
                     breakdown: e.score_breakdown.clone(),
+                    notes_destination: None,
+                    classify_confidence: None,
+                    classify_method: None,
                 })
                 .collect();
 
@@ -1055,7 +1115,11 @@ fn rewrite_attachment_paths(
 }
 
 /// Apply the decisions from a `SortReport`: trash deletes, move summarize, count keeps.
-pub fn apply_report(report: &SortReport, local_folder: &str) -> anyhow::Result<ApplyStats> {
+pub fn apply_report(
+    report: &SortReport,
+    local_folder: &str,
+    notes_dir: Option<&Path>,
+) -> anyhow::Result<ApplyStats> {
     let mut deleted = 0usize;
     let mut moved = 0usize;
     let mut skipped = 0usize;
@@ -1124,30 +1188,49 @@ pub fn apply_report(report: &SortReport, local_folder: &str) -> anyhow::Result<A
         .cloned()
         .unwrap_or_default();
 
-    let to_summarize_dir = base
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(local_folder)
-        .join("to-summarize");
+    // Work root for the fallback `to-summarize/` holding area.
+    // Strict: never silently retarget to CWD. If neither `notes_dir` nor a real
+    // parent exists, refuse to create a folder — the user must fix their config.
+    let fallback_root: Option<PathBuf> = notes_dir.map(|p| p.to_path_buf()).or_else(|| {
+        base.parent()
+            .filter(|p| !p.as_os_str().is_empty() && p.is_dir())
+            .map(|p| p.to_path_buf())
+    });
 
     for email in &summarize_entries {
         let md_path = base.join(&email.file);
         if !md_path.exists() {
             continue;
         }
-        fs::create_dir_all(&to_summarize_dir)
-            .context("failed to create to-summarize directory")?;
-        let dest = to_summarize_dir.join(
-            md_path.file_name().unwrap_or_default(),
-        );
+
+        // If the user assigned a notes destination AND notes_dir is configured,
+        // route into {notes_dir}/{dest}/. Otherwise fall back to the
+        // {fallback_root}/{local_folder}/to-summarize/ holding area.
+        let dest_dir: PathBuf = match (email.notes_destination.as_ref(), notes_dir) {
+            (Some(dest), Some(notes_root)) if !dest.trim().is_empty() => {
+                join_safe_segments(notes_root, dest)?
+            }
+            _ => match &fallback_root {
+                Some(root) => root.join(local_folder).join("to-summarize"),
+                None => anyhow::bail!(
+                    "notes destination not configured: set notes_dir in settings, \
+                     or export to a directory that has a valid parent (got base = {})",
+                    base.display()
+                ),
+            },
+        };
+
+        fs::create_dir_all(&dest_dir)
+            .with_context(|| format!("failed to create {}", dest_dir.display()))?;
+        let dest = dest_dir.join(md_path.file_name().unwrap_or_default());
         if fs::rename(&md_path, &dest).is_err() {
             fs::copy(&md_path, &dest)
-                .with_context(|| format!("failed to copy {} to to-summarize/", email.file))?;
+                .with_context(|| format!("failed to copy {} to {}", email.file, dest_dir.display()))?;
             fs::remove_file(&md_path)
                 .with_context(|| format!("failed to remove {} after copy", email.file))?;
         }
         // Rewrite attachment paths relative to new location
-        if let Err(e) = rewrite_attachment_paths(&dest, &base, &to_summarize_dir) {
+        if let Err(e) = rewrite_attachment_paths(&dest, &base, &dest_dir) {
             eprintln!("warning: could not update attachment paths in {}: {}", dest.display(), e);
         }
         moved += 1;
@@ -1633,6 +1716,9 @@ mod tests {
                     size: 1000,
                     attachments: 0,
                     breakdown: vec![],
+                    notes_destination: None,
+                    classify_confidence: None,
+                    classify_method: None,
                 });
         }
         SortReport {
@@ -1787,6 +1873,9 @@ mod tests {
             size: 500,
             attachments: 0,
             breakdown: vec![],
+            notes_destination: None,
+            classify_confidence: None,
+            classify_method: None,
         }
     }
 
@@ -1827,7 +1916,7 @@ mod tests {
             categories,
         };
 
-        let stats = apply_report(&report, "_local").unwrap();
+        let stats = apply_report(&report, "_local", None).unwrap();
 
         // Inclusive: one email moved
         assert_eq!(stats.moved, 1, "one email should be moved to to-summarize");
@@ -1872,7 +1961,7 @@ mod tests {
         };
 
         // Should not error — just silently skip
-        let stats = apply_report(&report, "_local").unwrap();
+        let stats = apply_report(&report, "_local", None).unwrap();
 
         assert_eq!(stats.moved, 0, "no file should be moved when source is missing");
         assert_eq!(stats.deleted, 0, "no file should be deleted");
