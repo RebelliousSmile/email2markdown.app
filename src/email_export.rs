@@ -495,7 +495,7 @@ pub fn fix_html_bodies(
 }
 
 /// Extract the body portion of a `.md` file (content after the closing `---`).
-fn extract_md_body(content: &str) -> &str {
+pub(crate) fn extract_md_body(content: &str) -> &str {
     // Skip the opening ---
     let after_open = content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n")).unwrap_or(content);
     // Find the closing ---
@@ -509,7 +509,7 @@ fn extract_md_body(content: &str) -> &str {
 }
 
 /// Extract the body from a parsed email.
-fn extract_body(mail: &ParsedMail) -> String {
+pub(crate) fn extract_body(mail: &ParsedMail) -> String {
     if mail.subparts.is_empty() {
         // Not multipart
         mail.get_body().unwrap_or_default()
@@ -668,7 +668,7 @@ static NAME_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
 });
 
 /// Extract filename parameter from a header value.
-fn extract_filename_from_header(header: &str) -> Option<String> {
+pub(crate) fn extract_filename_from_header(header: &str) -> Option<String> {
     if let Some(caps) = FILENAME_RE.captures(header) {
         return caps
             .get(1)
@@ -1253,5 +1253,279 @@ mod tests {
     fn test_html_to_markdown_empty() {
         let result = html_to_markdown("");
         assert!(result.is_empty() || result.trim().is_empty());
+    }
+
+    // ── Helper ──────────────────────────────────────────────────────────────────
+
+    /// Build a minimal valid RFC 2822 raw email.
+    fn make_raw_email(from: &str, to: &str, subject: &str, content_type: &str, body: &str) -> Vec<u8> {
+        format!(
+            "From: {from}\r\nTo: {to}\r\nSubject: {subject}\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: {content_type}\r\n\r\n{body}"
+        )
+        .into_bytes()
+    }
+
+    /// Build a multipart/alternative email with a text/plain and a text/html part.
+    fn make_multipart_email(plain: &str, html: &str) -> Vec<u8> {
+        let boundary = "TEST_BOUNDARY_42";
+        format!(
+            "From: sender@example.com\r\nTo: recv@example.com\r\nSubject: Test\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/alternative; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{plain}\r\n--{boundary}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{html}\r\n--{boundary}--\r\n"
+        )
+        .into_bytes()
+    }
+
+    // ── Phase 1 — extract_body ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_body_prefers_text_plain_over_html() {
+        let raw = make_multipart_email("Hello plain text", "<p>Hello HTML</p>");
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        // Inclusive: must contain the plain-text content
+        assert!(body.contains("Hello plain text"), "body should contain plain text: got {:?}", body);
+        // Exclusive: must NOT contain the HTML tag (plain preferred, not HTML-converted)
+        assert!(!body.contains("<p>"), "body should not contain raw HTML tags: got {:?}", body);
+    }
+
+    #[test]
+    fn test_extract_body_html_fallback_when_no_plain() {
+        let boundary = "BOUND_HTML_ONLY";
+        let raw = format!(
+            "From: a@b.com\r\nTo: c@d.com\r\nSubject: S\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/alternative; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Only HTML body</p>\r\n--{boundary}--\r\n"
+        ).into_bytes();
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        // Inclusive: HTML was converted — the text content should be present
+        assert!(body.contains("Only HTML body"), "body should contain converted HTML text: got {:?}", body);
+        // Exclusive: conversion means no raw HTML tags remain
+        assert!(!body.contains("<p>"), "body should not contain raw HTML tags after conversion: got {:?}", body);
+    }
+
+    #[test]
+    fn test_extract_body_simple_non_multipart() {
+        let raw = make_raw_email(
+            "a@b.com", "c@d.com", "Simple", "text/plain; charset=utf-8", "Simple body content",
+        );
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        assert!(body.contains("Simple body content"), "body should contain text: got {:?}", body);
+        assert!(!body.contains("Content-Type"), "body should not contain header lines: got {:?}", body);
+    }
+
+    #[test]
+    fn test_extract_body_nested_multipart() {
+        let inner_boundary = "INNER";
+        let outer_boundary = "OUTER";
+        // Outer: multipart/mixed wrapping an inner multipart/alternative
+        let raw = format!(
+            "From: a@b.com\r\nTo: c@d.com\r\nSubject: Nested\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"{outer_boundary}\"\r\n\r\n--{outer_boundary}\r\nContent-Type: multipart/alternative; boundary=\"{inner_boundary}\"\r\n\r\n--{inner_boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nNested plain text body\r\n--{inner_boundary}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Nested HTML</p>\r\n--{inner_boundary}--\r\n--{outer_boundary}--\r\n"
+        ).into_bytes();
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        assert!(body.contains("Nested plain text body"), "nested body should be extracted: got {:?}", body);
+        assert!(!body.contains("<p>"), "should not contain raw HTML in nested case: got {:?}", body);
+    }
+
+    // ── Phase 2 — export_to_markdown E2E ────────────────────────────────────────
+
+    fn make_account(export_dir: &str) -> crate::config::Account {
+        crate::config::Account {
+            name: "test".to_string(),
+            server: "imap.example.com".to_string(),
+            port: 993,
+            username: "user@example.com".to_string(),
+            password: None,
+            export_directory: export_dir.to_string(),
+            ignored_folders: vec![],
+            quote_depth: 0,
+            skip_existing: false,
+            collect_contacts: false,
+            skip_signature_images: false,
+            delete_after_export: false,
+            cleanup_empty_dirs: false,
+            organize_by_type: false,
+        }
+    }
+
+    #[test]
+    fn test_export_to_markdown_produces_valid_frontmatter() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let export_dir = temp.path().join("out");
+        let account = make_account(&export_dir.to_string_lossy());
+
+        let raw = make_raw_email(
+            "Alice <alice@example.com>",
+            "Bob <bob@example.com>",
+            "Hello World",
+            "text/plain; charset=utf-8",
+            "Test body",
+        );
+
+        let result = export_to_markdown(
+            &raw,
+            &export_dir,
+            temp.path(),
+            vec!["INBOX".to_string()],
+            &account,
+            None,
+            false,
+        );
+
+        let path = result.unwrap().expect("should return a path");
+        let content = fs::read_to_string(&path).unwrap();
+
+        // Inclusive: YAML frontmatter markers
+        assert!(content.starts_with("---\n"), "file should start with ---: got {:?}", &content[..50.min(content.len())]);
+        assert!(content.contains("subject: Hello World"), "frontmatter should contain subject: got {:?}", &content[..200.min(content.len())]);
+        assert!(content.contains("from: Alice <alice@example.com>"), "frontmatter should contain from");
+        // Inclusive: subject_hash key must be present in frontmatter
+        assert!(content.contains("subject_hash:"), "subject_hash key must be present");
+        // Body present after closing ---
+        assert!(content.contains("Test body"), "body should appear after frontmatter");
+    }
+
+    #[test]
+    fn test_export_to_markdown_skip_existing_returns_none() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let export_dir = temp.path().join("out");
+        let mut account = make_account(&export_dir.to_string_lossy());
+        account.skip_existing = true;
+
+        let raw = make_raw_email(
+            "alice@example.com",
+            "bob@example.com",
+            "Duplicate Subject",
+            "text/plain; charset=utf-8",
+            "Body text",
+        );
+
+        // First export — should succeed
+        let first = export_to_markdown(&raw, &export_dir, temp.path(), vec![], &account, None, false)
+            .unwrap()
+            .expect("first export should produce a file");
+
+        // Verify the file exists and contains the subject_hash
+        let content = fs::read_to_string(&first).unwrap();
+        assert!(content.contains("subject_hash:"), "first export must have subject_hash");
+
+        // Second export — should be skipped
+        let second = export_to_markdown(&raw, &export_dir, temp.path(), vec![], &account, None, false).unwrap();
+        assert!(second.is_none(), "second export should return None when skip_existing is true");
+    }
+
+    // ── Phase 3 — fix_html_bodies / extract_md_body ─────────────────────────────
+
+    #[test]
+    fn test_extract_md_body_extracts_body() {
+        let content = "---\nfrom: a@b.com\nsubject: Test\n---\n\nHello body here";
+        let body = extract_md_body(content);
+
+        assert!(body.contains("Hello body here"), "body should be extracted: got {:?}", body);
+        assert!(!body.contains("from:"), "body should not contain frontmatter fields: got {:?}", body);
+        assert!(!body.contains("---"), "body should not contain separators: got {:?}", body);
+    }
+
+    #[test]
+    fn test_extract_md_body_crlf_separators() {
+        let content = "---\r\nfrom: a@b.com\r\nsubject: Test\r\n---\r\n\r\nCRLF body";
+        let body = extract_md_body(content);
+
+        assert!(body.contains("CRLF body"), "CRLF body should be extracted: got {:?}", body);
+        assert!(!body.contains("from:"), "should not contain frontmatter: got {:?}", body);
+    }
+
+    #[test]
+    fn test_extract_md_body_no_frontmatter_returns_full_content() {
+        let content = "No frontmatter here\nJust plain content";
+        let body = extract_md_body(content);
+
+        // When there is no frontmatter, the full content is returned
+        assert!(body.contains("No frontmatter here"), "full content should be returned: got {:?}", body);
+        assert!(body.contains("Just plain content"), "full content should be returned: got {:?}", body);
+    }
+
+    #[test]
+    fn test_fix_html_bodies_converts_html_md_file() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let md_file = temp.path().join("email.md");
+        let html_content = "---\nfrom: a@b.com\nsubject: Test\n---\n<!DOCTYPE html><html><body><p>Converted paragraph</p></body></html>";
+        fs::write(&md_file, html_content).unwrap();
+
+        let stats = fix_html_bodies(temp.path(), false, None).unwrap();
+
+        assert_eq!(stats.fixed, 1, "one file should be fixed");
+        assert_eq!(stats.errors, 0, "no errors expected");
+
+        let after = fs::read_to_string(&md_file).unwrap();
+        // Inclusive: HTML was converted
+        assert!(after.contains("Converted paragraph"), "converted text should be present: got {:?}", &after);
+        // Exclusive: raw HTML tags removed
+        assert!(!after.contains("<p>"), "raw <p> tags should be gone: got {:?}", &after);
+        assert!(!after.contains("<!DOCTYPE"), "DOCTYPE declaration should be gone: got {:?}", &after);
+    }
+
+    #[test]
+    fn test_fix_html_bodies_dry_run_does_not_modify() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let md_file = temp.path().join("email_dry.md");
+        let original = "---\nfrom: a@b.com\nsubject: Test\n---\n<!DOCTYPE html><html><body><p>Dry run body</p></body></html>";
+        fs::write(&md_file, original).unwrap();
+
+        let stats = fix_html_bodies(temp.path(), true, None).unwrap();
+
+        assert_eq!(stats.fixed, 1, "dry run still counts fixed");
+        let after = fs::read_to_string(&md_file).unwrap();
+        // Exclusive: file must not be modified
+        assert_eq!(after, original, "dry_run must not modify the file");
+    }
+
+    // ── Phase 4 — extract_filename_from_header ───────────────────────────────────
+
+    #[test]
+    fn test_extract_filename_from_header_quoted() {
+        let header = r#"attachment; filename="report.pdf""#;
+        let result = extract_filename_from_header(header);
+
+        assert_eq!(result.as_deref(), Some("report.pdf"), "quoted filename should be extracted");
+    }
+
+    #[test]
+    fn test_extract_filename_from_header_star_form() {
+        // RFC 5987 star-form: filename*=UTF-8''document.pdf
+        let header = "attachment; filename*=UTF-8''document.pdf";
+        let result = extract_filename_from_header(header);
+
+        // The regex matches `filename*=` capturing the unquoted value
+        assert!(result.is_some(), "star-form filename should be extracted");
+        let val = result.unwrap();
+        assert!(val.contains("document.pdf"), "extracted value should contain filename: got {:?}", val);
+    }
+
+    #[test]
+    fn test_extract_filename_from_content_type_name() {
+        let header = r#"application/pdf; name="invoice.pdf""#;
+        let result = extract_filename_from_header(header);
+
+        assert_eq!(result.as_deref(), Some("invoice.pdf"), "name= parameter should be extracted from Content-Type");
+    }
+
+    #[test]
+    fn test_extract_filename_from_header_none_when_absent() {
+        let header = "attachment; size=12345";
+        let result = extract_filename_from_header(header);
+
+        assert!(result.is_none(), "should return None when no filename parameter: got {:?}", result);
     }
 }

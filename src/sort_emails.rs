@@ -1773,4 +1773,108 @@ mod tests {
             "old path should have been replaced, got: {content}"
         );
     }
+
+    // ── Phase 5 — apply_report ──────────────────────────────────────────────────
+
+    fn make_email_summary(file: &str, subject: &str) -> EmailSummary {
+        EmailSummary {
+            file: file.to_string(),
+            subject: subject.to_string(),
+            sender: "sender@example.com".to_string(),
+            date: "2024-01-01".to_string(),
+            score: 0,
+            email_type: "direct".to_string(),
+            size: 500,
+            attachments: 0,
+            breakdown: vec![],
+        }
+    }
+
+    #[test]
+    fn test_apply_report_moves_summarize_emails() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Create a real .md file that will be moved
+        let md_name = "email_2024-01-01_test.md";
+        let md_path = base.join(md_name);
+        std::fs::write(&md_path, "---\nsubject: Move Me\n---\nBody").unwrap();
+
+        let mut categories = HashMap::new();
+        categories.insert(
+            "summarize".to_string(),
+            vec![make_email_summary(md_name, "Move Me")],
+        );
+        categories.insert("delete".to_string(), vec![]);
+        categories.insert("keep".to_string(), vec![]);
+
+        let report = SortReport {
+            base_directory: base.to_string_lossy().to_string(),
+            organize_by_type: false,
+            summary: SortSummary {
+                total_emails: 1,
+                categories: HashMap::new(),
+                recommendations: HashMap::new(),
+            },
+            details: SortDetails {
+                by_type: HashMap::new(),
+                by_sender: vec![],
+                by_date: HashMap::new(),
+            },
+            categories,
+        };
+
+        let stats = apply_report(&report, "_local").unwrap();
+
+        // Inclusive: one email moved
+        assert_eq!(stats.moved, 1, "one email should be moved to to-summarize");
+        // Exclusive: original file should no longer exist at base
+        assert!(!md_path.exists(), "original file should have been moved away");
+        // Inclusive: file should be in to-summarize/
+        let dest = base.parent().unwrap().join("_local").join("to-summarize").join(md_name);
+        assert!(dest.exists(), "file should be present in to-summarize/: {:?}", dest);
+    }
+
+    #[test]
+    fn test_apply_report_skips_missing_files() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("emails");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // File listed in report but does NOT exist on disk
+        let mut categories = HashMap::new();
+        categories.insert(
+            "summarize".to_string(),
+            vec![make_email_summary("nonexistent.md", "Ghost Email")],
+        );
+        categories.insert("delete".to_string(), vec![]);
+        categories.insert("keep".to_string(), vec![]);
+
+        let report = SortReport {
+            base_directory: base.to_string_lossy().to_string(),
+            organize_by_type: false,
+            summary: SortSummary {
+                total_emails: 1,
+                categories: HashMap::new(),
+                recommendations: HashMap::new(),
+            },
+            details: SortDetails {
+                by_type: HashMap::new(),
+                by_sender: vec![],
+                by_date: HashMap::new(),
+            },
+            categories,
+        };
+
+        // Should not error — just silently skip
+        let stats = apply_report(&report, "_local").unwrap();
+
+        assert_eq!(stats.moved, 0, "no file should be moved when source is missing");
+        assert_eq!(stats.deleted, 0, "no file should be deleted");
+    }
 }
