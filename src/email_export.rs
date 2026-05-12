@@ -809,6 +809,8 @@ impl ImapExporter {
                     && !attrs.iter().any(|a| {
                         matches!(a, NameAttribute::Extension(s) if s.eq_ignore_ascii_case("Important"))
                     })
+                    // Gmail does not always declare \Important via SPECIAL-USE — filter by known names
+                    && !matches!(f.name(), "[Gmail]/Important" | "[Google Mail]/Important")
             })
             .map(|f| {
                 let raw = f.name().to_string();
@@ -1029,6 +1031,9 @@ impl ImapExporter {
                 }
 
                 println!("Exporting {} ...", folder.display);
+                if let Some(s) = on_status {
+                    s("Récupération des en-têtes…");
+                }
 
                 let stats = self.export_folder(&folder, contacts_collector.as_mut(), cancel_token)?;
                 if let Some(s) = on_status {
