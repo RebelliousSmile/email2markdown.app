@@ -777,6 +777,15 @@
       window.ipc.postMessage(JSON.stringify(payload));
     }
 
+    if (!window.__SETTINGS_DATA__.accounts) window.__SETTINGS_DATA__.accounts = {};
+    var inMemBehavior = {};
+    for (var bf = 0; bf < ACCT_BOOL_FIELDS.length; bf++) {
+      var bfVal = behaviorData[ACCT_BOOL_FIELDS[bf][1]];
+      if (bfVal !== null) inMemBehavior[ACCT_BOOL_FIELDS[bf][1]] = bfVal;
+    }
+    if (behaviorData.quote_depth !== null) inMemBehavior.quote_depth = behaviorData.quote_depth;
+    window.__SETTINGS_DATA__.accounts[accountName] = inMemBehavior;
+
     var savedMsg = document.getElementById('acct-saved-msg');
     var saveBtn = this;
     savedMsg.style.display = 'inline';
