@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-05-12
+
+### Added
+
+- Contacts: CSV export now centralised in `{export_base_dir}/_local/contacts/{account}.csv` (one file per account) instead of per-account subdirectories. Columns match Thunderbird address book import format (`First Name`, `Last Name`, `Display Name`, `Email`, `Notes`). File written with UTF-8 BOM for correct encoding detection on Windows.
+- Contacts: contacts are now also collected during the header pre-check phase, so emails that are skipped because they were already exported still contribute to the contacts CSV.
+
+### Fixed
+
+- Config GUI: per-account behaviour settings now persist correctly within the same config window session. `window.__SETTINGS_DATA__` was only injected at window open time; navigating back to the account list and re-opening the same account showed stale values. The in-memory snapshot is now updated immediately after each save.
+
 ## [0.8.0] - 2026-05-12
 
 ### Added

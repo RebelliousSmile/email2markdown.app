@@ -1,6 +1,6 @@
 [package]
 name = "email-to-markdown"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 authors = ["FX Guillois"]
 description = "Export emails from IMAP accounts to Markdown files with YAML frontmatter"
