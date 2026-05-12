@@ -15,6 +15,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,13 +231,41 @@ pub fn email_already_exported(
     false
 }
 
+/// Check if an email should be skipped based on its raw headers alone.
+fn should_skip_from_headers(raw_headers: &[u8], export_dir: &Path) -> bool {
+    if raw_headers.is_empty() {
+        return false;
+    }
+    let mail = match mailparse::parse_mail(raw_headers) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let from_field = mail.headers.get_first_value("From").unwrap_or_default();
+    let to_field = mail.headers.get_first_value("To").unwrap_or_default();
+    let date_field = mail.headers.get_first_value("Date").unwrap_or_default();
+    let subject = mail.headers.get_first_value("Subject").unwrap_or_default();
+
+    let date_obj = parse_email_date(&date_field);
+    let date_str = date_obj
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "unknown-date".to_string());
+    let sender_short = get_short_name(Some(&from_field));
+    let recipient_short = get_short_name(Some(&to_field));
+    let subject_hash = if !subject.is_empty() {
+        hash_md5_prefix(&subject, 6)
+    } else {
+        "no-subject".to_string()
+    };
+
+    email_already_exported(&date_str, &sender_short, &recipient_short, &subject_hash, export_dir)
+}
+
 /// Parse email date string to DateTime.
 fn parse_email_date(date_str: &str) -> Option<DateTime<FixedOffset>> {
     mailparse::dateparse(date_str)
         .ok()
-        .map(|ts| DateTime::from_timestamp(ts, 0))
-        .flatten()
-        .map(|dt| dt.with_timezone(&FixedOffset::east_opt(0).unwrap()))
+        .and_then(|ts| DateTime::from_timestamp(ts, 0))
+        .map(|dt| dt.fixed_offset())
 }
 
 /// Export a single email to Markdown with frontmatter.
@@ -617,20 +646,24 @@ fn extract_attachment_filename(part: &ParsedMail) -> Option<String> {
     None
 }
 
+static FILENAME_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"filename[*]?=(?:"([^"]+)"|([^;\s]+))"#).expect("static regex")
+});
+
+static NAME_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"name[*]?=(?:"([^"]+)"|([^;\s]+))"#).expect("static regex")
+});
+
 /// Extract filename parameter from a header value.
 fn extract_filename_from_header(header: &str) -> Option<String> {
-    // Look for filename="..." or filename=...
-    let re = regex::Regex::new(r#"filename[*]?=(?:"([^"]+)"|([^;\s]+))"#).ok()?;
-    if let Some(caps) = re.captures(header) {
+    if let Some(caps) = FILENAME_RE.captures(header) {
         return caps
             .get(1)
             .or_else(|| caps.get(2))
             .map(|m| m.as_str().to_string());
     }
 
-    // Look for name="..." or name=...
-    let re_name = regex::Regex::new(r#"name[*]?=(?:"([^"]+)"|([^;\s]+))"#).ok()?;
-    if let Some(caps) = re_name.captures(header) {
+    if let Some(caps) = NAME_RE.captures(header) {
         return caps
             .get(1)
             .or_else(|| caps.get(2))
@@ -765,7 +798,18 @@ impl ImapExporter {
         let folders = session.list(None, Some("*"))?;
         let folder_names: Vec<FolderName> = folders
             .iter()
-            .filter(|f| !f.attributes().contains(&NameAttribute::NoSelect))
+            .filter(|f| {
+                let attrs = f.attributes();
+                !attrs.contains(&NameAttribute::NoSelect)
+                    && !attrs.contains(&NameAttribute::Junk)
+                    && !attrs.contains(&NameAttribute::Trash)
+                    && !attrs.contains(&NameAttribute::Drafts)
+                    && !attrs.contains(&NameAttribute::All)
+                    && !attrs.contains(&NameAttribute::Flagged)
+                    && !attrs.iter().any(|a| {
+                        matches!(a, NameAttribute::Extension(s) if s.eq_ignore_ascii_case("Important"))
+                    })
+            })
             .map(|f| {
                 let raw = f.name().to_string();
                 let display = decode_imap_utf7(f.name());
@@ -806,13 +850,49 @@ impl ImapExporter {
             // Search for all messages
             let uids = session.search("ALL")?;
             let uids_vec: Vec<_> = uids.into_iter().collect();
-            let total_messages = uids_vec.len();
+
+            // Pre-filter: batch fetch headers, skip already-exported without downloading body
+            let (filtered_uids, pre_skipped) = if self.account.skip_existing && !uids_vec.is_empty() {
+                let seq_set = uids_vec.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+                match session.fetch(&seq_set, "RFC822.HEADER") {
+                    Ok(headers) => {
+                        let mut skip_set = HashSet::new();
+                        for message in headers.iter() {
+                            if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
+                                break;
+                            }
+                            if should_skip_from_headers(
+                                message.header().unwrap_or(&[]),
+                                &export_directory,
+                            ) {
+                                skip_set.insert(message.message);
+                            }
+                        }
+                        let skipped = skip_set.len();
+                        let filtered = uids_vec
+                            .iter()
+                            .filter(|u| !skip_set.contains(u))
+                            .copied()
+                            .collect::<Vec<_>>();
+                        (filtered, skipped)
+                    }
+                    Err(e) => {
+                        if self.debug_mode {
+                            eprintln!("  Header pre-fetch failed, falling back to full fetch: {:#}", e);
+                        }
+                        (uids_vec, 0)
+                    }
+                }
+            } else {
+                (uids_vec, 0)
+            };
 
             // [3] Progress indicator
-            let mut progress = ProgressIndicator::new(&folder.display, total_messages);
+            let mut progress = ProgressIndicator::new(&folder.display, filtered_uids.len());
             let mut stats = ExportStats::default();
+            stats.skipped += pre_skipped;
 
-            for (_idx, uid) in uids_vec.into_iter().enumerate() {
+            for (_idx, uid) in filtered_uids.into_iter().enumerate() {
                 if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
                     break;
                 }
