@@ -465,7 +465,13 @@ pub fn extract_links(s: &str) -> String {
 
     let rewritten = re.replace_all(s, |caps: &regex::Captures| {
         let text = &caps[1];
-        let url = &caps[2];
+        let raw = &caps[2];
+        // Strip optional Markdown title attribute: [text](url "title") → url
+        let url = raw.split_whitespace().next().unwrap_or(raw).trim();
+        // Fragment-only or relative links are valid — keep as-is silently
+        if url.starts_with('#') || !url.contains("://") {
+            return caps[0].to_string();
+        }
         match Url::parse(url) {
             Ok(_) => {
                 counter += 1;
