@@ -144,7 +144,6 @@ mod menu_ids {
     pub const QUIT: &str = "quit";
     pub const EXPORT_PREFIX: &str = "export_";
     pub const SORT_PREFIX: &str = "sort_";
-    pub const FIXYAML_PREFIX: &str = "fixyaml_";
     pub const FIXHTML_PREFIX: &str = "fixhtml_";
 }
 
@@ -1042,18 +1041,6 @@ fn create_menu() -> Result<Menu> {
 
     let outils_submenu = Submenu::new("Outils", true);
 
-    let fixyaml_submenu = Submenu::new("Fix YAML", has_accounts);
-    for account in &accounts {
-        let id = format!("{}{}", menu_ids::FIXYAML_PREFIX, account);
-        let _ = fixyaml_submenu.append(&MenuItem::with_id(
-            id,
-            account,
-            true,
-            no_accel.clone(),
-        ));
-    }
-    let _ = outils_submenu.append(&fixyaml_submenu);
-
     let fixhtml_submenu = Submenu::new("Fix HTML→Markdown", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::FIXHTML_PREFIX, account);
@@ -1169,11 +1156,6 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
         id if id.starts_with(menu_ids::SORT_PREFIX) => {
             if let Some(account_name) = id.strip_prefix(menu_ids::SORT_PREFIX) {
                 tray_actions::action_sort(account_name.to_string(), result_sender);
-            }
-        }
-        id if id.starts_with(menu_ids::FIXYAML_PREFIX) => {
-            if let Some(account_name) = id.strip_prefix(menu_ids::FIXYAML_PREFIX) {
-                tray_actions::action_fix_yaml(account_name.to_string(), result_sender);
             }
         }
         id if id.starts_with(menu_ids::FIXHTML_PREFIX) => {

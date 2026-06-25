@@ -609,49 +609,6 @@ mod email_export_tests {
     }
 }
 
-mod fix_yaml_tests {
-    use email_to_markdown::fix_yaml::*;
-
-    #[test]
-    fn test_fix_complex_yaml_tags_python_object() {
-        let content = "subject: !!python/object:email.header.Header test";
-        let fixed = fix_complex_yaml_tags(content);
-        assert!(!fixed.contains("!!python/object:"));
-    }
-
-    #[test]
-    fn test_fix_complex_yaml_tags_anchor() {
-        let content = "field: &anchor value";
-        let fixed = fix_complex_yaml_tags(content);
-        assert!(!fixed.contains("&anchor"));
-    }
-
-    #[test]
-    fn test_extract_frontmatter_valid() {
-        let content = "---\nfrom: test@example.com\n---\n\nBody content";
-        let result = extract_frontmatter(content);
-        assert!(result.is_some());
-
-        let (frontmatter, body) = result.unwrap();
-        assert!(frontmatter.contains("from:"));
-        assert!(body.contains("Body content"));
-    }
-
-    #[test]
-    fn test_extract_frontmatter_no_closing() {
-        let content = "---\nfrom: test@example.com\n\nBody content";
-        let result = extract_frontmatter(content);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_extract_frontmatter_no_opening() {
-        let content = "from: test@example.com\n---\n\nBody content";
-        let result = extract_frontmatter(content);
-        assert!(result.is_none());
-    }
-}
-
 mod sort_emails_tests {
     use email_to_markdown::sort_emails::*;
     use email_to_markdown::config::SortConfig;

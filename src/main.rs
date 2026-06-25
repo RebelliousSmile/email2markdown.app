@@ -3,10 +3,8 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 use email_to_markdown::config::{self, Config, Settings, SortConfig};
-use email_to_markdown::email_export::{fix_html_bodies, ImapExporter};
-use email_to_markdown::fix_yaml;
+use email_to_markdown::email_export::ImapExporter;
 use email_to_markdown::sort_emails::{apply_report, review_report, EmailSorter, SortReport};
-use email_to_markdown::summarize;
 use std::fs;
 use email_to_markdown::thunderbird;  // [1] Import Thunderbird
 
@@ -76,28 +74,6 @@ enum Commands {
         debug: bool,
     },
 
-    /// Fix malformed YAML in email files
-    Fix {
-        /// Directory containing email files to fix
-        directory: Option<PathBuf>,
-
-        /// Fix for a specific account (resolves directory automatically)
-        #[arg(short, long)]
-        account: Option<String>,
-
-        /// Convert raw HTML bodies to Markdown in existing .md files
-        #[arg(long)]
-        html_bodies: bool,
-
-        /// Scan only, show what would be fixed
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Actually fix the files (default is dry-run)
-        #[arg(long)]
-        apply: bool,
-    },
-
     /// Sort emails into categories (delete/summarize/keep)
     Sort {
         /// Directory containing email markdown files
@@ -143,17 +119,6 @@ enum Commands {
         /// Preview actions without executing (no trash, no move)
         #[arg(long)]
         dry_run: bool,
-    },
-
-    /// Run Python summarize pipeline on an account's export directory
-    Summarize {
-        /// Run only for specific account(s) — comma separated
-        #[arg(short, long)]
-        account: Option<String>,
-
-        /// List available accounts
-        #[arg(long)]
-        list_accounts: bool,
     },
 
     /// Run as system tray application (requires --features tray)
@@ -401,47 +366,6 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Fix {
-            directory,
-            account,
-            html_bodies,
-            dry_run,
-            apply,
-        } => {
-            // Resolve directory from --account or positional argument
-            let resolved_dir: PathBuf = if let Some(ref account_name) = account {
-                let accounts_config = Config::load(&config::accounts_yaml_path())
-                    .context("failed to load accounts config")?;
-                let acc = accounts_config
-                    .get_account(account_name)
-                    .with_context(|| format!("account '{}' not found", account_name))?;
-                PathBuf::from(&acc.export_directory)
-            } else if let Some(dir) = directory {
-                dir
-            } else {
-                println!("Error: provide a directory or --account <name>");
-                return Ok(());
-            };
-
-            if !resolved_dir.exists() {
-                println!("Directory not found: {}", resolved_dir.display());
-                return Ok(());
-            }
-
-            let is_dry_run = !apply || dry_run;
-
-            if html_bodies {
-                println!("{}Converting HTML bodies in: {}", if is_dry_run { "[dry-run] " } else { "" }, resolved_dir.display());
-                let stats = fix_html_bodies(&resolved_dir, is_dry_run, None)
-                    .context("failed to fix html bodies")?;
-                println!("Fixed: {} | Skipped: {} | Errors: {}", stats.fixed, stats.skipped, stats.errors);
-            } else {
-                println!("Scanning for malformed email files in: {}", resolved_dir.display());
-                let stats = fix_yaml::scan_and_fix_directory(&resolved_dir, is_dry_run, None)?;
-                fix_yaml::print_summary(&stats, is_dry_run);
-            }
-        }
-
         Commands::Sort {
             directory,
             account,
@@ -614,65 +538,6 @@ fn main() -> Result<()> {
                 "Deleted: {} | Moved to to-summarize: {} | Kept: {}",
                 stats.deleted, stats.moved, stats.skipped
             );
-        }
-
-        Commands::Summarize {
-            account,
-            list_accounts,
-        } => {
-            // Reload .env explicitly: matches the tray_actions pattern so summarize.py
-            // sees fresh `ANTHROPIC_API_KEY` and friends even if main()'s early load ran
-            // before a recent edit of the env file.
-            dotenvy::from_path(config::env_file_path()).ok();
-
-            let cfg = Config::load(&config::accounts_yaml_path())
-                .context("failed to load accounts configuration")?;
-
-            if list_accounts {
-                println!("Available accounts from accounts.yaml:");
-                for (i, acc) in cfg.accounts.iter().enumerate() {
-                    println!("   {}. {} -> {}", i + 1, acc.name, acc.export_directory);
-                }
-                return Ok(());
-            }
-
-            let settings = Settings::load(&config::settings_path()).unwrap_or_default();
-            let python = summarize::find_python(&settings)
-                .context("failed to resolve python interpreter")?;
-            let scripts_dir = config::resolve_tools_scripts_dir(&settings)
-                .context("failed to resolve tools/scripts directory")?;
-            let script = scripts_dir.join("summarize.py");
-
-            let accounts_to_run: Vec<_> = if let Some(names) = &account {
-                let wanted: Vec<_> = names.split(',').map(|s| s.trim().to_lowercase()).collect();
-                cfg.accounts
-                    .iter()
-                    .filter(|a| wanted.contains(&a.name.to_lowercase()))
-                    .cloned()
-                    .collect()
-            } else {
-                cfg.accounts.clone()
-            };
-
-            if accounts_to_run.is_empty() {
-                println!("No accounts selected for summarize");
-                return Ok(());
-            }
-
-            let notes_dir = settings.notes_dir.as_deref().map(PathBuf::from);
-
-            for acc in accounts_to_run {
-                println!("\nSummarizing: {} -> {}", acc.name, acc.export_directory);
-                let input_dir = PathBuf::from(&acc.export_directory);
-                summarize::run_summarize(
-                    &python,
-                    &script,
-                    &input_dir,
-                    notes_dir.as_deref(),
-                    &|line| println!("{}", line),
-                )
-                .with_context(|| format!("summarize failed for {}", acc.name))?;
-            }
         }
 
         #[cfg(feature = "tray")]

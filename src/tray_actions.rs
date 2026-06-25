@@ -16,7 +16,6 @@ use crate::progress::ProgressUpdate;
 
 use crate::config::{self, Config, Settings, SortConfig};
 use crate::email_export::{self, ImapExporter};
-use crate::fix_yaml;
 use crate::sort_emails::EmailSorter;
 use crate::thunderbird;
 
@@ -479,72 +478,6 @@ defaults:
 
     open::that(&settings_path).context("Failed to open settings file")?;
     Ok(())
-}
-
-/// Fix YAML frontmatter for a specific account's export directory.
-pub fn action_fix_yaml(account_name: String, result_sender: Sender<ActionResult>) {
-    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
-
-    if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
-        action_name: "Fix YAML".to_string(),
-        warning: None,
-        progress_rx,
-        on_close: None,
-        error_action: Some(Box::new(|| { let _ = action_open_config(); })),
-        sender: result_sender.clone(),
-        cancel_token: None,
-    }) {
-        let _ = result_sender.send(ActionResult::Error(format!(
-            "Fenêtre de progression : {}",
-            e
-        )));
-        return;
-    }
-
-    thread::spawn(move || {
-        let progress_tx_clone = progress_tx.clone();
-        let on_progress = move |current: usize, total: usize, label: &str| {
-            let _ = progress_tx_clone.send(ProgressUpdate::Step {
-                current,
-                total,
-                message: label.to_string(),
-            });
-        };
-        match run_fix_yaml(&account_name, Some(&on_progress)) {
-            Ok(summary) => {
-                let _ = progress_tx.send(ProgressUpdate::Done { summary });
-            }
-            Err(e) => {
-                let _ = progress_tx.send(ProgressUpdate::Error {
-                    message: format!("Fix YAML error: {:#}", e),
-                    action_label: classify_error(&e),
-                });
-            }
-        }
-    });
-}
-
-fn run_fix_yaml(
-    account_name: &str,
-    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
-) -> Result<String> {
-    dotenvy::from_path(config::env_file_path()).ok();
-
-    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
-
-    let account = config
-        .get_account(account_name)
-        .context(format!("Account '{}' not found", account_name))?;
-
-    let dir = PathBuf::from(&account.export_directory);
-
-    let stats = fix_yaml::scan_and_fix_directory(&dir, false, on_progress)
-        .context("Failed to fix YAML frontmatter")?;
-
-    Ok(format!(
-        "{}: {} corrigés, {} réécrits, {} erreurs",
-        account_name, stats.files_fixed, stats.files_rewritten, stats.errors
-    ))
 }
 
 /// Fix HTML bodies to Markdown for a specific account's export directory.
