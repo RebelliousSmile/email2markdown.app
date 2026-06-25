@@ -87,6 +87,10 @@ pub fn rewrite_attachment_paths(
 
     // Rewrite each line that is an attachment list item: "  - <path>"
     // We look for lines inside an `attachments:` block.
+    // TODO: unify with serde_yaml parse (see plan Phase 2) — rewrite_attachment_paths uses a
+    // line-parser because it must emit rewritten YAML lines (different data shape from parsing
+    // the list alone). Refactoring the enumeration step to use parse_frontmatter_attachments
+    // would require a two-pass approach (parse then reserialize) — not done here.
     let mut in_attachments = false;
     let mut new_frontmatter = String::with_capacity(frontmatter.len());
 
@@ -125,16 +129,49 @@ pub fn rewrite_attachment_paths(
     Ok(())
 }
 
-/// Move a `.md` file and its sibling `<stem>_attachments/` directory into `dest_dir`.
+/// Extract the `attachments:` list from `.md` content's YAML frontmatter.
+///
+/// Uses `serde_yaml` deserialization so that YAML-quoted names (e.g.
+/// `- 'invoice #5.pdf'`) are correctly unquoted — a line-parser would return
+/// the quoted string verbatim, causing the file to go missing silently.
+///
+/// Returns `None` if no valid frontmatter delimiters are present.
+/// Returns `Some(Err(_))` if the YAML block is malformed.
+/// Returns `Some(Ok(vec))` on success (empty when `attachments:` is absent).
+fn parse_frontmatter_attachments(content: &str) -> Option<Result<Vec<String>>> {
+    #[derive(serde::Deserialize)]
+    struct AttachmentsHead {
+        #[serde(default)]
+        attachments: Vec<String>,
+    }
+
+    let rest = content.strip_prefix("---\n")?;
+    let end = rest.find("\n---")?;
+    let frontmatter = &rest[..end];
+
+    Some(
+        serde_yaml::from_str::<AttachmentsHead>(frontmatter)
+            .map(|h| h.attachments)
+            .map_err(|e| anyhow::anyhow!("failed to parse frontmatter YAML: {}", e)),
+    )
+}
+
+/// Move a `.md` file and its sibling attachment files into `dest_dir`.
+///
+/// Attachments are identified by deserializing the `attachments:` list from the
+/// YAML frontmatter via `serde_yaml`. Each link is resolved from the source directory;
+/// only files actually inside that directory are moved. Links that resolve outside
+/// (e.g. legacy centralized `attachments/` exports) are skipped with a warning.
 ///
 /// Steps:
 /// 1. Reject symlinks: if `md_path` is a symlink, return `Err` immediately (no FS mutation).
-/// 2. Move `<stem>_attachments/` (if it exists) alongside the `.md` into `dest_dir`.
-/// 3. Move the `.md` itself into `dest_dir`.
-/// 4. Rewrite attachment paths in the moved `.md` to point to the co-located directory.
+/// 2. Read the `.md` content and extract the attachment list via `parse_frontmatter_attachments`.
+/// 3. Move each attachment from the source directory into `dest_dir`.
+/// 4. Move the `.md` itself into `dest_dir`.
+/// 5. Rewrite attachment paths in the moved `.md` (same-folder bare links stay unchanged).
 ///
 /// The move is attempted with `fs::rename`; if that crosses device boundaries the
-/// fallback is `fs::copy` + `fs::remove_file` / `fs::remove_dir_all`.
+/// fallback is `fs::copy` + `fs::remove_file`.
 pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
     // --- Symlink guard (project rule 02-rust-filesystem-safety) ---
     let meta = md_path
@@ -151,29 +188,76 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
         .parent()
         .with_context(|| format!("md_path has no parent: {}", md_path.display()))?;
 
-    let stem = md_path
-        .file_stem()
-        .with_context(|| format!("md_path has no stem: {}", md_path.display()))?
-        .to_string_lossy()
-        .into_owned();
+    // --- Read .md content and extract attachment list via serde_yaml ---
+    // Graceful degradation: read or parse failure logs a warning and leaves the
+    // attachment list empty; the .md move proceeds regardless (parity with the
+    // existing warning tolerance around `rewrite_attachment_paths`).
+    let attachments: Vec<String> = match fs::read_to_string(md_path) {
+        Err(e) => {
+            eprintln!(
+                "warning: could not read {} to extract attachment list: {}; moving .md only",
+                md_path.display(),
+                e
+            );
+            vec![]
+        }
+        Ok(content) => match parse_frontmatter_attachments(&content) {
+            // No frontmatter delimiters — normal for emails without attachments.
+            None => vec![],
+            Some(Err(e)) => {
+                eprintln!(
+                    "warning: could not parse frontmatter in {}: {}; moving .md only",
+                    md_path.display(),
+                    e
+                );
+                vec![]
+            }
+            Some(Ok(list)) => list,
+        },
+    };
 
-    // --- Move attachments directory if present ---
-    let attachments_src = old_parent.join(format!("{}_attachments", stem));
-    if attachments_src.exists() {
-        let attachments_dest = dest_dir.join(format!("{}_attachments", stem));
-        if fs::rename(&attachments_src, &attachments_dest).is_err() {
-            // Cross-device fallback: copy then remove
-            copy_dir_all(&attachments_src, &attachments_dest).with_context(|| {
+    // --- Move each referenced attachment that lives in old_parent ---
+    for link in &attachments {
+        let att_src = old_parent.join(link.replace('/', std::path::MAIN_SEPARATOR_STR));
+
+        // Only move files actually inside the source directory.
+        // Links that resolve outside (legacy centralized exports) are skipped.
+        let in_source = att_src.parent().map_or(false, |p| p == old_parent);
+        if !in_source {
+            eprintln!(
+                "warning: attachment {:?} resolves outside source dir {}; skipping (no migration)",
+                link,
+                old_parent.display()
+            );
+            continue;
+        }
+
+        if !att_src.exists() {
+            continue;
+        }
+
+        let file_name = match att_src.file_name() {
+            Some(n) => n,
+            None => {
+                eprintln!("warning: attachment {:?} has no file name; skipping", link);
+                continue;
+            }
+        };
+        let att_dest = dest_dir.join(file_name);
+
+        if fs::rename(&att_src, &att_dest).is_err() {
+            // Cross-device fallback: copy then remove.
+            fs::copy(&att_src, &att_dest).with_context(|| {
                 format!(
-                    "failed to copy attachments dir from {} to {}",
-                    attachments_src.display(),
-                    attachments_dest.display()
+                    "failed to copy attachment {} to {}",
+                    att_src.display(),
+                    att_dest.display()
                 )
             })?;
-            fs::remove_dir_all(&attachments_src).with_context(|| {
+            fs::remove_file(&att_src).with_context(|| {
                 format!(
-                    "failed to remove original attachments dir {}",
-                    attachments_src.display()
+                    "failed to remove original attachment {} after copy",
+                    att_src.display()
                 )
             })?;
         }
@@ -199,9 +283,9 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
     }
 
     // --- Rewrite attachment paths in the moved .md ---
-    // Both the .md and _attachments/ dir are now co-located in dest_dir, so the
-    // relative paths in the YAML are computed relative to dest_dir (both old and new
-    // base are dest_dir). This keeps the relative path unchanged when both are moved.
+    // The .md and its attachments are now co-located in dest_dir. Passing dest_dir as
+    // both old and new parent means bare links stay unchanged (relative_path_from is
+    // identity when old == new).
     if let Err(e) = rewrite_attachment_paths(&md_dest, dest_dir, dest_dir) {
         eprintln!(
             "warning: could not update attachment paths in {}: {}",
@@ -443,7 +527,7 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
 ///
 /// `rel_path` is joined onto `notes_dir` via `join_safe_segments` (anti-traversal).
 /// Missing directories are created with `fs::create_dir_all` (D4).
-/// `move_email` handles the `.md` + sibling `_attachments/` dir.
+/// `move_email` handles the `.md` + its referenced attachment siblings.
 pub fn apply_decision(staging_md: &Path, rel_path: &str, notes_dir: &Path) -> Result<()> {
     let dest_dir = join_safe_segments(notes_dir, rel_path)
         .with_context(|| format!("invalid routing path {:?}", rel_path))?;
@@ -622,33 +706,3 @@ pub fn upsert_rule(destinations_file: &Path, target_path: &str, rule: MatchRule)
     Ok(())
 }
 
-/// Recursively copy a directory tree from `src` to `dst`.
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)
-        .with_context(|| format!("failed to create directory {}", dst.display()))?;
-    for entry in fs::read_dir(src)
-        .with_context(|| format!("failed to read directory {}", src.display()))?
-    {
-        let entry = entry.with_context(|| format!("failed to read entry in {}", src.display()))?;
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("failed to get file type for {}", entry.path().display()))?;
-        // Never follow symlinks (project rule 02-rust-filesystem-safety)
-        if file_type.is_symlink() {
-            continue;
-        }
-        let dest_path = dst.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_dir_all(&entry.path(), &dest_path)?;
-        } else if file_type.is_file() {
-            fs::copy(entry.path(), &dest_path).with_context(|| {
-                format!(
-                    "failed to copy {} to {}",
-                    entry.path().display(),
-                    dest_path.display()
-                )
-            })?;
-        }
-    }
-    Ok(())
-}

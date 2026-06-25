@@ -947,7 +947,7 @@ fn apply_route_decisions(
         std::fs::create_dir_all(&dest_dir).with_context(|| {
             format!("failed to create directory {}", dest_dir.display())
         })?;
-        // Move .md + sibling _attachments/ dir.
+        // Move .md + its referenced attachment siblings.
         crate::route::move_email(&staging_md, &dest_dir).with_context(|| {
             format!(
                 "failed to move {} to {}",
