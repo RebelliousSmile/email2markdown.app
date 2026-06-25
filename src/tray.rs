@@ -6,7 +6,6 @@
 //! this loop and are routed by `WindowId`.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, OnceLock};
@@ -23,9 +22,8 @@ use tray_icon::{
 };
 use wry::{WebView, WebViewBuilder};
 
-use crate::config::{self, settings_path, AccountBehavior, RawAccount, Settings};
+use crate::config::{self, AccountBehavior, RawAccount, Settings};
 use crate::progress::ProgressUpdate;
-use crate::sort_emails::{apply_report, EmailSummary, SortReport};
 use crate::tray_actions::{self, action_open_config, ActionResult};
 use crate::updater;
 
@@ -42,11 +40,6 @@ pub enum AppCommand {
         error_action: Option<ActionCb>,
         sender: Sender<ActionResult>,
         cancel_token: Option<Arc<AtomicBool>>,
-    },
-    OpenSort {
-        report_path: PathBuf,
-        account: String,
-        sender: Sender<ActionResult>,
     },
     OpenConfig {
         sender: Sender<ActionResult>,
@@ -67,8 +60,6 @@ pub enum AppCommand {
         window_id: WindowId,
     },
     /// Evaluate JS in the WebView of the given window.
-    /// Used by the classify streamer to push per-file destination updates
-    /// into the sort review window as NDJSON results arrive.
     EvalScript {
         window_id: WindowId,
         js: String,
@@ -83,13 +74,6 @@ struct ProgressState {
     error_action: Option<ActionCb>,
     webview: WebView,
     // Kept alive for its Drop side-effect — webview must drop before window.
-    #[allow(dead_code)]
-    window: Window,
-}
-
-/// Per-sort-window state. Same drop-order discipline as `ProgressState`.
-struct SortState {
-    webview: WebView,
     #[allow(dead_code)]
     window: Window,
 }
@@ -111,7 +95,6 @@ struct UpdateState {
 
 enum WState {
     Progress(ProgressState),
-    Sort(SortState),
     Config(#[allow(dead_code)] ConfigState),
     Update(UpdateState),
 }
@@ -143,7 +126,6 @@ mod menu_ids {
     pub const UPDATE: &str = "update";
     pub const QUIT: &str = "quit";
     pub const EXPORT_PREFIX: &str = "export_";
-    pub const SORT_PREFIX: &str = "sort_";
     pub const FIXHTML_PREFIX: &str = "fixhtml_";
 }
 
@@ -188,15 +170,6 @@ pub fn run_tray() -> Result<()> {
                             Ok(new_menu) => icon.set_menu(Some(Box::new(new_menu))),
                             Err(e) => eprintln!("Failed to rebuild menu: {}", e),
                         }
-                    }
-                }
-                ActionResult::SortCompleted { report_path, account } => {
-                    if let Err(e) = send_command(AppCommand::OpenSort {
-                        report_path: report_path.clone(),
-                        account: account.clone(),
-                        sender: result_sender.clone(),
-                    }) {
-                        eprintln!("Failed to open sort window: {:#}", e);
                     }
                 }
                 _ => {
@@ -304,34 +277,16 @@ pub fn run_tray() -> Result<()> {
                     }
                 }
             }
-            Event::UserEvent(AppCommand::OpenSort {
-                report_path,
-                account,
-                sender,
-            }) => match build_sort_window(target, &proxy, &report_path, &account, sender.clone()) {
-                Ok((window, webview, window_id)) => {
-                    windows.insert(window_id, WState::Sort(SortState { webview, window }));
-                }
-                Err(e) => {
-                    let _ = sender.send(ActionResult::Error(format!(
-                        "Fenêtre de révision : {:#}",
-                        e
-                    )));
-                }
-            },
             Event::UserEvent(AppCommand::ProgressUpdate { window_id, update }) => {
                 if let Some(WState::Progress(state)) = windows.get(&window_id) {
                     let js = format_progress_js(&update);
                     let _ = state.webview.evaluate_script(&js);
                 }
             }
-            Event::UserEvent(AppCommand::EvalScript { window_id, js }) => {
-                match windows.get(&window_id) {
-                    Some(WState::Sort(state)) => {
-                        let _ = state.webview.evaluate_script(&js);
-                    }
-                    _ => {}
-                }
+            Event::UserEvent(AppCommand::EvalScript { window_id, js: _ }) => {
+                // M7: EvalScript will be used by the route review window.
+                // No-op until M7 wires it up.
+                let _ = window_id;
             }
             Event::UserEvent(AppCommand::ActionRequested { window_id }) => {
                 if let Some(WState::Progress(mut state)) = windows.remove(&window_id) {
@@ -361,7 +316,6 @@ pub fn run_tray() -> Result<()> {
                         f();
                     }
                 }
-                Some(WState::Sort(_)) => {}
                 Some(WState::Config(_)) => {
                     CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
                 }
@@ -428,197 +382,6 @@ fn build_progress_window(
         .context("failed to create progress webview")?;
 
     Ok((window, webview, window_id))
-}
-
-/// IPC payload from the sort review window.
-#[derive(serde::Deserialize)]
-struct IpcDecisions {
-    decisions: Vec<IpcDecision>,
-}
-
-#[derive(serde::Deserialize)]
-struct IpcDecision {
-    file: String,
-    action: String,
-    #[serde(default)]
-    notes_destination: Option<String>,
-}
-
-/// Build a sort review window inline on the main event loop thread.
-///
-/// The IPC handler spawns a worker thread for `apply_report` (I/O-heavy) and
-/// signals window close via `AppCommand::CloseWindow` once the work completes.
-fn build_sort_window(
-    target: &EventLoopWindowTarget<AppCommand>,
-    proxy: &EventLoopProxy<AppCommand>,
-    report_path: &Path,
-    account: &str,
-    sender: Sender<ActionResult>,
-) -> Result<(Window, WebView, WindowId)> {
-    let json = std::fs::read_to_string(report_path)
-        .with_context(|| format!("failed to read report: {}", report_path.display()))?;
-    let report: SortReport =
-        serde_json::from_str(&json).context("failed to parse sort report")?;
-
-    let html_template = include_str!("../assets/sort_review.html");
-    let report_json = serde_json::to_string(&report.categories)
-        .context("failed to serialize report")?;
-    let known_classes_json = load_known_classes_json();
-    let notes_enabled = Settings::load(&settings_path())
-        .map(|s| s.notes_dir.is_some())
-        .unwrap_or(false);
-    let html = html_template
-        .replace("__REPORT_JSON__", &report_json)
-        .replace("__KNOWN_CLASSES_JSON__", &known_classes_json)
-        .replace("__NOTES_ENABLED__", if notes_enabled { "true" } else { "false" });
-
-    let window = WindowBuilder::new()
-        .with_title(format!("Révision du tri — {}", account))
-        .with_inner_size(LogicalSize::new(900.0f64, 620.0f64))
-        .build(target)
-        .context("failed to create review window")?;
-    window.set_focus();
-    let window_id = window.id();
-
-    let proxy_ipc = proxy.clone();
-    let report_path_ipc = report_path.to_path_buf();
-    let account_ipc = account.to_string();
-
-    let webview = WebViewBuilder::new(&window)
-        .with_html(html)
-        .with_ipc_handler(move |req: wry::http::Request<String>| {
-            let body = req.body().clone();
-            if body == "cancel" {
-                let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
-                return;
-            }
-            let report_path = report_path_ipc.clone();
-            let account = account_ipc.clone();
-            let sender = sender.clone();
-            let proxy = proxy_ipc.clone();
-            thread::spawn(move || {
-                let result = apply_sort_decisions(&body, &report_path, &account)
-                    .unwrap_or_else(|e| {
-                        ActionResult::Error(format!("Erreur d'application : {:#}", e))
-                    });
-                let _ = sender.send(result);
-                let _ = proxy.send_event(AppCommand::CloseWindow { window_id });
-            });
-        })
-        .build()
-        .context("failed to create review webview")?;
-
-    Ok((window, webview, window_id))
-}
-
-/// Load `tools/data/known_classes.json` as a JSON literal for HTML injection.
-/// Returns `"[]"` on any failure — the datalist autocomplete simply stays empty.
-fn load_known_classes_json() -> String {
-    let settings = Settings::load(&settings_path()).unwrap_or_default();
-    let data_dir = match config::resolve_tools_data_dir(&settings) {
-        Ok(d) => d,
-        Err(_) => return "[]".to_string(),
-    };
-    let path = data_dir.join("known_classes.json");
-    match std::fs::read_to_string(&path) {
-        Ok(s) => {
-            if serde_json::from_str::<serde_json::Value>(&s).is_ok() {
-                s
-            } else {
-                "[]".to_string()
-            }
-        }
-        Err(_) => "[]".to_string(),
-    }
-}
-
-/// Parse decisions, rewrite the report, and run `apply_report`. Runs on a worker thread.
-fn apply_sort_decisions(
-    body: &str,
-    report_path: &Path,
-    account: &str,
-) -> Result<ActionResult> {
-    let payload: IpcDecisions =
-        serde_json::from_str(body).context("failed to parse IPC decisions")?;
-
-    let mut new_categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
-    new_categories.insert("delete".to_string(), Vec::new());
-    new_categories.insert("summarize".to_string(), Vec::new());
-    new_categories.insert("keep".to_string(), Vec::new());
-
-    let json = std::fs::read_to_string(report_path)
-        .context("failed to re-read report for apply")?;
-    let mut report: SortReport =
-        serde_json::from_str(&json).context("failed to re-parse report for apply")?;
-
-    let all_emails: HashMap<String, EmailSummary> = report
-        .categories
-        .values()
-        .flatten()
-        .map(|e| (e.file.clone(), e.clone()))
-        .collect();
-
-    for decision in &payload.decisions {
-        match decision.action.as_str() {
-            "delete" | "summarize" | "keep" => {}
-            other => {
-                anyhow::bail!(
-                    "unknown action '{}' in IPC decision for file '{}'",
-                    other,
-                    decision.file
-                );
-            }
-        }
-        if let Some(email) = all_emails.get(&decision.file) {
-            let mut email = email.clone();
-            if decision.action == "summarize" {
-                email.notes_destination = decision
-                    .notes_destination
-                    .as_ref()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-            } else {
-                email.notes_destination = None;
-            }
-            new_categories
-                .entry(decision.action.clone())
-                .or_default()
-                .push(email);
-        }
-    }
-
-    let settings = Settings::load(&settings_path()).unwrap_or_default();
-    let notes_dir = settings.notes_dir.as_ref().map(PathBuf::from);
-
-    // Pre-condition: any summarize decision with a destination requires notes_dir
-    let needs_notes_dir = new_categories
-        .get("summarize")
-        .map(|v| v.iter().any(|e| e.notes_destination.is_some()))
-        .unwrap_or(false);
-    if needs_notes_dir && notes_dir.is_none() {
-        anyhow::bail!(
-            "destinations notes assignées mais notes_dir non configuré — définissez 'notes_dir' dans settings.yaml"
-        );
-    }
-
-    report.categories = new_categories;
-
-    let updated_json = serde_json::to_string_pretty(&report)
-        .context("failed to serialize updated report")?;
-    std::fs::write(report_path, updated_json).with_context(|| {
-        format!("failed to write updated report to {}", report_path.display())
-    })?;
-
-    let stats = apply_report(&report, settings.local_folder(), notes_dir.as_deref())
-        .context("failed to apply sort report")?;
-
-    Ok(ActionResult::Success(
-        format!("Tri appliqué — {}", account),
-        format!(
-            "Supprimés : {} | Résumés : {} | Conservés : {}",
-            stats.deleted, stats.moved, stats.skipped
-        ),
-    ))
 }
 
 // ── Config window ────────────────────────────────────────────────────────────
@@ -852,7 +615,6 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
                     delete_after_export: data.defaults.delete_after_export,
                     cleanup_empty_dirs: data.defaults.cleanup_empty_dirs,
                     organize_by_type: data.defaults.organize_by_type,
-                    sort: settings.defaults.sort,
                 };
                 settings
                     .save(&path)
@@ -1027,18 +789,6 @@ fn create_menu() -> Result<Menu> {
     }
     menu.append(&export_submenu)?;
 
-    let sort_submenu = Submenu::new("Trier emails", has_accounts);
-    for account in &accounts {
-        let id = format!("{}{}", menu_ids::SORT_PREFIX, account);
-        let _ = sort_submenu.append(&MenuItem::with_id(
-            id,
-            account,
-            true,
-            no_accel.clone(),
-        ));
-    }
-    menu.append(&sort_submenu)?;
-
     let outils_submenu = Submenu::new("Outils", true);
 
     let fixhtml_submenu = Submenu::new("Fix HTML→Markdown", has_accounts);
@@ -1153,11 +903,6 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
                 tray_actions::action_export(account_name.to_string(), result_sender);
             }
         }
-        id if id.starts_with(menu_ids::SORT_PREFIX) => {
-            if let Some(account_name) = id.strip_prefix(menu_ids::SORT_PREFIX) {
-                tray_actions::action_sort(account_name.to_string(), result_sender);
-            }
-        }
         id if id.starts_with(menu_ids::FIXHTML_PREFIX) => {
             if let Some(account_name) = id.strip_prefix(menu_ids::FIXHTML_PREFIX) {
                 tray_actions::action_fix_html(account_name.to_string(), result_sender);
@@ -1240,9 +985,6 @@ fn show_notification(result: &ActionResult) {
             m.clone(),
             rfd::MessageLevel::Error,
         ),
-        ActionResult::SortCompleted { .. } => {
-            unreachable!("SortCompleted is routed before reaching show_notification")
-        }
     };
 
     thread::spawn(move || {

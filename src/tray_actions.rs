@@ -14,9 +14,8 @@ use rfd;
 
 use crate::progress::ProgressUpdate;
 
-use crate::config::{self, Config, Settings, SortConfig};
+use crate::config::{self, Config, Settings};
 use crate::email_export::{self, ImapExporter};
-use crate::sort_emails::EmailSorter;
 use crate::thunderbird;
 
 /// Result of an action, sent back to the main thread for notification.
@@ -27,11 +26,6 @@ pub enum ActionResult {
     /// Import completed — the main thread should rebuild the tray menu.
     Imported(String),
     Error(String),
-    /// Sort completed — the main thread should open the review window.
-    SortCompleted {
-        account: String,
-        report_path: std::path::PathBuf,
-    },
 }
 
 fn classify_error(e: &anyhow::Error) -> Option<String> {
@@ -139,9 +133,12 @@ fn run_export(
     let mut exporter = ImapExporter::new(account.clone(), false);
     exporter.connect().context("Failed to connect to IMAP server")?;
 
-    let results = exporter
+    let (results, _decisions) = exporter
         .export_account(on_progress, on_status, Some(cancel_token.as_ref()))
         .context("Export failed")?;
+    // `_decisions` holds `Vec<(PathBuf, RouteDecision)>` — deferred move (D6).
+    // M7 will open the route review window and pass `_decisions` to it.
+    // For now the `.md` files remain in staging after export.
 
     exporter.disconnect().ok();
 
@@ -155,92 +152,6 @@ fn run_export(
         "{} — {} exportés, {} ignorés, {} erreurs",
         prefix, total_exported, total_skipped, total_errors
     ))
-}
-
-/// Sort emails for a specific account.
-///
-/// Runs in a separate thread to avoid blocking the UI.
-pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
-    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
-    let result_sender_worker = result_sender.clone();
-
-    if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
-        action_name: "Sort".to_string(),
-        warning: None,
-        progress_rx,
-        on_close: None,
-        error_action: Some(Box::new(|| { let _ = action_open_config(); })),
-        sender: result_sender.clone(),
-        cancel_token: None,
-    }) {
-        let _ = result_sender.send(ActionResult::Error(format!(
-            "Fenêtre de progression : {}",
-            e
-        )));
-        return;
-    }
-
-    thread::spawn(move || {
-        let progress_tx_clone = progress_tx.clone();
-        let on_progress = move |current: usize, total: usize, label: &str| {
-            let _ = progress_tx_clone.send(ProgressUpdate::Step {
-                current,
-                total,
-                message: label.to_string(),
-            });
-        };
-        match run_sort(&account_name, Some(&on_progress)) {
-            Ok((report_path, email_count)) => {
-                if email_count > 0 {
-                    // Send result directly — progress window closes automatically.
-                    let _ = result_sender_worker.send(ActionResult::SortCompleted {
-                        account: account_name,
-                        report_path,
-                    });
-                    let _ = progress_tx.send(ProgressUpdate::AutoClose);
-                } else {
-                    let _ = progress_tx.send(ProgressUpdate::Done {
-                        summary: "Tri terminé — rien à réviser".to_string(),
-                    });
-                }
-            }
-            Err(e) => {
-                let _ = progress_tx.send(ProgressUpdate::Error {
-                    message: format!("Sort error: {:#}", e),
-                    action_label: classify_error(&e),
-                });
-            }
-        }
-    });
-}
-
-fn run_sort(
-    account_name: &str,
-    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
-) -> Result<(PathBuf, usize)> {
-    dotenvy::from_path(config::env_file_path()).ok();
-
-    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
-
-    let account = config
-        .get_account(account_name)
-        .context(format!("Account '{}' not found", account_name))?;
-
-    let sort_directory = PathBuf::from(&account.export_directory);
-    let sort_config = SortConfig::default();
-
-    let mut sorter = EmailSorter::new(sort_directory.clone(), sort_config);
-    sorter.sort_emails(on_progress)?;
-
-    let report = sorter.generate_report();
-    let email_count: usize = report.categories.values().map(|v| v.len()).sum();
-    let report_path = sort_directory.join("sort_report.json");
-    let path_str = report_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("sort report path contains non-UTF-8 characters"))?;
-    sorter.save_report(&report, path_str).context("failed to save sort report")?;
-
-    Ok((report_path, email_count))
 }
 
 /// Import accounts from Thunderbird.

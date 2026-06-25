@@ -1,6 +1,5 @@
 pub mod email_export;
 pub mod route;
-pub mod sort_emails;
 pub mod config;
 pub mod utils;
 pub mod cleaner;      // Email body cleaner pipeline

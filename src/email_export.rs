@@ -1,5 +1,6 @@
 use crate::config::Account;
 use crate::network::{NetworkConfig, ProgressIndicator, with_retry};  // [3][4]
+use crate::route::{parse_destinations, route_email, Destination, EmailMeta, RouteDecision};
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
     is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename, subject_extract,
@@ -282,6 +283,10 @@ fn parse_email_date(date_str: &str) -> Option<DateTime<FixedOffset>> {
 }
 
 /// Export a single email to Markdown with frontmatter.
+///
+/// Returns `Ok(Some((filepath, decision)))` when the email was written, where
+/// `decision` is the routing proposal (not yet applied — the `.md` stays in staging).
+/// Returns `Ok(None)` when the email was skipped (already exported or filtered).
 pub fn export_to_markdown(
     raw_email: &[u8],
     export_directory: &Path,
@@ -290,7 +295,8 @@ pub fn export_to_markdown(
     account: &Account,
     contacts_collector: Option<&mut ContactsCollector>,
     debug_mode: bool,
-) -> Result<Option<PathBuf>> {
+    dests: &[Destination],
+) -> Result<Option<(PathBuf, RouteDecision)>> {
     let mail = mailparse::parse_mail(raw_email)
         .context("Failed to parse email")?;
 
@@ -319,7 +325,7 @@ pub fn export_to_markdown(
     if account.skip_existing
         && email_already_exported(&date_str, &sender_short, &recipient_short, &subject_hash, export_directory)
     {
-        return Ok(None);
+        return Ok(None); // skipped — no (PathBuf, RouteDecision) to return
     }
 
     // Analyze email type and collect contacts if enabled
@@ -420,7 +426,31 @@ pub fn export_to_markdown(
     writeln!(file, "---\n")?;
     write!(file, "{}", normalized_body)?;
 
-    Ok(Some(filepath))
+    // Route the email — extract domain from the From address for matching.
+    // Uses the first email address found; falls back to empty string on parse failure.
+    let email_addresses = extract_emails(Some(&frontmatter.from));
+    let sender_addr = email_addresses.first().map(|s| s.as_str()).unwrap_or("");
+    let domain = sender_addr
+        .rfind('@')
+        .map(|i| sender_addr[i + 1..].to_string())
+        .unwrap_or_default();
+
+    let meta = EmailMeta {
+        from: sender_addr.to_string(),
+        domain,
+        subject: frontmatter.subject.clone(),
+        account: account.name.clone(),
+        // date_obj is Option<DateTime<FixedOffset>>; use epoch on None
+        date: date_obj.unwrap_or_else(|| {
+            chrono::DateTime::from_timestamp(0, 0)
+                .expect("epoch is valid")
+                .fixed_offset()
+        }),
+    };
+
+    let decision = route_email(&meta, dests);
+
+    Ok(Some((filepath, decision)))
 }
 
 /// Convert HTML to Markdown using htmd. Returns empty string on failure.
@@ -868,18 +898,23 @@ impl ImapExporter {
     }
 
     /// Export a single folder.
+    ///
+    /// Returns `(stats, decisions)` where `decisions` is the list of route proposals
+    /// for every email written during this folder's export. The caller accumulates
+    /// these and applies them after all folders are processed.
     pub fn export_folder(
         &mut self,
         folder: &FolderName,
         mut contacts_collector: Option<&mut ContactsCollector>,
         cancel_token: Option<&AtomicBool>,
-    ) -> Result<ExportStats> {
+        dests: &[Destination],
+    ) -> Result<(ExportStats, Vec<(PathBuf, RouteDecision)>)> {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
         let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
 
         // Session borrow is scoped to a block so it ends before the gmail expunge dispatch,
         // which needs to re-borrow self.session via expunge_gmail_all_mail().
-        let stats = {
+        let stats_and_decisions = {
             let session = self.session.as_mut().context("Not connected")?;
 
             // Select folder using the raw IMAP name (modified UTF-7)
@@ -942,6 +977,7 @@ impl ImapExporter {
             let total_to_process = filtered_uids.len();
             let mut progress = ProgressIndicator::new(&folder.display, total_to_process);
             let mut stats = ExportStats::default();
+            let mut folder_decisions: Vec<(PathBuf, RouteDecision)> = Vec::new();
             stats.skipped += pre_skipped;
 
             for (_idx, uid) in filtered_uids.into_iter().enumerate() {
@@ -976,10 +1012,14 @@ impl ImapExporter {
                             &self.account,
                             contacts_collector.as_deref_mut(),
                             self.debug_mode,
+                            dests,
                         );
 
                         match result {
-                            Ok(Some(_)) => stats.exported += 1,
+                            Ok(Some((path, decision))) => {
+                                stats.exported += 1;
+                                folder_decisions.push((path, decision));
+                            }
                             Ok(None) => stats.skipped += 1,
                             Err(e) => {
                                 // Malformed messages (RFC-invalid MIME, broken headers, etc.)
@@ -1016,7 +1056,10 @@ impl ImapExporter {
                     }
                 }
 
-                // Delete after export if requested
+                // Delete after export if requested.
+                // IMAP flag is set here (server-side); local `.md` files remain in staging
+                // until route decisions are applied in the caller — the deferred move (D6)
+                // ensures routing always precedes any local file removal.
                 if self.account.delete_after_export {
                     session.store(uid.to_string(), "+FLAGS (\\Deleted)")?;
                 }
@@ -1043,9 +1086,11 @@ impl ImapExporter {
                 stats.exported, stats.skipped, stats.errors
             ));
 
-            stats
+            (stats, folder_decisions)
             // session borrow ends here
         };
+
+        let (stats, folder_decisions) = stats_and_decisions;
 
         // Expunge deleted messages
         if self.account.delete_after_export {
@@ -1057,19 +1102,66 @@ impl ImapExporter {
             }
         }
 
-        Ok(stats)
+        Ok((stats, folder_decisions))
     }
 
     /// Export all folders for the account.
+    ///
+    /// Returns `(folder_stats, decisions)` where `decisions` accumulates all
+    /// `(staging_path, RouteDecision)` pairs produced during the export.
+    /// The `.md` files remain in staging (D6 — deferred move); the caller is
+    /// responsible for applying the decisions via `route::apply_decision`.
+    ///
+    /// `destinations.txt` is parsed **once** here — before the folder loop — and
+    /// the resulting `Vec<Destination>` is reused for every email in every folder.
+    /// If the file is absent or unconfigured, an empty `Vec` is used and all
+    /// emails fall through to the default path with a warning.
     pub fn export_account(
         &mut self,
         on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
         on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
         cancel_token: Option<&AtomicBool>,
-    ) -> Result<HashMap<String, ExportStats>> {
+    ) -> Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> {
+        // ── Parse destinations.txt ONCE (before the folder loop) ──────────────
+        let dests: Vec<Destination> = {
+            let settings = crate::config::Settings::load(&crate::config::settings_path())
+                .unwrap_or_default();
+            let dest_path = settings
+                .destinations_file
+                .as_deref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| crate::config::app_config_dir().join("destinations.txt"));
+
+            if dest_path.exists() {
+                match std::fs::read_to_string(&dest_path)
+                    .and_then(|s| Ok(s))
+                    .map_err(anyhow::Error::from)
+                    .and_then(|content| parse_destinations(&content))
+                {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!(
+                            "warning: could not parse destinations.txt ({}): {:#} — \
+                             all emails will fall to the default path",
+                            dest_path.display(), e
+                        );
+                        vec![]
+                    }
+                }
+            } else {
+                eprintln!(
+                    "warning: destinations.txt not found at {} — \
+                     all emails will fall to the default path (Perso/Messy/Emails/<Year>/<Month>)",
+                    dest_path.display()
+                );
+                vec![]
+            }
+        };
+
         // Run the existing body in an IIFE so cleanup can run on every exit path.
-        let run_result: Result<HashMap<String, ExportStats>> = (|| {
+        let run_result: Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> = (|| {
             let mut results = HashMap::new();
+            let mut all_decisions: Vec<(PathBuf, RouteDecision)> = Vec::new();
             let mut contacts_collector = if self.account.collect_contacts {
                 Some(ContactsCollector::new())
             } else {
@@ -1094,13 +1186,19 @@ impl ImapExporter {
 
                 println!("Exporting {} ...", folder.display);
 
-                let stats = self.export_folder(&folder, contacts_collector.as_mut(), cancel_token)?;
+                let (stats, folder_decisions) = self.export_folder(
+                    &folder,
+                    contacts_collector.as_mut(),
+                    cancel_token,
+                    &dests,
+                )?;
                 if let Some(s) = on_status {
                     s(&format!(
                         "{} — {} exportés, {} ignorés, {} erreurs",
                         folder.display, stats.exported, stats.skipped, stats.errors
                     ));
                 }
+                all_decisions.extend(folder_decisions);
                 results.insert(folder.display, stats);
 
                 if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
@@ -1121,7 +1219,7 @@ impl ImapExporter {
                 println!("Generated contacts file: {}", filepath.display());
             }
 
-            Ok(results)
+            Ok((results, all_decisions))
         })();
 
         if self.account.cleanup_empty_dirs {
@@ -1388,9 +1486,10 @@ mod tests {
             &account,
             None,
             false,
+            &[],
         );
 
-        let path = result.unwrap().expect("should return a path");
+        let (path, _decision) = result.unwrap().expect("should return a path");
         let content = fs::read_to_string(&path).unwrap();
 
         // Inclusive: YAML frontmatter markers
@@ -1421,16 +1520,16 @@ mod tests {
         );
 
         // First export — should succeed
-        let first = export_to_markdown(&raw, &export_dir, temp.path(), vec![], &account, None, false)
+        let (first_path, _decision) = export_to_markdown(&raw, &export_dir, temp.path(), vec![], &account, None, false, &[])
             .unwrap()
             .expect("first export should produce a file");
 
         // Verify the file exists and contains the subject_hash
-        let content = fs::read_to_string(&first).unwrap();
+        let content = fs::read_to_string(&first_path).unwrap();
         assert!(content.contains("subject_hash:"), "first export must have subject_hash");
 
         // Second export — should be skipped
-        let second = export_to_markdown(&raw, &export_dir, temp.path(), vec![], &account, None, false).unwrap();
+        let second = export_to_markdown(&raw, &export_dir, temp.path(), vec![], &account, None, false, &[]).unwrap();
         assert!(second.is_none(), "second export should return None when skip_existing is true");
     }
 
