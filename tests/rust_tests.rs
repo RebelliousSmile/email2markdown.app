@@ -874,7 +874,7 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 
 mod route_tests {
     use email_to_markdown::route::{
-        apply_decision, ai_route, join_safe_segments, move_email,
+        apply_decision, ai_route, ensure_year_month, join_safe_segments, move_email,
         parse_destinations, route_email, upsert_rule,
         Destination, EmailMeta, MatchRule,
     };
@@ -1324,6 +1324,37 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         assert!(decision.rel_path.ends_with("2026/11"), "got: {}", decision.rel_path);
         // Exclusive: not "2026/1" (not zero-padded)
         assert!(!decision.rel_path.ends_with("2026/1"), "month must be 2 digits");
+    }
+
+    // ── ensure_year_month — normalize manually reassigned destinations ───────
+
+    #[test]
+    fn test_ensure_year_month_appends_to_bare_path() {
+        let out = ensure_year_month("Perso/Housing/Vallieres", "2026", "06");
+        // Inclusive: dated subfolder appended
+        assert_eq!(out, "Perso/Housing/Vallieres/2026/06");
+        // Exclusive: no double slash
+        assert!(!out.contains("//"), "no double slash, got: {}", out);
+    }
+
+    #[test]
+    fn test_ensure_year_month_skips_when_already_dated() {
+        let out = ensure_year_month("Perso/Finance/2026/06", "2026", "06");
+        // Inclusive: unchanged
+        assert_eq!(out, "Perso/Finance/2026/06");
+        // Exclusive: NOT doubled (the bug we guard against)
+        assert!(!out.contains("2026/06/2026/06"), "must not double the suffix, got: {}", out);
+    }
+
+    #[test]
+    fn test_ensure_year_month_appends_when_tail_is_not_a_date() {
+        // A trailing "13" (invalid month) or a non-year folder must NOT be mistaken
+        // for a dated suffix → year/month is appended.
+        let out = ensure_year_month("Perso/Bank/2026", "2026", "06");
+        assert_eq!(out, "Perso/Bank/2026/2026/06");
+        let out2 = ensure_year_month("Perso/X/Reports/13", "2026", "06");
+        assert_eq!(out2, "Perso/X/Reports/13/2026/06");
+        assert!(!out2.ends_with("/13"), "invalid month tail must not be treated as dated");
     }
 
     // ── route_email — path outside destinations.txt → default ────────────────

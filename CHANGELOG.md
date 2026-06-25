@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.13.0] - 2026-06-25
+## [0.13.0] - 2026-06-26
+
+### Fixed
+
+- **Routage manuel sans `<Année>/<Mois>`** : un chemin réaffecté à la main dans la fenêtre de revue (cascade, saisie libre, affectation en masse) provenait brut de `destinations.txt` et atterrissait directement sous `<dest>/` sans le sous-dossier daté — seule la proposition automatique de `route_email` portait `<Année>/<Mois>`. Nouveau helper pur `route::ensure_year_month(rel_path, year, month)` (détection sans Regex, garde-fou anti double `…/2026/06/2026/06`) appelé dans `apply_route_decisions` : la date de l'email est lue dans le frontmatter et le `<Année>/<Mois>` est ajouté à tout chemin qui ne le porte pas déjà. 3 tests unitaires ajoutés.
 
 ### Changed
 

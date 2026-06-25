@@ -521,6 +521,43 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
     }
 }
 
+/// Whether `rel_path` already ends with a `<Year>/<Month>` dated suffix
+/// (4-digit `19xx`/`20xx` then 2-digit `01`–`12`).
+///
+/// No `Regex::new` — a per-segment character check is sufficient and avoids a
+/// hot-path regex (project rule `02-regex-static-lazylock`).
+fn ends_with_year_month(rel_path: &str) -> bool {
+    let segs: Vec<&str> = rel_path.trim_end_matches('/').split('/').collect();
+    if segs.len() < 2 {
+        return false;
+    }
+    let year = segs[segs.len() - 2];
+    let month = segs[segs.len() - 1];
+    let year_ok = year.len() == 4
+        && year.bytes().all(|b| b.is_ascii_digit())
+        && (year.starts_with("19") || year.starts_with("20"));
+    let month_ok = month.len() == 2
+        && month.bytes().all(|b| b.is_ascii_digit())
+        && ("01"..="12").contains(&month);
+    year_ok && month_ok
+}
+
+/// Append `<year>/<month>` to a destination path **unless it already carries a
+/// dated suffix**.
+///
+/// The deterministic router (`route_email`) appends `<Year>/<Month>` to its
+/// proposal, but a path chosen manually in the review window (cascade, free
+/// entry, bulk assign) comes straight from `destinations.txt` — bare, without
+/// the dated subfolder. This normalizer guarantees every applied destination
+/// lands under `<dest>/<Year>/<Month>`, with no double `…/2026/06/2026/06`.
+pub fn ensure_year_month(rel_path: &str, year: &str, month: &str) -> String {
+    if ends_with_year_month(rel_path) {
+        rel_path.trim_end_matches('/').to_string()
+    } else {
+        format!("{}/{}/{}", rel_path.trim_end_matches('/'), year, month)
+    }
+}
+
 // ── Apply ────────────────────────────────────────────────────────────────────
 
 /// Apply a routing decision: create the target directory and move the `.md` file.
