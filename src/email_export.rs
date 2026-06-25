@@ -282,6 +282,23 @@ fn parse_email_date(date_str: &str) -> Option<DateTime<FixedOffset>> {
         .map(|dt| dt.fixed_offset())
 }
 
+/// Session-level context shared by all `export_to_markdown` calls within a folder.
+///
+/// Groups the parameters that are constant across messages in the same export run,
+/// reducing the argument count of `export_to_markdown` to four.
+pub struct ExportContext<'a> {
+    /// Target directory for this folder's exports.
+    pub export_directory: &'a Path,
+    /// Account-level base directory (used for duplicate detection).
+    pub base_export_directory: &'a Path,
+    /// Account configuration (name, flags, etc.).
+    pub account: &'a Account,
+    /// Emit extra diagnostic output when `true`.
+    pub debug_mode: bool,
+    /// Routing destinations parsed from `destinations.txt`.
+    pub dests: &'a [Destination],
+}
+
 /// Export a single email to Markdown with frontmatter.
 ///
 /// Returns `Ok(Some((filepath, decision)))` when the email was written, where
@@ -289,14 +306,15 @@ fn parse_email_date(date_str: &str) -> Option<DateTime<FixedOffset>> {
 /// Returns `Ok(None)` when the email was skipped (already exported or filtered).
 pub fn export_to_markdown(
     raw_email: &[u8],
-    export_directory: &Path,
-    base_export_directory: &Path,
     tags: Vec<String>,
-    account: &Account,
     contacts_collector: Option<&mut ContactsCollector>,
-    debug_mode: bool,
-    dests: &[Destination],
+    ctx: &mut ExportContext<'_>,
 ) -> Result<Option<(PathBuf, RouteDecision)>> {
+    let export_directory = ctx.export_directory;
+    let base_export_directory = ctx.base_export_directory;
+    let account = ctx.account;
+    let debug_mode = ctx.debug_mode;
+    let dests = ctx.dests;
     let mail = mailparse::parse_mail(raw_email)
         .context("Failed to parse email")?;
 
@@ -1004,15 +1022,18 @@ impl ImapExporter {
 
                 for message in messages.iter() {
                     if let Some(body) = message.body() {
+                        let mut ctx = ExportContext {
+                            export_directory: &export_directory,
+                            base_export_directory: &base_export_directory,
+                            account: &self.account,
+                            debug_mode: self.debug_mode,
+                            dests,
+                        };
                         let result = export_to_markdown(
                             body,
-                            &export_directory,
-                            &base_export_directory,
                             vec![folder.display.clone()],
-                            &self.account,
                             contacts_collector.as_deref_mut(),
-                            self.debug_mode,
-                            dests,
+                            &mut ctx,
                         );
 
                         match result {
@@ -1134,7 +1155,6 @@ impl ImapExporter {
 
             if dest_path.exists() {
                 match std::fs::read_to_string(&dest_path)
-                    .and_then(|s| Ok(s))
                     .map_err(anyhow::Error::from)
                     .and_then(|content| parse_destinations(&content))
                 {
@@ -1478,15 +1498,18 @@ mod tests {
             "Test body",
         );
 
+        let mut ctx = ExportContext {
+            export_directory: &export_dir,
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+        };
         let result = export_to_markdown(
             &raw,
-            &export_dir,
-            temp.path(),
             vec!["INBOX".to_string()],
-            &account,
             None,
-            false,
-            &[],
+            &mut ctx,
         );
 
         let (path, _decision) = result.unwrap().expect("should return a path");
@@ -1520,7 +1543,14 @@ mod tests {
         );
 
         // First export — should succeed
-        let (first_path, _decision) = export_to_markdown(&raw, &export_dir, temp.path(), vec![], &account, None, false, &[])
+        let mut ctx = ExportContext {
+            export_directory: &export_dir,
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+        };
+        let (first_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
             .expect("first export should produce a file");
 
@@ -1529,7 +1559,7 @@ mod tests {
         assert!(content.contains("subject_hash:"), "first export must have subject_hash");
 
         // Second export — should be skipped
-        let second = export_to_markdown(&raw, &export_dir, temp.path(), vec![], &account, None, false, &[]).unwrap();
+        let second = export_to_markdown(&raw, vec![], None, &mut ctx).unwrap();
         assert!(second.is_none(), "second export should return None when skip_existing is true");
     }
 

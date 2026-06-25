@@ -16,6 +16,7 @@ use crate::progress::ProgressUpdate;
 
 use crate::config::{self, Config, Settings};
 use crate::email_export::{self, ImapExporter};
+use crate::route::RouteDecision;
 use crate::thunderbird;
 
 /// Result of an action, sent back to the main thread for notification.
@@ -94,8 +95,19 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
             });
         };
         match run_export(&account_name, Some(&on_progress), Some(&on_status), cancel_token_worker) {
-            Ok(summary) => {
+            Ok((summary, decisions)) => {
                 let _ = progress_tx.send(ProgressUpdate::Done { summary });
+                // D6: files stay in staging. Open the route review window so the
+                // user can validate/reassign paths before any file is moved.
+                // The AutoClose sent by ProgressUpdate::Done will close the progress
+                // window; the route review window opens after that via the event loop.
+                if !decisions.is_empty() {
+                    if let Err(e) = crate::tray::send_command(
+                        crate::tray::AppCommand::OpenRouteReview(decisions),
+                    ) {
+                        eprintln!("Failed to open route review window: {:#}", e);
+                    }
+                }
             }
             Err(e) => {
                 let _ = progress_tx.send(ProgressUpdate::Error {
@@ -107,12 +119,15 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
     });
 }
 
+/// Returns `(summary_string, decisions)`.
+/// Decisions are the `Vec<(PathBuf, RouteDecision)>` produced by `export_account`.
+/// In GUI mode the caller opens the route review window; no files are moved here (D6).
 fn run_export(
     account_name: &str,
     on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
     on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
     cancel_token: Arc<AtomicBool>,
-) -> Result<String> {
+) -> Result<(String, Vec<(PathBuf, RouteDecision)>)> {
     dotenvy::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
@@ -133,12 +148,11 @@ fn run_export(
     let mut exporter = ImapExporter::new(account.clone(), false);
     exporter.connect().context("Failed to connect to IMAP server")?;
 
-    let (results, _decisions) = exporter
+    let (results, decisions) = exporter
         .export_account(on_progress, on_status, Some(cancel_token.as_ref()))
         .context("Export failed")?;
-    // `_decisions` holds `Vec<(PathBuf, RouteDecision)>` — deferred move (D6).
-    // M7 will open the route review window and pass `_decisions` to it.
-    // For now the `.md` files remain in staging after export.
+    // `decisions` holds `Vec<(PathBuf, RouteDecision)>` — deferred move (D6).
+    // GUI mode: files stay in staging; the route review window handles the move.
 
     exporter.disconnect().ok();
 
@@ -148,9 +162,12 @@ fn run_export(
     let total_errors: usize = results.values().map(|s| s.errors).sum();
 
     let prefix = if cancelled { "Export annulé" } else { "Export terminé" };
-    Ok(format!(
-        "{} — {} exportés, {} ignorés, {} erreurs",
-        prefix, total_exported, total_skipped, total_errors
+    Ok((
+        format!(
+            "{} — {} exportés, {} ignorés, {} erreurs",
+            prefix, total_exported, total_skipped, total_errors
+        ),
+        decisions,
     ))
 }
 

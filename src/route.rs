@@ -367,7 +367,12 @@ const DEFAULT_BASE: &str = "Perso/Messy/Emails";
 
 /// Route a single email deterministically using the rules from `destinations.txt`.
 ///
-/// Matching order (first match wins): `Domain` → `From` → `Subject` → `Account`.
+/// Matching order (first match wins): destinations are evaluated in the order they
+/// appear in `destinations.txt` (first destination = highest priority). Within a
+/// destination, rules are evaluated in the order they are declared on that line.
+/// The first rule that matches wins, regardless of rule type (`Domain`, `From`,
+/// `Subject`, `Account`). There is no priority hierarchy between rule types.
+///
 /// If no rule matches, the `default`-tagged entry is used; if none exists, the
 /// hard-coded fallback `Perso/Messy/Emails/<Year>/<Month>` is returned.
 ///
@@ -381,7 +386,8 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
     let year = meta.date.format("%Y").to_string();
     let month = meta.date.format("%m").to_string();
 
-    // Try deterministic rules in order: Domain, From, Subject, Account.
+    // Evaluate destinations in file order; within each destination, evaluate rules in
+    // declaration order. First match wins — no priority hierarchy between rule types.
     for dest in dests {
         for rule in &dest.rules {
             let matched = match rule {

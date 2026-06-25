@@ -1347,4 +1347,147 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         // Exclusive: original file not moved
         assert!(md_src.exists(), "original file must remain when apply is rejected");
     }
+
+    // ── M7: route review window — apply-layer validator (IPC contract) ───────
+    // These tests exercise the same join_safe_segments + apply_decision path that
+    // apply_route_decisions (tray IPC handler) delegates to.  No WebView needed.
+
+    /// A dest_path value containing ".." (as would arrive from the HTML IPC)
+    /// must be rejected by join_safe_segments, not applied.
+    #[test]
+    fn test_route_review_rejects_dotdot_dest_path() {
+        let result = join_safe_segments(&PathBuf::from("/notes"), "../etc/passwd");
+        assert!(result.is_err(), "'..' in dest_path must be rejected");
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            msg.contains("..") || msg.contains("invalid"),
+            "error must describe the bad segment: {msg}"
+        );
+    }
+
+    /// A dest_path value containing a backslash must be rejected.
+    #[test]
+    fn test_route_review_rejects_backslash_dest_path() {
+        let result = join_safe_segments(&PathBuf::from("/notes"), r"Perso\Windows\Path");
+        assert!(result.is_err(), "backslash in dest_path must be rejected");
+    }
+
+    // ── route_email — file order priority (multi-destination) ────────────────
+    //
+    // The router evaluates destinations in the order they appear in destinations.txt.
+    // There is NO priority hierarchy between rule types (Domain / From / Subject /
+    // Account). The first destination whose first matching rule fires wins.
+
+    /// When two destinations could both match the same email, the one listed FIRST in
+    /// destinations.txt must win, regardless of rule type.
+    #[test]
+    fn test_route_email_first_destination_in_file_wins_over_second() {
+        // dest-A is listed first and matches via `from:`
+        // dest-B is listed second and would also match via `domain:`
+        // Expected: dest-A wins because it appears first.
+        let content =
+            "Perso/First | from:sender@acme.com\nPerso/Second | domain:acme.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta(
+            "sender@acme.com",
+            "acme.com",
+            "Hello",
+            "acc",
+            "2026-06-01T00:00:00+00:00",
+        );
+
+        let decision = route_email(&meta, &dests);
+
+        // Inclusive: first destination matched
+        assert!(
+            decision.rel_path.starts_with("Perso/First/"),
+            "first destination must win; got: {}",
+            decision.rel_path
+        );
+        assert!(!decision.is_default);
+        // Exclusive: second destination must NOT be returned
+        assert!(
+            !decision.rel_path.starts_with("Perso/Second"),
+            "second destination must not be returned when first matched; got: {}",
+            decision.rel_path
+        );
+    }
+
+    /// Reversing the order in destinations.txt must reverse the winner — proving that
+    /// file order, not rule type, determines priority.
+    #[test]
+    fn test_route_email_file_order_reversed_changes_winner() {
+        // Same two destinations as above, but listed in opposite order.
+        // Now dest-B (domain:) is first → it must win over dest-A (from:).
+        let content =
+            "Perso/Second | domain:acme.com\nPerso/First | from:sender@acme.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta(
+            "sender@acme.com",
+            "acme.com",
+            "Hello",
+            "acc",
+            "2026-06-01T00:00:00+00:00",
+        );
+
+        let decision = route_email(&meta, &dests);
+
+        // Inclusive: the destination that is now first in file wins
+        assert!(
+            decision.rel_path.starts_with("Perso/Second/"),
+            "reversed order: 'Second' destination must now win; got: {}",
+            decision.rel_path
+        );
+        assert!(!decision.is_default);
+        // Exclusive: the other destination must not be returned
+        assert!(
+            !decision.rel_path.starts_with("Perso/First"),
+            "reversed order: 'First' destination must not be returned; got: {}",
+            decision.rel_path
+        );
+    }
+
+    /// A free-typed new path (not in destinations.txt) is accepted by apply_decision,
+    /// the directory is created, and the .md is moved.
+    /// destinations.txt must NOT be modified (D10).
+    #[test]
+    fn test_route_review_new_free_path_created_destinations_not_modified() {
+        let temp = TempDir::new().unwrap();
+        let notes_dir = temp.path().join("notes");
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+
+        // Write a minimal destinations.txt — the new path is NOT listed.
+        let destinations_txt = temp.path().join("destinations.txt");
+        let original_content = "Perso/Finance/Banque | domain:bank.com\n";
+        fs::write(&destinations_txt, original_content).unwrap();
+
+        let md_src = staging.join("invoice.md");
+        fs::write(&md_src, "---\nsubject: Free path test\n---\nBody\n").unwrap();
+
+        // Free-typed path not in destinations.txt — apply_decision must still work (D10).
+        let free_path = "Perso/NewCategory/FreeSubcat/2026/06";
+        apply_decision(&md_src, free_path, &notes_dir).unwrap();
+
+        let expected_md = notes_dir
+            .join("Perso").join("NewCategory").join("FreeSubcat")
+            .join("2026").join("06").join("invoice.md");
+
+        // Inclusive: file is at the new location
+        assert!(expected_md.exists(), "md must be moved to the new free path");
+        // Exclusive: original not at staging
+        assert!(!md_src.exists(), "original .md must not remain in staging");
+
+        // D10: destinations.txt must NOT have been modified
+        let after_content = fs::read_to_string(&destinations_txt).unwrap();
+        assert_eq!(
+            after_content, original_content,
+            "destinations.txt must not be modified when a free path is used (D10)"
+        );
+        // Exclusive: no new line for the free path
+        assert!(
+            !after_content.contains("NewCategory"),
+            "free path must not be written to destinations.txt (D10)"
+        );
+    }
 }

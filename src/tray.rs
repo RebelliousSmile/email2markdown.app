@@ -6,6 +6,7 @@
 //! this loop and are routed by `WindowId`.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, OnceLock};
@@ -24,6 +25,7 @@ use wry::{WebView, WebViewBuilder};
 
 use crate::config::{self, AccountBehavior, RawAccount, Settings};
 use crate::progress::ProgressUpdate;
+use crate::route::RouteDecision;
 use crate::tray_actions::{self, action_open_config, ActionResult};
 use crate::updater;
 
@@ -64,6 +66,9 @@ pub enum AppCommand {
         window_id: WindowId,
         js: String,
     },
+    /// Open the route review window after an Export.
+    /// Carries the list of (staging_path, RouteDecision) produced by export_account.
+    OpenRouteReview(Vec<(PathBuf, RouteDecision)>),
 }
 
 /// Per-progress-window state. Fields declared in drop order:
@@ -93,10 +98,19 @@ struct UpdateState {
     window: Window,
 }
 
+/// Per-route-review-window state. Same drop-order discipline as `ProgressState`.
+struct RouteState {
+    #[allow(dead_code)]
+    webview: WebView,
+    #[allow(dead_code)]
+    window: Window,
+}
+
 enum WState {
     Progress(ProgressState),
     Config(#[allow(dead_code)] ConfigState),
     Update(UpdateState),
+    Route(#[allow(dead_code)] RouteState),
 }
 
 /// Prevents duplicate config windows from opening simultaneously.
@@ -104,6 +118,9 @@ static CONFIG_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Prevents duplicate update windows from opening simultaneously.
 static UPDATE_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// Prevents duplicate route review windows from opening simultaneously.
+static ROUTE_REVIEW_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 
 static APP_PROXY: OnceLock<EventLoopProxy<AppCommand>> = OnceLock::new();
 
@@ -283,10 +300,28 @@ pub fn run_tray() -> Result<()> {
                     let _ = state.webview.evaluate_script(&js);
                 }
             }
-            Event::UserEvent(AppCommand::EvalScript { window_id, js: _ }) => {
-                // M7: EvalScript will be used by the route review window.
-                // No-op until M7 wires it up.
-                let _ = window_id;
+            Event::UserEvent(AppCommand::EvalScript { window_id, js }) => {
+                if let Some(WState::Route(state)) = windows.get(&window_id) {
+                    let _ = state.webview.evaluate_script(&js);
+                }
+            }
+            Event::UserEvent(AppCommand::OpenRouteReview(decisions)) => {
+                if ROUTE_REVIEW_WINDOW_OPEN
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    // Already open — ignore. The previous window should be closed first.
+                } else {
+                    match build_route_window(target, &proxy, decisions) {
+                        Ok((window, webview, window_id)) => {
+                            windows.insert(window_id, WState::Route(RouteState { webview, window }));
+                        }
+                        Err(e) => {
+                            ROUTE_REVIEW_WINDOW_OPEN.store(false, Ordering::Release);
+                            eprintln!("Fenêtre de revue de routage : {:#}", e);
+                        }
+                    }
+                }
             }
             Event::UserEvent(AppCommand::ActionRequested { window_id }) => {
                 if let Some(WState::Progress(mut state)) = windows.remove(&window_id) {
@@ -302,6 +337,9 @@ pub fn run_tray() -> Result<()> {
                     }
                     Some(WState::Update(_)) => {
                         UPDATE_WINDOW_OPEN.store(false, Ordering::Release);
+                    }
+                    Some(WState::Route(_)) => {
+                        ROUTE_REVIEW_WINDOW_OPEN.store(false, Ordering::Release);
                     }
                     _ => {}
                 }
@@ -321,6 +359,9 @@ pub fn run_tray() -> Result<()> {
                 }
                 Some(WState::Update(_)) => {
                     UPDATE_WINDOW_OPEN.store(false, Ordering::Release);
+                }
+                Some(WState::Route(_)) => {
+                    ROUTE_REVIEW_WINDOW_OPEN.store(false, Ordering::Release);
                 }
                 None => {}
             },
@@ -578,6 +619,214 @@ fn build_update_window(
     });
 
     Ok((window, webview, window_id))
+}
+
+// ── Route review window ───────────────────────────────────────────────────────
+
+/// A single row sent from the HTML Apply button: `{ file, dest_path }`.
+/// `dest_path` is always relative to `notes_dir`.
+#[derive(serde::Deserialize)]
+struct RouteDecisionRow {
+    file: String,
+    dest_path: String,
+}
+
+/// IPC payload sent by the route review HTML on Apply.
+#[derive(serde::Deserialize)]
+struct RouteApplyPayload {
+    decisions: Vec<RouteDecisionRow>,
+}
+
+/// Escape a JSON string so it is safe to embed inside an HTML `<script>` block.
+///
+/// `serde_json` does not escape `<`, `>`, or `&` by default. In a WebView the
+/// sequence `</script>` inside a JSON value would close the script tag early,
+/// allowing arbitrary HTML injection. Replacing these three characters with their
+/// JSON Unicode escape equivalents (`<`, `>`, `&`) produces valid
+/// JSON that the browser's JSON parser reconstructs to the original string, while
+/// the HTML parser cannot see a closing `</script>` tag.
+fn escape_json_for_script(json: &str) -> String {
+    json.replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+}
+
+/// Build a route review window on the main event loop thread.
+///
+/// Loads `route_review.html`, injects the decisions JSON and the list of
+/// known paths from `destinations.txt`, and wires an IPC handler that
+/// calls `apply_route_decisions` when the user clicks Apply.
+fn build_route_window(
+    target: &EventLoopWindowTarget<AppCommand>,
+    proxy: &EventLoopProxy<AppCommand>,
+    decisions: Vec<(PathBuf, RouteDecision)>,
+) -> Result<(Window, WebView, WindowId)> {
+    let settings_path = config::settings_path();
+    let settings = Settings::load(&settings_path).unwrap_or_default();
+    let notes_dir: PathBuf = settings
+        .notes_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("notes"));
+
+    // Collect known paths from destinations.txt for the datalist autocomplete.
+    let known_paths: Vec<String> = {
+        let dest_file = settings
+            .destinations_file
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| config::app_config_dir().join("destinations.txt"));
+        match std::fs::read_to_string(&dest_file) {
+            Ok(content) => match crate::route::parse_destinations(&content) {
+                Ok(dests) => dests.into_iter().map(|d| d.path).collect(),
+                Err(e) => {
+                    eprintln!("warning: failed to parse destinations.txt: {:#}", e);
+                    vec![]
+                }
+            },
+            Err(_) => vec![],
+        }
+    };
+
+    // Build owned rows — extract frontmatter fields for display in the table.
+    let owned_rows: Vec<(String, String, String, String, String, bool)> = decisions
+        .iter()
+        .map(|(staging_path, decision)| {
+            let file = staging_path.to_string_lossy().into_owned();
+            let subject = read_frontmatter_field(staging_path, "subject")
+                .unwrap_or_else(|| {
+                    staging_path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                });
+            let sender = read_frontmatter_field(staging_path, "from").unwrap_or_default();
+            let date   = read_frontmatter_field(staging_path, "date").unwrap_or_default();
+            (file, subject, sender, date, decision.rel_path.clone(), decision.is_default)
+        })
+        .collect();
+
+    let json_rows: Vec<serde_json::Value> = owned_rows
+        .iter()
+        .map(|(file, subject, sender, date, dest_path, is_default)| {
+            serde_json::json!({
+                "file":       file,
+                "subject":    subject,
+                "sender":     sender,
+                "date":       date,
+                "dest_path":  dest_path,
+                "is_default": is_default
+            })
+        })
+        .collect();
+
+    let decisions_json =
+        serde_json::to_string(&json_rows).context("failed to serialize decisions")?;
+    let known_paths_json =
+        serde_json::to_string(&known_paths).context("failed to serialize known paths")?;
+
+    let html_template = include_str!("../assets/route_review.html");
+    let html = html_template
+        .replace("__DECISIONS_JSON__", &escape_json_for_script(&decisions_json))
+        .replace("__KNOWN_PATHS_JSON__", &escape_json_for_script(&known_paths_json));
+
+    let window = WindowBuilder::new()
+        .with_title("Email to Markdown \u{2014} Revue du routage")
+        .with_inner_size(LogicalSize::new(900.0f64, 600.0f64))
+        .build(target)
+        .context("failed to create route review window")?;
+    window.set_focus();
+    let window_id = window.id();
+
+    let proxy_ipc = proxy.clone();
+    let webview = WebViewBuilder::new(&window)
+        .with_html(html)
+        .with_ipc_handler(move |req: wry::http::Request<String>| {
+            let body = req.body().clone();
+            if body.trim() == "cancel" {
+                let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+                return;
+            }
+            match apply_route_decisions(&body, &notes_dir, window_id, &proxy_ipc) {
+                Ok(()) => {
+                    let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+                }
+                Err(e) => {
+                    // Surface the error back to the HTML without closing.
+                    let msg = format!("{:#}", e);
+                    if let Ok(js_str) = serde_json::to_string(&msg) {
+                        let js = format!("route_review_error({})", js_str);
+                        let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                    }
+                }
+            }
+        })
+        .build()
+        .context("failed to create route review webview")?;
+
+    Ok((window, webview, window_id))
+}
+
+/// Parse the IPC payload from route_review.html and move each file.
+///
+/// `body` is a JSON string: `{ decisions: [{ file, dest_path }] }`.
+/// `dest_path` is always relative to `notes_dir`.
+/// Validation: each `dest_path` is passed through `join_safe_segments` which
+/// rejects `..`, `\`, and absolute paths.
+/// New paths (not in destinations.txt) are created with `mkdir -p` (D4/D10).
+fn apply_route_decisions(
+    body: &str,
+    notes_dir: &PathBuf,
+    _window_id: WindowId,
+    _proxy: &EventLoopProxy<AppCommand>,
+) -> Result<()> {
+    let payload: RouteApplyPayload = serde_json::from_str(body)
+        .context("failed to parse route review IPC payload")?;
+
+    for row in &payload.decisions {
+        let staging_md = PathBuf::from(&row.file);
+        // Anti-traversal validation — rejects "..", "\", absolute paths.
+        let dest_dir = crate::route::join_safe_segments(notes_dir, &row.dest_path)
+            .with_context(|| {
+                format!(
+                    "invalid destination path {:?} for file {:?}",
+                    row.dest_path, row.file
+                )
+            })?;
+        // Create the directory tree (D4: mkdir -p).
+        std::fs::create_dir_all(&dest_dir).with_context(|| {
+            format!("failed to create directory {}", dest_dir.display())
+        })?;
+        // Move .md + sibling _attachments/ dir.
+        crate::route::move_email(&staging_md, &dest_dir).with_context(|| {
+            format!(
+                "failed to move {} to {}",
+                staging_md.display(),
+                dest_dir.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Extract a single field value from the YAML frontmatter of a `.md` file.
+/// Returns `None` if the file cannot be read or the field is absent.
+fn read_frontmatter_field(path: &std::path::Path, field: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let rest = content.strip_prefix("---\n")?;
+    let end = rest.find("\n---")?;
+    let frontmatter = &rest[..end];
+    let prefix = format!("{}:", field);
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(&prefix) {
+            let value = trimmed[prefix.len()..].trim().trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Parse a config IPC message and act on it synchronously.
@@ -996,3 +1245,49 @@ fn show_notification(result: &ActionResult) {
     });
 }
 
+#[cfg(test)]
+mod tests {
+    use super::escape_json_for_script;
+
+    #[test]
+    fn test_escape_json_for_script_script_tag_breakout() {
+        // A value containing </script> must not appear literally after escaping.
+        let payload = r#"{"subject":"</script><script>alert(1)</script>"}"#;
+        let escaped = escape_json_for_script(payload);
+        // Exclusive: no literal </script> in the output
+        assert!(
+            !escaped.contains("</script>"),
+            "escaped output must not contain literal </script>: {escaped}"
+        );
+        // Inclusive: the < and > are replaced by unicode escapes
+        assert!(
+            escaped.contains("\\u003c") && escaped.contains("\\u003e"),
+            "< and > must be escaped to \\u003c / \\u003e: {escaped}"
+        );
+    }
+
+    #[test]
+    fn test_escape_json_for_script_ampersand_escaped() {
+        let payload = r#"{"name":"A & B"}"#;
+        let escaped = escape_json_for_script(payload);
+        assert!(
+            !escaped.contains(" & "),
+            "literal & must not appear: {escaped}"
+        );
+        assert!(
+            escaped.contains("\\u0026"),
+            "& must be escaped to \\u0026: {escaped}"
+        );
+    }
+
+    #[test]
+    fn test_escape_json_for_script_plain_ascii_unchanged() {
+        // Regular JSON without dangerous chars must pass through verbatim.
+        let payload = r#"{"key":"hello world"}"#;
+        let escaped = escape_json_for_script(payload);
+        assert_eq!(
+            escaped, payload,
+            "plain ASCII JSON must be unchanged by escaping"
+        );
+    }
+}

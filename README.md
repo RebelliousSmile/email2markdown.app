@@ -1,6 +1,6 @@
 # Email to Markdown Exporter
 
-Outil Rust pour exporter vos emails IMAP vers des fichiers Markdown avec métadonnées YAML.
+Outil Rust pour exporter vos emails IMAP vers des fichiers Markdown avec métadonnées YAML, puis les ranger automatiquement dans votre arborescence « second cerveau ».
 
 ## Installation
 
@@ -26,8 +26,11 @@ sudo apt-get install build-essential pkg-config libssl-dev
 # 1. Importer automatiquement les comptes depuis Thunderbird (recommandé)
 ./target/release/email-to-markdown import --extract-passwords
 
-# 2. Choisir le répertoire d'export (via le tray ou manuellement dans settings.yaml)
+# 2. Choisir le répertoire d'export et le répertoire de notes dans settings.yaml
 # Voir section Configuration ci-dessous
+
+# 3. Créer destinations.txt pour définir votre arborescence de rangement
+# Voir section Destinations ci-dessous
 ```
 
 > Les fichiers de configuration sont stockés dans le répertoire système :
@@ -80,9 +83,20 @@ email-to-markdown import --output /chemin/vers/accounts.yaml
 
 ---
 
-### `export` — Exporter les emails
+### `export` — Exporter et ranger les emails
 
-Connecte les comptes IMAP configurés et exporte les emails en fichiers Markdown.
+Connecte les comptes IMAP configurés, exporte les emails en fichiers Markdown, puis les déplace automatiquement vers le bon chemin dans votre second cerveau selon `destinations.txt`.
+
+**Flux complet :**
+
+1. Connexion IMAP → téléchargement des emails
+2. Conversion en Markdown avec frontmatter YAML (répertoire d'export comme zone tampon)
+3. Calcul du chemin de destination selon les règles de `destinations.txt`
+4. Déplacement automatique vers `notes_dir/<chemin>/<Année>/<Mois>`
+
+Si aucune règle ne correspond, l'email atterrit dans le dossier fourre-tout : `notes_dir/Perso/Messy/Emails/<Année>/<Mois>`.
+
+Si `destinations.txt` est absent ou non configuré, un avertissement est affiché et tous les emails tombent dans le fourre-tout — l'export continue sans erreur fatale.
 
 ```
 email-to-markdown export [OPTIONS]
@@ -123,84 +137,6 @@ email-to-markdown export --account Gmail --delete-after-export
 
 ---
 
-### `fix` — Corriger le YAML malformé
-
-Corrige les fichiers Markdown générés avec des tags YAML Python-spécifiques (hérités de l'ancienne version Python).
-
-```
-email-to-markdown fix <DOSSIER> [OPTIONS]
-```
-
-| Argument / Option | Description |
-|--------|-------------|
-| `<DOSSIER>` | Dossier contenant les fichiers email à analyser (obligatoire) |
-| `--dry-run` | Simule les corrections sans modifier les fichiers |
-| `--apply` | Applique réellement les corrections (sans `--apply`, mode dry-run par défaut) |
-
-**Exemples :**
-
-```bash
-# Analyser sans modifier (dry-run)
-email-to-markdown fix ./exports/gmail
-
-# Voir ce qui serait corrigé
-email-to-markdown fix ./exports/gmail --dry-run
-
-# Appliquer les corrections
-email-to-markdown fix ./exports/gmail --apply
-```
-
----
-
-### `sort` — Trier et catégoriser les emails
-
-Analyse les emails exportés et les classe en catégories : `delete`, `summarize`, `keep`.
-
-```
-email-to-markdown sort [DOSSIER] [OPTIONS]
-```
-
-| Argument / Option | Description |
-|--------|-------------|
-| `[DOSSIER]` | Dossier contenant les fichiers email Markdown |
-| `--account <NOM>` | Trie les emails d'un compte (lit le dossier depuis `accounts.yaml`) |
-| `--config <CHEMIN>` | Fichier de règles de tri (défaut : répertoire de config système) |
-| `--report <NOM>` | Nom du fichier rapport de sortie (défaut : `sort_report.json`) |
-| `--verbose` | Affiche les détails des emails classés |
-| `--dry-run` | Analyse sans créer de rapport |
-| `--list-accounts` | Liste les comptes disponibles dans `accounts.yaml` |
-| `--create-config` | Crée un fichier `sort_config.json` avec les valeurs par défaut |
-
-**Exemples :**
-
-```bash
-# Trier les emails d'un dossier
-email-to-markdown sort ./exports/gmail
-
-# Trier par nom de compte (lit le dossier depuis accounts.yaml)
-email-to-markdown sort --account Gmail
-
-# Simulation sans créer de rapport
-email-to-markdown sort --account Gmail --dry-run
-
-# Avec sortie détaillée
-email-to-markdown sort --account Gmail --verbose
-
-# Rapport personnalisé
-email-to-markdown sort ./exports/gmail --report mon_rapport.json
-
-# Créer la config de tri par défaut
-email-to-markdown sort --create-config
-
-# Config de tri personnalisée
-email-to-markdown sort --account Gmail --config config/mes_regles.json
-
-# Lister les comptes disponibles
-email-to-markdown sort --list-accounts
-```
-
----
-
 ### `tray` — Interface dans la barre système *(optionnel)*
 
 Lance l'application en tant qu'icône enveloppe dans la barre système (Windows/macOS/Linux).
@@ -214,26 +150,31 @@ Lance l'application en tant qu'icône enveloppe dans la barre système (Windows/
 email-to-markdown tray
 ```
 
-Au premier lancement sans comptes configurés, les sous-menus **Export** et **Tri** sont désactivés. Le menu contextuel propose :
+Au premier lancement sans comptes configurés, le sous-menu **Export** est désactivé. Le menu contextuel propose :
 
 | Entrée | Action |
 |--------|--------|
-| Export compte › *Nom* | Exporte les emails du compte via IMAP |
-| Trier emails › *Nom* | Génère `sort_report.json` pour le compte |
+| Export compte › *Nom* | Exporte les emails du compte via IMAP, puis ouvre la fenêtre de revue du routage |
 | Import Thunderbird | Importe comptes + mots de passe (dialog Oui/Non/Annuler) |
 | Choisir répertoire d'export… | Sélecteur de dossier → met à jour `settings.yaml` |
-| Paramètres… | Ouvre `settings.yaml` dans l'éditeur par défaut |
-| Documentation | Ouvre `README.md` |
+| Paramètres… | Ouvre la fenêtre de configuration |
+| Mise à jour… | Vérifie et applique une mise à jour du binaire |
 | Quitter | Ferme l'application |
 
-Après chaque action, une notification modale indique le résultat (succès ou erreur).
-Après un import, le menu est reconstruit automatiquement pour refléter les nouveaux comptes.
+**Fenêtre de revue du routage** — après chaque export, une fenêtre affiche les emails avec le chemin proposé. Vous pouvez :
+
+- Conserver la proposition (chemin calculé depuis `destinations.txt`)
+- Réaffecter vers un chemin connu via autocomplétion
+- Saisir librement un chemin nouveau (créé physiquement à l'apply, jamais réécrit dans `destinations.txt`)
+- Cliquer **Appliquer** pour déplacer tous les fichiers vers leur destination finale
+
+Aucun fichier n'est déplacé avant que vous cliquiez Appliquer.
 
 ---
 
 ## Configuration
 
-La configuration est répartie en trois fichiers dans le répertoire système
+La configuration est répartie en plusieurs fichiers dans le répertoire système
 (`%APPDATA%\email-to-markdown\` sur Windows, `~/.config/email-to-markdown/` sur Linux/macOS) :
 
 ### `accounts.yaml` — Connexion IMAP
@@ -266,8 +207,18 @@ accounts:
 Éditable via **Paramètres…** dans le tray ou directement.
 
 ```yaml
-# Répertoire racine — chaque compte crée un sous-dossier automatiquement
+# Répertoire d'export (zone tampon) — chaque compte crée un sous-dossier automatiquement
 export_base_dir: C:/Users/VotreNom/Documents/Emails
+
+# Racine du second cerveau — les chemins de destinations.txt sont joints ici
+notes_dir: C:/Users/VotreNom/Documents/Notes
+
+# Chemin vers destinations.txt (défaut : <config_dir>/destinations.txt)
+# destinations_file: C:/Users/VotreNom/.config/email-to-markdown/destinations.txt
+
+# Routage par IA — désactivé par défaut
+# ai_routing_enabled: false
+# ai_confidence_threshold: 0.7
 
 # Comportement par défaut pour tous les comptes
 defaults:
@@ -285,6 +236,35 @@ defaults:
 #   Outlook:
 #     collect_contacts: true
 ```
+
+### `destinations.txt` — Arborescence de rangement
+
+Fichier plat décrivant les chemins valides de votre second cerveau et les règles de correspondance. Curé manuellement.
+
+```
+# Chemin seul — disponible pour le routage IA si activé, sinon fourre-tout
+Perso/Famille
+
+# Chemin avec règles — correspondance déterministe (sans IA)
+Pro/Clients/Acme      | domain:acme.com, domain:acme.fr
+Perso/Banque          | from:contact@mabanque.fr, subject:relevé
+Pro/RH                | account:Outlook, subject:contrat
+
+# Fourre-tout explicite (au plus une ligne default)
+Perso/Messy/Emails    | default
+```
+
+**Syntaxe des règles :**
+
+| Attribut | Description |
+|----------|-------------|
+| `domain:<d>` | L'expéditeur vient du domaine `d` (insensible à la casse, sous-domaines inclus) |
+| `from:<adresse>` | Adresse exacte de l'expéditeur (insensible à la casse) |
+| `subject:<mot>` | Le sujet contient `mot` (insensible à la casse) |
+| `account:<nom>` | Email reçu sur le compte `nom` |
+| `default` | Chemin fourre-tout si aucune autre règle ne correspond |
+
+La première règle qui correspond l'emporte. Le premier segment du chemin (`Perso` ou `Pro`) détermine la polarité : `Perso` par défaut si aucune règle ne force `Pro`.
 
 ### `.env` — Mots de passe
 
@@ -305,15 +285,29 @@ Le suffixe `_APPLICATION_PASSWORD` est prioritaire sur `_PASSWORD`.
 
 ## Structure des exports
 
+Le répertoire d'export (`export_base_dir`) sert de zone tampon. Après l'export, les fichiers Markdown sont déplacés vers le second cerveau (`notes_dir`) selon les règles de `destinations.txt`.
+
 ```
-export_directory/
-├── INBOX/
-│   └── email_2024-01-15_AB_to_CD.md
-├── Sent/
-│   └── email_2024-01-15_AB_to_CD.md
-└── attachments/
-    └── INBOX/
-        └── email_2024-01-15_AB_to_CD_a1b2c3_fichier.pdf
+export_base_dir/            ← zone tampon (peut être vidée après apply)
+├── Gmail/
+│   ├── INBOX/
+│   │   └── email_2024-01-15_AB_to_CD.md
+│   └── Sent/
+│       └── email_2024-01-15_AB_to_CD.md
+
+notes_dir/                  ← second cerveau, destination finale
+├── Pro/
+│   └── Clients/
+│       └── Acme/
+│           └── 2024/
+│               └── 01/
+│                   └── email_2024-01-15_AB_to_CD.md
+└── Perso/
+    └── Messy/
+        └── Emails/
+            └── 2024/
+                └── 01/
+                    └── email_2024-01-15_AB_to_CD.md
 ```
 
 ---
@@ -337,15 +331,15 @@ export_directory/
 
 **Dossiers manquants** : Ajustez `ignored_folders` dans `accounts.yaml` ; utilisez `--debug` pour voir les dossiers disponibles.
 
+**Emails dans le fourre-tout** : Vérifiez que `destinations.txt` est correctement configuré (`destinations_file` dans `settings.yaml`) et que les règles correspondent bien à vos expéditeurs.
+
 ---
 
-## Documentation
+## Note sur l'outillage Python
 
-- [Terminologie Rust](docs/memory-bank/rust_terminology.md)
-- [Structure des modules](docs/memory-bank/module_structure.md)
-- [Gestion des erreurs](docs/memory-bank/error_handling.md)
-- [Configuration](docs/memory-bank/configuration.md)
-- [Stratégie de test](docs/memory-bank/testing_strategy.md)
+Les scripts Python d'analyse (`tools/`) qui existaient dans les versions précédentes ont été archivés dans un dépôt séparé et ne font plus partie du périmètre de cette application. Le routage est désormais entièrement déterministe via `destinations.txt`, avec une option IA désactivée par défaut.
+
+---
 
 ## Contribuer
 
