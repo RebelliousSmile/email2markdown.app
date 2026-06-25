@@ -874,7 +874,7 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 
 mod route_tests {
     use email_to_markdown::route::{
-        apply_decision, ai_route, join_safe_segments, move_email,
+        apply_decision, ai_route, ensure_year_month, join_safe_segments, move_email,
         parse_destinations, route_email, upsert_rule,
         Destination, EmailMeta, MatchRule,
     };
@@ -946,50 +946,105 @@ mod route_tests {
         assert!(join_safe_segments(&root, "Travail/Projets*").is_err());
     }
 
-    // --- move_email: .md + _attachments/ dir moved and paths rewritten ---
+    // --- move_email: .md + flat sibling attachments moved and bare links preserved ---
 
     #[test]
-    fn test_move_email_moves_md_and_attachments_dir() {
+    fn test_move_email_moves_md_and_flat_attachments() {
         let temp = TempDir::new().unwrap();
         let src_dir = temp.path().join("staging");
         let dst_dir = temp.path().join("dest");
         fs::create_dir_all(&src_dir).unwrap();
         fs::create_dir_all(&dst_dir).unwrap();
 
-        // Create the .md file with an attachments block
-        let md_src = src_dir.join("email.md");
-        let attachments_dir_src = src_dir.join("email_attachments");
-        fs::create_dir_all(&attachments_dir_src).unwrap();
-        fs::write(attachments_dir_src.join("file.pdf"), b"PDF content").unwrap();
+        // Flat layout: attachment is a sibling of the .md, prefixed by stem
+        let att_src = src_dir.join("email__file.pdf");
+        fs::write(&att_src, b"PDF content").unwrap();
 
-        let md_content = "---\nsubject: Test\nattachments:\n  - email_attachments/file.pdf\n---\nBody text\n";
+        let md_src = src_dir.join("email.md");
+        let md_content = "---\nsubject: Test\nattachments:\n  - email__file.pdf\n---\nBody text\n";
         fs::write(&md_src, md_content).unwrap();
 
         // Act
         move_email(&md_src, &dst_dir).unwrap();
 
-        // Inclusive: new paths exist
+        // Inclusive: .md and flat attachment co-located at dest
         let md_dest = dst_dir.join("email.md");
-        let attachments_dir_dest = dst_dir.join("email_attachments");
+        let att_dest = dst_dir.join("email__file.pdf");
         assert!(md_dest.exists(), "moved .md must exist at dest");
-        assert!(attachments_dir_dest.exists(), "moved _attachments/ dir must exist at dest");
-        assert!(attachments_dir_dest.join("file.pdf").exists(), "attachment file must exist in dest dir");
+        assert!(att_dest.exists(), "flat attachment must be co-located at dest");
 
-        // Exclusive: old paths no longer exist
+        // Exclusive: original paths no longer exist
         assert!(!md_src.exists(), "original .md must not remain at src");
-        assert!(!attachments_dir_src.exists(), "original _attachments/ dir must not remain at src");
+        assert!(!att_src.exists(), "original attachment must not remain at src");
 
-        // Inclusive: attachment path updated in moved .md
+        // Inclusive: bare link preserved in moved .md
         let new_content = fs::read_to_string(&md_dest).unwrap();
         assert!(
-            new_content.contains("email_attachments/file.pdf"),
-            "moved .md must reference the co-located attachments dir"
+            new_content.contains("email__file.pdf"),
+            "moved .md must preserve the bare attachment link"
         );
-        // Exclusive: no stale relative path pointing back to src
+        // Exclusive: no subdirectory reference in the moved .md
         assert!(
-            !new_content.contains("../staging/"),
-            "moved .md must not contain a path pointing back to staging dir"
+            !new_content.contains("_attachments/"),
+            "moved .md must not reference a _attachments/ subdir"
         );
+        assert!(
+            !new_content.contains("attachments/"),
+            "moved .md must not reference an attachments/ subdir"
+        );
+    }
+
+    /// Anti-regression: frontmatter with a YAML-quoted attachment name (e.g. `invoice #5.pdf`
+    /// serialized as `- 'email__a1b2c3d4_invoice #5.pdf'`) must be correctly dequoted by
+    /// `serde_yaml` so that `move_email` locates and moves the real file.
+    /// A line-parser would return the string with surrounding quotes → file not found → silently
+    /// skipped. This test locks the serde_yaml deserialization path.
+    #[test]
+    fn test_move_email_attachment_with_special_chars() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("staging");
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        // Attachment name that YAML serializes with single-quote wrapping due to '#'
+        let att_filename = "email__a1b2c3d4_invoice #5.pdf";
+        let att_src = src_dir.join(att_filename);
+        fs::write(&att_src, b"PDF content").unwrap();
+
+        // Frontmatter with YAML-quoted name (as produced by serde_yaml when '#' is present)
+        let md_content = concat!(
+            "---\n",
+            "subject: Test\n",
+            "attachments:\n",
+            "  - 'email__a1b2c3d4_invoice #5.pdf'\n",
+            "---\n",
+            "Body text\n"
+        );
+        let md_src = src_dir.join("email.md");
+        fs::write(&md_src, md_content).unwrap();
+
+        move_email(&md_src, &dst_dir).unwrap();
+
+        // Inclusive: real file (dequoted by serde_yaml) present at dest
+        let att_dest = dst_dir.join(att_filename);
+        assert!(
+            att_dest.exists(),
+            "attachment with special chars must be moved to dest (serde_yaml dequoted correctly): {:?}",
+            att_dest
+        );
+        // Exclusive: no file with literal surrounding single-quote chars in the name
+        let att_dest_with_quotes = dst_dir.join(format!("'{}'", att_filename));
+        assert!(
+            !att_dest_with_quotes.exists(),
+            "no file with literal quote chars must exist at dest (line-parser regression guard): {:?}",
+            att_dest_with_quotes
+        );
+        // Inclusive: .md moved to dest
+        assert!(dst_dir.join("email.md").exists(), ".md must be at dest");
+        // Exclusive: originals gone
+        assert!(!md_src.exists(), "original .md must not remain at src");
+        assert!(!att_src.exists(), "original attachment must not remain at src");
     }
 
     #[test]
@@ -1013,6 +1068,12 @@ mod route_tests {
         assert!(
             !dst_dir.join("plain_attachments").exists(),
             "no _attachments dir must be created when there was none"
+        );
+        // Exclusive: moved .md content must not contain any attachments/ path segment
+        let moved_content = fs::read_to_string(dst_dir.join("plain.md")).unwrap();
+        assert!(
+            !moved_content.contains("attachments/"),
+            "moved .md must not contain an attachments/ path segment"
         );
     }
 
@@ -1263,6 +1324,37 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         assert!(decision.rel_path.ends_with("2026/11"), "got: {}", decision.rel_path);
         // Exclusive: not "2026/1" (not zero-padded)
         assert!(!decision.rel_path.ends_with("2026/1"), "month must be 2 digits");
+    }
+
+    // ── ensure_year_month — normalize manually reassigned destinations ───────
+
+    #[test]
+    fn test_ensure_year_month_appends_to_bare_path() {
+        let out = ensure_year_month("Perso/Housing/Vallieres", "2026", "06");
+        // Inclusive: dated subfolder appended
+        assert_eq!(out, "Perso/Housing/Vallieres/2026/06");
+        // Exclusive: no double slash
+        assert!(!out.contains("//"), "no double slash, got: {}", out);
+    }
+
+    #[test]
+    fn test_ensure_year_month_skips_when_already_dated() {
+        let out = ensure_year_month("Perso/Finance/2026/06", "2026", "06");
+        // Inclusive: unchanged
+        assert_eq!(out, "Perso/Finance/2026/06");
+        // Exclusive: NOT doubled (the bug we guard against)
+        assert!(!out.contains("2026/06/2026/06"), "must not double the suffix, got: {}", out);
+    }
+
+    #[test]
+    fn test_ensure_year_month_appends_when_tail_is_not_a_date() {
+        // A trailing "13" (invalid month) or a non-year folder must NOT be mistaken
+        // for a dated suffix → year/month is appended.
+        let out = ensure_year_month("Perso/Bank/2026", "2026", "06");
+        assert_eq!(out, "Perso/Bank/2026/2026/06");
+        let out2 = ensure_year_month("Perso/X/Reports/13", "2026", "06");
+        assert_eq!(out2, "Perso/X/Reports/13/2026/06");
+        assert!(!out2.ends_with("/13"), "invalid month tail must not be treated as dated");
     }
 
     // ── route_email — path outside destinations.txt → default ────────────────

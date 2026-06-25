@@ -935,19 +935,34 @@ fn apply_route_decisions(
 
     for row in &payload.decisions {
         let staging_md = PathBuf::from(&row.file);
+        // Normalize the destination to carry the email's <Year>/<Month>. The auto
+        // proposal already ends with it; a manually reassigned path (cascade / free
+        // entry / bulk) comes bare from destinations.txt — append it from the email
+        // date so files always land under <dest>/<Year>/<Month> (no double suffix).
+        let dest_path = match read_frontmatter_field(&staging_md, "date")
+            .and_then(|d| chrono::DateTime::parse_from_rfc3339(d.trim()).ok())
+        {
+            Some(dt) => crate::route::ensure_year_month(
+                &row.dest_path,
+                &dt.format("%Y").to_string(),
+                &dt.format("%m").to_string(),
+            ),
+            // Date unreadable/unparseable → keep the path as-is (no guess).
+            None => row.dest_path.clone(),
+        };
         // Anti-traversal validation — rejects "..", "\", absolute paths.
-        let dest_dir = crate::route::join_safe_segments(notes_dir, &row.dest_path)
+        let dest_dir = crate::route::join_safe_segments(notes_dir, &dest_path)
             .with_context(|| {
                 format!(
                     "invalid destination path {:?} for file {:?}",
-                    row.dest_path, row.file
+                    dest_path, row.file
                 )
             })?;
         // Create the directory tree (D4: mkdir -p).
         std::fs::create_dir_all(&dest_dir).with_context(|| {
             format!("failed to create directory {}", dest_dir.display())
         })?;
-        // Move .md + sibling _attachments/ dir.
+        // Move .md + its referenced attachment siblings.
         crate::route::move_email(&staging_md, &dest_dir).with_context(|| {
             format!(
                 "failed to move {} to {}",

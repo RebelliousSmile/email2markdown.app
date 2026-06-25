@@ -311,7 +311,6 @@ pub fn export_to_markdown(
     ctx: &mut ExportContext<'_>,
 ) -> Result<Option<(PathBuf, RouteDecision)>> {
     let export_directory = ctx.export_directory;
-    let base_export_directory = ctx.base_export_directory;
     let account = ctx.account;
     let debug_mode = ctx.debug_mode;
     let dests = ctx.dests;
@@ -382,21 +381,14 @@ pub fn export_to_markdown(
         body
     };
 
-    // Handle attachments
-    let relative_path = export_directory
-        .strip_prefix(base_export_directory)
-        .unwrap_or(export_directory);
-    let attachments_dir = base_export_directory.join("attachments").join(relative_path);
-    fs::create_dir_all(&attachments_dir)?;
-
+    // Handle attachments — written into the same directory as the .md file
     let mut attachments = Vec::new();
     let base_filename_for_attachments = base_filename.replace('*', "_");
 
     extract_attachments(
         &mail,
-        &attachments_dir,
+        export_directory,
         &base_filename_for_attachments,
-        base_export_directory,
         account.skip_signature_images,
         debug_mode,
         &mut attachments,
@@ -592,11 +584,15 @@ pub(crate) fn extract_body(mail: &ParsedMail) -> String {
 }
 
 /// Extract attachments from a parsed email.
+///
+/// Each attachment is written into `attachments_dir` (the same directory as the `.md` file)
+/// using the flat filename scheme `<stem>__<hash>_<safe_name>`. When two attachments share the
+/// same original name (identical hash), a numeric suffix `_2`, `_3`, … is appended to avoid
+/// clobbering. The bare filename (no directory prefix) is pushed into `attachments`.
 fn extract_attachments(
     mail: &ParsedMail,
     attachments_dir: &Path,
     base_filename: &str,
-    base_export_directory: &Path,
     skip_signature_images: bool,
     debug_mode: bool,
     attachments: &mut Vec<String>,
@@ -648,20 +644,28 @@ fn extract_attachments(
                 if !payload.is_empty() {
                     let safe_filename = sanitize_filename(&decoded_filename);
                     let filename_hash = hash_md5_prefix(&decoded_filename, 8);
-                    let full_filename =
-                        format!("{}_{}_{}", base_filename, filename_hash, safe_filename);
-                    let filepath = attachments_dir.join(&full_filename);
+                    // Flat naming scheme: <stem>__<hash>_<safe_name>
+                    let base_full_filename =
+                        format!("{}__{}_{}", base_filename, filename_hash, safe_filename);
 
+                    // Numeric suffix loop on real path collision — suffix inserted before extension
+                    // so `invoice.pdf` → `invoice_2.pdf`, not `invoice.pdf_2`.
+                    let mut full_filename = base_full_filename.clone();
+                    let mut suffix = 2u32;
+                    while attachments_dir.join(&full_filename).exists() {
+                        full_filename = match base_full_filename.rsplit_once('.') {
+                            Some((stem, ext)) => format!("{}_{}.{}", stem, suffix, ext),
+                            None => format!("{}_{}", base_full_filename, suffix),
+                        };
+                        suffix += 1;
+                    }
+
+                    let filepath = attachments_dir.join(&full_filename);
                     fs::write(&filepath, &payload)?;
 
-                    // Calculate relative path from base export directory
-                    let relative_path = filepath
-                        .strip_prefix(base_export_directory)
-                        .unwrap_or(&filepath)
-                        .to_string_lossy()
-                        .replace('\\', "/");
-
-                    attachments.push(relative_path);
+                    // Store bare filename — same-folder relative link; normalize \ → / at write time
+                    let bare_link = full_filename.replace('\\', "/");
+                    attachments.push(bare_link);
                 } else if debug_mode {
                     println!(
                         "    Skipping attachment '{}' with empty payload",
@@ -677,7 +681,6 @@ fn extract_attachments(
                 part,
                 attachments_dir,
                 base_filename,
-                base_export_directory,
                 skip_signature_images,
                 debug_mode,
                 attachments,
