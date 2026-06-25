@@ -875,7 +875,7 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 mod route_tests {
     use email_to_markdown::route::{
         apply_decision, ai_route, join_safe_segments, move_email,
-        parse_destinations, route_email,
+        parse_destinations, route_email, upsert_rule,
         Destination, EmailMeta, MatchRule,
     };
     use chrono::DateTime;
@@ -1445,6 +1445,183 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "reversed order: 'First' destination must not be returned; got: {}",
             decision.rel_path
         );
+    }
+
+    // ── upsert_rule ──────────────────────────────────────────────────────────
+
+    /// Comments, group headers, and blank lines must be preserved byte-for-byte.
+    #[test]
+    fn test_upsert_rule_preserves_comments_and_groups() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.txt");
+        let content =
+            "# === Perso ===\n\
+             Perso/Finance/Banque | domain:credit-agricole.fr\n\
+             # This is a free comment\n\
+             Perso/Inbox | default\n\
+             # === Pro ===\n\
+             Pro/Clients | from:client@corp.com\n";
+        fs::write(&dest_file, content).unwrap();
+
+        let original_comment_count = content.lines()
+            .filter(|l| l.trim().starts_with('#'))
+            .count();
+
+        upsert_rule(&dest_file, "Perso/Finance/Banque", MatchRule::From("alice@bank.fr".to_string())).unwrap();
+
+        let result = fs::read_to_string(&dest_file).unwrap();
+
+        // Inclusive: all comment lines present verbatim
+        assert!(result.contains("# === Perso ==="), "Perso group header must be preserved");
+        assert!(result.contains("# This is a free comment"), "free comment must be preserved");
+        assert!(result.contains("# === Pro ==="), "Pro group header must be preserved");
+
+        // Exclusive: no comment duplicated or deleted (count unchanged)
+        let result_comment_count = result.lines()
+            .filter(|l| l.trim().starts_with('#'))
+            .count();
+        assert_eq!(
+            result_comment_count, original_comment_count,
+            "comment line count must be unchanged; before={} after={}",
+            original_comment_count, result_comment_count
+        );
+    }
+
+    /// Relative order of all non-target paths must be unchanged.
+    #[test]
+    fn test_upsert_rule_preserves_ordering() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.txt");
+        let content =
+            "Perso/Alpha | domain:a.com\n\
+             Perso/Beta  | domain:b.com\n\
+             Perso/Gamma | domain:g.com\n";
+        fs::write(&dest_file, content).unwrap();
+
+        upsert_rule(&dest_file, "Perso/Beta", MatchRule::From("beta@b.com".to_string())).unwrap();
+
+        let result = fs::read_to_string(&dest_file).unwrap();
+        let alpha_pos = result.find("Perso/Alpha").expect("Alpha missing");
+        let beta_pos  = result.find("Perso/Beta").expect("Beta missing");
+        let gamma_pos = result.find("Perso/Gamma").expect("Gamma missing");
+
+        // Inclusive: original relative order intact
+        assert!(alpha_pos < beta_pos, "Alpha must still precede Beta; got: {:?}", result);
+        assert!(beta_pos < gamma_pos, "Beta must still precede Gamma; got: {:?}", result);
+
+        // Exclusive: Beta not migrated to file head or tail
+        assert!(!result.starts_with("Perso/Beta"), "Beta must not be at file head");
+        assert!(gamma_pos > beta_pos, "Gamma must follow Beta, not Beta at tail");
+    }
+
+    /// Existing attributes are kept; the new token is appended (no duplicates, one `|`).
+    #[test]
+    fn test_upsert_rule_merge_onto_existing() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.txt");
+        fs::write(&dest_file, "Perso/Work | domain:corp.com\n").unwrap();
+
+        upsert_rule(&dest_file, "Perso/Work", MatchRule::From("bob@corp.com".to_string())).unwrap();
+
+        let result = fs::read_to_string(&dest_file).unwrap();
+
+        // Inclusive: both attrs present on the same line
+        assert!(
+            result.contains("Perso/Work | domain:corp.com, from:bob@corp.com"),
+            "expected merged line; got: {:?}", result
+        );
+        // Exclusive: domain attr not duplicated
+        assert!(
+            !result.contains("domain:corp.com, domain:corp.com"),
+            "domain must not be duplicated; got: {:?}", result
+        );
+        // Exclusive: exactly one ` | ` separator in the result
+        assert_eq!(
+            result.matches(" | ").count(), 1,
+            "exactly one | expected; got: {:?}", result
+        );
+    }
+
+    /// A path absent from the file gets a new line appended at the end.
+    #[test]
+    fn test_upsert_rule_create_if_absent() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.txt");
+        let content = "Perso/Known | domain:known.com\n";
+        fs::write(&dest_file, content).unwrap();
+        let original_line_count = content.lines().count();
+
+        upsert_rule(&dest_file, "Perso/NewPath", MatchRule::From("new@example.com".to_string())).unwrap();
+
+        let result = fs::read_to_string(&dest_file).unwrap();
+        let result_lines: Vec<&str> = result.lines().collect();
+
+        // Inclusive: new line present
+        assert!(
+            result.contains("Perso/NewPath | from:new@example.com"),
+            "new line must be present; got: {:?}", result
+        );
+        // Inclusive: new line is the last non-empty line
+        assert_eq!(
+            result_lines.last().map(|s| s.trim()),
+            Some("Perso/NewPath | from:new@example.com"),
+            "new line must be last; got: {:?}", result_lines
+        );
+        // Exclusive: exactly one new line added
+        assert_eq!(
+            result_lines.len(), original_line_count + 1,
+            "exactly one line added; before={} after={}", original_line_count, result_lines.len()
+        );
+        // Exclusive: existing line unchanged
+        assert!(
+            result.contains("Perso/Known | domain:known.com"),
+            "existing line must be preserved; got: {:?}", result
+        );
+    }
+
+    /// A commented-out destination is uncommented and its attrs merged.
+    #[test]
+    fn test_upsert_rule_uncomments_commented_line() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.txt");
+        let content = "# Perso/Archive | domain:old.com\nPerso/Other | from:x@y.com\n";
+        fs::write(&dest_file, content).unwrap();
+
+        upsert_rule(&dest_file, "Perso/Archive", MatchRule::From("new@x.com".to_string())).unwrap();
+
+        let result = fs::read_to_string(&dest_file).unwrap();
+
+        // Inclusive: line is now active with merged attrs
+        assert!(
+            result.contains("Perso/Archive | domain:old.com, from:new@x.com"),
+            "uncommented+merged line expected; got: {:?}", result
+        );
+        // Exclusive: commented form must not remain
+        assert!(
+            !result.contains("# Perso/Archive"),
+            "commented form must be gone; got: {:?}", result
+        );
+    }
+
+    /// Upserting the same token twice must not produce a duplicate.
+    #[test]
+    fn test_upsert_rule_dedups_identical_rule() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.txt");
+        fs::write(&dest_file, "Perso/Work | from:b@x.com\n").unwrap();
+
+        upsert_rule(&dest_file, "Perso/Work", MatchRule::From("b@x.com".to_string())).unwrap();
+
+        let result = fs::read_to_string(&dest_file).unwrap();
+
+        // Inclusive: the rule is still present
+        assert!(
+            result.contains("from:b@x.com"),
+            "rule must still be present; got: {:?}", result
+        );
+        // Exclusive: appears exactly once
+        let count = result.matches("from:b@x.com").count();
+        assert_eq!(count, 1, "from:b@x.com must appear exactly once; got {} time(s)", count);
     }
 
     /// A free-typed new path (not in destinations.txt) is accepted by apply_decision,

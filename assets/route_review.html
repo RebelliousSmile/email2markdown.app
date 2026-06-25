@@ -103,6 +103,16 @@
     color: #fff;
     vertical-align: middle;
   }
+  .badge-rule {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #7b1fa2;
+    color: #fff;
+    vertical-align: middle;
+  }
   .footer {
     padding: 10px 16px;
     background: #fff;
@@ -137,6 +147,103 @@
     font-size: 12px;
     flex-shrink: 0;
   }
+  /* ── Cascade hiérarchique ─────────────────────────────────────────────── */
+  .cascade-toggle {
+    font-size: 11px;
+    color: #555;
+    cursor: pointer;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    background: #f5f5f5;
+    padding: 2px 6px;
+    line-height: 1.4;
+  }
+  .cascade-toggle:hover { background: #e8e8e8; border-color: #bbb; }
+  .cascade-area {
+    display: none;
+    gap: 4px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .cascade-area.open { display: flex; }
+  .toolbar-cascade {
+    flex-basis: 100%;
+    padding-top: 6px;
+    border-top: 1px dashed #ddd;
+    margin-top: 2px;
+  }
+  .cascade-area select {
+    font-size: 12px;
+    padding: 2px 4px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+    cursor: pointer;
+  }
+  td.dest .cascade-toggle { display: block; margin-top: 3px; }
+  td.dest .cascade-area   { margin-top: 3px; }
+  /* Override blue .toolbar button for the cascade toggle specifically */
+  .toolbar .cascade-toggle { background: #f5f5f5; color: #555; border-color: #ddd; font-size: 11px; padding: 2px 6px; }
+  .toolbar .cascade-toggle:hover { background: #e8e8e8; border-color: #bbb; }
+  /* ── Création de règle ──────────────────────────────────────────────────── */
+  .btn-create-rule {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #6a1b9a;
+    cursor: pointer;
+    border: 1px solid #ce93d8;
+    border-radius: 3px;
+    background: #f3e5f5;
+    padding: 2px 6px;
+    line-height: 1.4;
+  }
+  .btn-create-rule:hover { background: #e1bee7; border-color: #9c27b0; }
+  .btn-create-rule:disabled { opacity: 0.4; cursor: default; }
+  .rule-form {
+    display: none;
+    margin-top: 4px;
+    padding: 6px 8px;
+    border: 1px solid #ce93d8;
+    border-radius: 4px;
+    background: #fce4ec;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .rule-form.open { display: flex; }
+  .rule-form select {
+    font-size: 12px;
+    padding: 2px 4px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+    cursor: pointer;
+    max-width: 260px;
+  }
+  .rule-form .rule-dest-label {
+    font-size: 11px;
+    color: #555;
+  }
+  .rule-form .btn-rule-submit {
+    font-size: 11px;
+    padding: 2px 8px;
+    border: 1px solid #4caf50;
+    border-radius: 3px;
+    background: #4caf50;
+    color: #fff;
+    cursor: pointer;
+  }
+  .rule-form .btn-rule-submit:hover { background: #388e3c; }
+  .rule-form .btn-rule-cancel {
+    font-size: 11px;
+    padding: 2px 6px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+    cursor: pointer;
+  }
+  .rule-form .btn-rule-cancel:hover { background: #eee; }
 </style>
 </head>
 <body>
@@ -167,7 +274,7 @@
         <th data-col="sender">Expéditeur</th>
         <th data-col="date">Date</th>
         <th data-col="dest_path">Chemin proposé</th>
-        <th data-col="is_default">Défaut ?</th>
+        <th data-col="is_default">Statut</th>
       </tr>
     </thead>
     <tbody id="email-table-body"></tbody>
@@ -184,30 +291,141 @@
 <script>
 (function () {
   // ── data ──────────────────────────────────────────────────────────────────
-  // __DECISIONS_DATA__ is an array of { file, subject, sender, date, dest_path, is_default }.
-  // dest_path is always relative to notes_dir.
+  // __DECISIONS_DATA__ is an array of {file, subject, sender, sender_email,
+  // sender_domain, date, dest_path, is_default}.
   var rawDecisions = Array.isArray(window.__DECISIONS_DATA__) ? window.__DECISIONS_DATA__ : [];
   var knownPaths   = Array.isArray(window.__KNOWN_PATHS__)    ? window.__KNOWN_PATHS__    : [];
 
+  // Pending rule waiting for route_review_set_tree callback.
+  var pendingRule = null;
+  // Count of rows that were source="manual" when overwritten by a rule re-application.
+  var ruleOverrideCount = 0;
+
   // Populate datalist
   var datalist = document.getElementById('known-paths');
-  knownPaths.forEach(function (p) {
-    var opt = document.createElement('option');
-    opt.value = p;
-    datalist.appendChild(opt);
-  });
+  function rebuildDatalist() {
+    datalist.innerHTML = '';
+    knownPaths.forEach(function (p) {
+      var opt = document.createElement('option');
+      opt.value = p;
+      datalist.appendChild(opt);
+    });
+  }
+  rebuildDatalist();
 
-  // Build mutable rows
+  // ── cascade hiérarchique ─────────────────────────────────────────────────
+
+  function buildTree(paths) {
+    var tree = {};
+    paths.forEach(function (p) {
+      var parts = p.split('/').filter(function (s) { return s.length > 0; });
+      var node = tree;
+      parts.forEach(function (seg) {
+        if (!node[seg]) { node[seg] = {}; }
+        node = node[seg];
+      });
+    });
+    return tree;
+  }
+
+  var pathTree = buildTree(knownPaths);
+
+  // renderCascade: one shared builder — reused by toolbar and each row (Rule of Three).
+  // container   : the .cascade-area <div> to populate with <select> elements
+  // targetInput : the free-text <input> that receives the assembled path
+  // tree        : nested { segment: subtree } produced by buildTree
+  function renderCascade(container, targetInput, tree) {
+    container.innerHTML = '';
+
+    function renderLevel(subtree, depth) {
+      var keys = Object.keys(subtree);
+      if (keys.length === 0) { return; }
+
+      var sel = document.createElement('select');
+      sel.dataset.depth = String(depth);
+
+      var opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = depth === 0 ? '— racine —' : '— sous-dossier —';
+      sel.appendChild(opt0);
+
+      keys.forEach(function (k) {
+        var opt = document.createElement('option');
+        opt.value = k;
+        opt.textContent = k;
+        sel.appendChild(opt);
+      });
+
+      container.appendChild(sel);
+
+      sel.addEventListener('change', function () {
+        // Remove all selects deeper than the current level
+        Array.from(container.querySelectorAll('select')).forEach(function (s) {
+          if (parseInt(s.dataset.depth, 10) > depth) {
+            container.removeChild(s);
+          }
+        });
+
+        // Render next level only if the chosen segment has children
+        if (sel.value) {
+          var sub = subtree[sel.value];
+          if (sub && Object.keys(sub).length > 0) {
+            renderLevel(sub, depth + 1);
+          }
+        }
+
+        // Assemble path from remaining selects and push to the free-text input
+        var parts = [];
+        Array.from(container.querySelectorAll('select')).forEach(function (s) {
+          if (s.value) { parts.push(s.value); }
+        });
+        targetInput.value = parts.join('/');
+        targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+
+    if (Object.keys(tree).length > 0) {
+      renderLevel(tree, 0);
+    }
+  }
+
+  function makeCascadeToggle(area) {
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'cascade-toggle';
+    toggle.textContent = 'Dossier ▶';
+    toggle.addEventListener('click', function () {
+      var open = area.classList.toggle('open');
+      toggle.textContent = open ? 'Dossier ▼' : 'Dossier ▶';
+    });
+    return toggle;
+  }
+
+  function mountToolbarCascade() {
+    var bulkDest = document.getElementById('bulk-dest');
+    var toolbar  = document.querySelector('.toolbar');
+    var area     = document.createElement('div');
+    area.className = 'cascade-area toolbar-cascade';
+    var toggle   = makeCascadeToggle(area);
+    document.getElementById('btn-bulk-dest').insertAdjacentElement('afterend', toggle);
+    toolbar.appendChild(area);
+    renderCascade(area, bulkDest, pathTree);
+  }
+
+  // Build mutable rows — include sender_email, sender_domain, source from injected data.
   var rows = rawDecisions.map(function (d) {
     return {
-      file:          d.file      || '',
-      subject:       d.subject   || '',
-      sender:        d.sender    || '',
-      date:          d.date      || '',
-      dest_path:     d.dest_path || '',
-      orig_path:     d.dest_path || '',  // original proposal for "modified" highlight
+      file:          d.file          || '',
+      subject:       d.subject       || '',
+      sender:        d.sender        || '',
+      sender_email:  d.sender_email  || '',
+      sender_domain: d.sender_domain || '',
+      date:          d.date          || '',
+      dest_path:     d.dest_path     || '',
+      orig_path:     d.dest_path     || '',  // original proposal for "modified" highlight
       is_default:    !!d.is_default,
-      checked:       false
+      checked:       false,
+      source:        'default'  // "default" | "manual" | "rule"
     };
   });
 
@@ -220,7 +438,7 @@
     sender:     'Expéditeur',
     date:       'Date',
     dest_path:  'Chemin proposé',
-    is_default: 'Défaut ?'
+    is_default: 'Statut'
   };
 
   function sortRows() {
@@ -264,6 +482,14 @@
 
       var modifiedClass = (row.dest_path !== row.orig_path) ? ' modified' : '';
 
+      // Status cell: show badge-default or badge-rule or nothing
+      var statusCell = '';
+      if (row.source === 'rule') {
+        statusCell = '<span class="badge-rule">règle</span>';
+      } else if (row.is_default) {
+        statusCell = '<span class="badge-default">défaut</span>';
+      }
+
       tr.innerHTML =
         '<td><input type="checkbox" class="row-check" data-i="' + i + '"' +
           (row.checked ? ' checked' : '') + '></td>' +
@@ -276,30 +502,47 @@
             ' value="' + esc(row.dest_path) + '"' +
             ' placeholder="Perso/Catégorie/Sous-cat/YYYY/MM">' +
         '</td>' +
-        '<td style="text-align:center">' +
-          (row.is_default ? '<span class="badge-default">défaut</span>' : '') +
-        '</td>';
+        '<td style="text-align:center">' + statusCell + '</td>';
 
       tbody.appendChild(tr);
     });
 
-    // dest-input change listeners
+    // dest-input change listeners + cascade + rule-form mount
     document.querySelectorAll('input.dest-input').forEach(function (inp) {
+      var i = parseInt(inp.dataset.i, 10);
+
       inp.addEventListener('input', function () {
-        var i = parseInt(this.dataset.i);
         rows[i].dest_path = this.value;
+        rows[i].source    = 'manual';
         if (this.value !== rows[i].orig_path) {
           this.classList.add('modified');
         } else {
           this.classList.remove('modified');
         }
+        updateSummary();
       });
+
+      // Mount cascade assistant (collapsible) below the free-text input
+      var td = inp.closest('td.dest');
+      if (td && !td.querySelector('.cascade-toggle')) {
+        var rowArea   = document.createElement('div');
+        rowArea.className = 'cascade-area';
+        var rowToggle = makeCascadeToggle(rowArea);
+        td.appendChild(rowToggle);
+        td.appendChild(rowArea);
+        renderCascade(rowArea, inp, pathTree);
+      }
+
+      // Mount "créer une règle" button + mini-form
+      if (td) {
+        mountRuleForm(td, i, rows[i]);
+      }
     });
 
     // row-check listeners
     document.querySelectorAll('.row-check').forEach(function (cb) {
       cb.addEventListener('change', function () {
-        rows[parseInt(this.dataset.i)].checked = this.checked;
+        rows[parseInt(this.dataset.i, 10)].checked = this.checked;
         syncSelectAll();
       });
     });
@@ -307,17 +550,141 @@
     updateSummary();
   }
 
+  // ── mini-form "créer une règle" ────────────────────────────────────────────
+  function mountRuleForm(td, i, row) {
+    var hasDomain = row.sender_domain.length > 0;
+    var hasEmail  = row.sender_email.length  > 0;
+    var canCreate = hasDomain || hasEmail;
+
+    // Button
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-create-rule';
+    btn.textContent = '+ règle';
+    btn.disabled = !canCreate;
+    td.appendChild(btn);
+
+    // Mini-form container
+    var form = document.createElement('div');
+    form.className = 'rule-form';
+
+    // Attribute selector
+    var attrSel = document.createElement('select');
+    attrSel.className = 'rule-attr-select';
+
+    if (hasDomain) {
+      var optDomain = document.createElement('option');
+      optDomain.value = 'domain';
+      optDomain.textContent = 'domaine : ' + row.sender_domain;
+      attrSel.appendChild(optDomain);
+    }
+    if (hasEmail) {
+      var optFrom = document.createElement('option');
+      optFrom.value = 'from';
+      optFrom.textContent = 'adresse : ' + row.sender_email;
+      attrSel.appendChild(optFrom);
+    }
+
+    // Destination label (shows current dest_path at submit time — reads live from rows[i])
+    var destLabel = document.createElement('span');
+    destLabel.className = 'rule-dest-label';
+    destLabel.textContent = '→ ' + (row.dest_path || '—');
+
+    // Update destLabel when dest_path changes on this row's input
+    var destInput = td.querySelector('input.dest-input');
+    if (destInput) {
+      destInput.addEventListener('input', function () {
+        destLabel.textContent = '→ ' + (this.value || '—');
+      });
+    }
+
+    // Submit button
+    var submitBtn = document.createElement('button');
+    submitBtn.type = 'button';
+    submitBtn.className = 'btn-rule-submit';
+    submitBtn.textContent = 'Créer';
+
+    // Cancel button
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn-rule-cancel';
+    cancelBtn.textContent = '×';
+
+    form.appendChild(attrSel);
+    form.appendChild(destLabel);
+    form.appendChild(submitBtn);
+    form.appendChild(cancelBtn);
+    td.appendChild(form);
+
+    // Toggle form visibility
+    btn.addEventListener('click', function () {
+      var open = form.classList.toggle('open');
+      btn.textContent = open ? '− règle' : '+ règle';
+      // Refresh dest label with current path
+      destLabel.textContent = '→ ' + (rows[i].dest_path || '—');
+    });
+
+    cancelBtn.addEventListener('click', function () {
+      form.classList.remove('open');
+      btn.textContent = '+ règle';
+    });
+
+    submitBtn.addEventListener('click', function () {
+      var attrKind  = attrSel.value;
+      var attrValue = attrKind === 'domain' ? rows[i].sender_domain : rows[i].sender_email;
+      var destPath  = rows[i].dest_path.trim();
+
+      if (!destPath) {
+        showError('Chemin de destination vide — assignez un chemin à cet email avant de créer la règle.');
+        return;
+      }
+      if (!attrValue) {
+        showError('Valeur d\'attribut vide — impossible de créer la règle.');
+        return;
+      }
+
+      clearError();
+      form.classList.remove('open');
+      btn.textContent = '+ règle';
+
+      // Store pending rule for re-application after route_review_set_tree callback.
+      pendingRule = { path: destPath, attr_kind: attrKind, attr_value: attrValue };
+
+      var payload = JSON.stringify({
+        action:     'create_rule',
+        path:       destPath,
+        attr_kind:  attrKind,
+        attr_value: attrValue
+      });
+      if (window.ipc && typeof window.ipc.postMessage === 'function') {
+        window.ipc.postMessage(payload);
+      } else {
+        pendingRule = null;
+        showError('IPC non disponible.');
+      }
+    });
+  }
+
   function updateSummary() {
     var total    = rows.length;
     var defaults = rows.filter(function (r) { return r.is_default; }).length;
     var modified = rows.filter(function (r) { return r.dest_path !== r.orig_path; }).length;
-    var parts = [total + ' email' + (total !== 1 ? 's' : '')];
+    var byRule   = rows.filter(function (r) { return r.source === 'rule'; }).length;
+    var parts    = [total + ' email' + (total !== 1 ? 's' : '')];
     if (defaults > 0) { parts.push(defaults + ' défaut' + (defaults !== 1 ? 's' : '')); }
     if (modified > 0) { parts.push(modified + ' modifié' + (modified !== 1 ? 's' : '')); }
+    if (byRule   > 0) {
+      var ruleStr = byRule + ' réaffecté' + (byRule !== 1 ? 's' : '') + ' par règle';
+      if (ruleOverrideCount > 0) {
+        ruleStr += ', dont ' + ruleOverrideCount + ' choix manuel' + (ruleOverrideCount !== 1 ? 's' : '') + ' écrasé' + (ruleOverrideCount !== 1 ? 's' : '');
+      }
+      parts.push(ruleStr);
+    }
     document.getElementById('summary-badge').textContent = parts.join(' · ');
   }
 
   buildTable();
+  mountToolbarCascade();
 
   // ── select-all sync ───────────────────────────────────────────────────────
   function syncSelectAll() {
@@ -363,6 +730,7 @@
     rows.forEach(function (r, i) {
       if (!r.checked) { return; }
       r.dest_path = dest;
+      r.source    = 'manual';
       var inp = document.querySelector('input.dest-input[data-i="' + i + '"]');
       if (inp) {
         inp.value = dest;
@@ -426,6 +794,45 @@
   // the apply step encounters a validation error for a specific file.
   window.route_review_error = function (msg) {
     showError(msg);
+  };
+
+  // ── rule feedback from Rust ───────────────────────────────────────────────
+  // Called by Rust after upsert_rule succeeds, passing the updated paths array.
+  // Rebuilds datalist + pathTree, re-applies pendingRule to matching rows, rebuilds table.
+  window.route_review_set_tree = function (pathsArray) {
+    if (!Array.isArray(pathsArray)) { return; }
+    knownPaths = pathsArray;
+    rebuildDatalist();
+    pathTree = buildTree(knownPaths);
+
+    // Re-apply pending rule if any
+    if (pendingRule) {
+      var rule = pendingRule;
+      pendingRule = null;
+      rows.forEach(function (row) {
+        var matches = false;
+        if (rule.attr_kind === 'domain') {
+          matches = row.sender_domain.toLowerCase() === rule.attr_value.toLowerCase();
+        } else if (rule.attr_kind === 'from') {
+          matches = row.sender_email.toLowerCase() === rule.attr_value.toLowerCase();
+        }
+        if (matches) {
+          if (row.source === 'manual') {
+            ruleOverrideCount += 1;
+          }
+          row.dest_path = rule.path;
+          row.source    = 'rule';
+        }
+      });
+    }
+
+    buildTable();
+
+    // Rebuild toolbar cascade with updated tree
+    var toolbarCascade = document.querySelector('.toolbar-cascade');
+    if (toolbarCascade) {
+      renderCascade(toolbarCascade, document.getElementById('bulk-dest'), pathTree);
+    }
   };
 })();
 </script>
