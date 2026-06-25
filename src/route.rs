@@ -297,6 +297,159 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Delete a staged email from the route-review window.
+///
+/// "Supprimer" must not silently destroy user data: the markdown note is removed
+/// from disk, but any referenced attachment files are relocated into a `_deleted`
+/// sibling folder (next to the `.md`) so they remain recoverable. The `_deleted`
+/// folder is created lazily — only when there is at least one attachment to move.
+///
+/// Steps:
+/// 1. Reject symlinks: if `md_path` is a symlink, return `Err` immediately (no FS mutation).
+/// 2. Read the `.md` content and extract the attachment list via `parse_frontmatter_attachments`.
+/// 3. Move each attachment that lives in the source directory into `<parent>/_deleted/`.
+/// 4. Remove the `.md` file itself.
+///
+/// Attachment relocation uses `fs::rename`; on cross-device failure it falls back
+/// to `fs::copy` + `fs::remove_file` (parity with `move_email`).
+pub fn delete_email(md_path: &Path) -> Result<()> {
+    // --- Symlink guard (project rule 02-rust-filesystem-safety) ---
+    let meta = md_path
+        .symlink_metadata()
+        .with_context(|| format!("failed to stat {}", md_path.display()))?;
+    if meta.file_type().is_symlink() {
+        anyhow::bail!("refusing to delete symlink: {}", md_path.display());
+    }
+
+    let old_parent = md_path
+        .parent()
+        .with_context(|| format!("md_path has no parent: {}", md_path.display()))?;
+
+    // --- Read .md content and extract attachment list via serde_yaml ---
+    // Graceful degradation mirrors `move_email`: a read/parse failure logs a
+    // warning and proceeds with an empty list (the .md is still removed).
+    let attachments: Vec<String> = match fs::read_to_string(md_path) {
+        Err(e) => {
+            eprintln!(
+                "warning: could not read {} to extract attachment list: {}; deleting .md only",
+                md_path.display(),
+                e
+            );
+            vec![]
+        }
+        Ok(content) => match parse_frontmatter_attachments(&content) {
+            None => vec![],
+            Some(Err(e)) => {
+                eprintln!(
+                    "warning: could not parse frontmatter in {}: {}; deleting .md only",
+                    md_path.display(),
+                    e
+                );
+                vec![]
+            }
+            Some(Ok(list)) => list,
+        },
+    };
+
+    // --- Relocate each referenced attachment that lives in old_parent ---
+    let deleted_dir = old_parent.join("_deleted");
+    for link in &attachments {
+        let att_src = old_parent.join(link.replace('/', std::path::MAIN_SEPARATOR_STR));
+
+        // Only move files actually inside the source directory.
+        let in_source = att_src.parent().map_or(false, |p| p == old_parent);
+        if !in_source {
+            eprintln!(
+                "warning: attachment {:?} resolves outside source dir {}; skipping",
+                link,
+                old_parent.display()
+            );
+            continue;
+        }
+
+        if !att_src.exists() {
+            continue;
+        }
+
+        let file_name = match att_src.file_name() {
+            Some(n) => n,
+            None => {
+                eprintln!("warning: attachment {:?} has no file name; skipping", link);
+                continue;
+            }
+        };
+
+        // Create the _deleted folder lazily, on first real move.
+        fs::create_dir_all(&deleted_dir).with_context(|| {
+            format!("failed to create {}", deleted_dir.display())
+        })?;
+        let att_dest = deleted_dir.join(file_name);
+
+        if fs::rename(&att_src, &att_dest).is_err() {
+            // Cross-device fallback: copy then remove.
+            fs::copy(&att_src, &att_dest).with_context(|| {
+                format!(
+                    "failed to copy attachment {} to {}",
+                    att_src.display(),
+                    att_dest.display()
+                )
+            })?;
+            fs::remove_file(&att_src).with_context(|| {
+                format!(
+                    "failed to remove original attachment {} after copy",
+                    att_src.display()
+                )
+            })?;
+        }
+    }
+
+    // --- Remove the .md file ---
+    fs::remove_file(md_path)
+        .with_context(|| format!("failed to remove {}", md_path.display()))?;
+
+    Ok(())
+}
+
+/// Load and parse routing destinations from the configured `destinations.txt`.
+///
+/// Resolution mirrors the export path: honor `settings.destinations_file`, else
+/// fall back to `<app_config_dir>/destinations.txt`. A missing or malformed file
+/// yields an empty list (every email then routes to the default) with a warning.
+pub fn load_destinations() -> Vec<Destination> {
+    let settings = crate::config::Settings::load(&crate::config::settings_path())
+        .unwrap_or_default();
+    let dest_path = settings
+        .destinations_file
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::config::app_config_dir().join("destinations.txt"));
+
+    if dest_path.exists() {
+        match fs::read_to_string(&dest_path)
+            .map_err(anyhow::Error::from)
+            .and_then(|content| parse_destinations(&content))
+        {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!(
+                    "warning: could not parse destinations.txt ({}): {:#} — \
+                     all emails will fall to the default path",
+                    dest_path.display(),
+                    e
+                );
+                vec![]
+            }
+        }
+    } else {
+        eprintln!(
+            "warning: destinations.txt not found at {} — \
+             all emails will fall to the default path (Perso/Messy/Emails/<Year>/<Month>)",
+            dest_path.display()
+        );
+        vec![]
+    }
+}
+
 // ── Routing types ────────────────────────────────────────────────────────────
 
 /// Metadata extracted from an email and used for deterministic routing.

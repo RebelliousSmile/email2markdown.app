@@ -1,6 +1,6 @@
 use crate::config::Account;
 use crate::network::{NetworkConfig, ProgressIndicator, with_retry};  // [3][4]
-use crate::route::{parse_destinations, route_email, Destination, EmailMeta, RouteDecision};
+use crate::route::{route_email, Destination, EmailMeta, RouteDecision};
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
     is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename, subject_extract,
@@ -1147,39 +1147,8 @@ impl ImapExporter {
         cancel_token: Option<&AtomicBool>,
     ) -> Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> {
         // ── Parse destinations.txt ONCE (before the folder loop) ──────────────
-        let dests: Vec<Destination> = {
-            let settings = crate::config::Settings::load(&crate::config::settings_path())
-                .unwrap_or_default();
-            let dest_path = settings
-                .destinations_file
-                .as_deref()
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| crate::config::app_config_dir().join("destinations.txt"));
-
-            if dest_path.exists() {
-                match std::fs::read_to_string(&dest_path)
-                    .map_err(anyhow::Error::from)
-                    .and_then(|content| parse_destinations(&content))
-                {
-                    Ok(d) => d,
-                    Err(e) => {
-                        eprintln!(
-                            "warning: could not parse destinations.txt ({}): {:#} — \
-                             all emails will fall to the default path",
-                            dest_path.display(), e
-                        );
-                        vec![]
-                    }
-                }
-            } else {
-                eprintln!(
-                    "warning: destinations.txt not found at {} — \
-                     all emails will fall to the default path (Perso/Messy/Emails/<Year>/<Month>)",
-                    dest_path.display()
-                );
-                vec![]
-            }
-        };
+        // Shared with the tray "Reprendre le tri" scan via `route::load_destinations`.
+        let dests: Vec<Destination> = crate::route::load_destinations();
 
         // Run the existing body in an IIFE so cleanup can run on every exit path.
         let run_result: Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> = (|| {

@@ -874,7 +874,7 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 
 mod route_tests {
     use email_to_markdown::route::{
-        apply_decision, ai_route, ensure_year_month, join_safe_segments, move_email,
+        apply_decision, ai_route, delete_email, ensure_year_month, join_safe_segments, move_email,
         parse_destinations, route_email, upsert_rule,
         Destination, EmailMeta, MatchRule,
     };
@@ -1122,6 +1122,70 @@ mod route_tests {
                 "error must mention symlink: {msg}"
             );
         }
+    }
+
+    // ── delete_email ─────────────────────────────────────────────────────────
+
+    // delete_email removes the .md and relocates attachments into _deleted.
+    #[test]
+    fn test_delete_email_removes_md_and_moves_attachments() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("staging");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let att_src = src_dir.join("email__file.pdf");
+        fs::write(&att_src, b"PDF content").unwrap();
+
+        let md_src = src_dir.join("email.md");
+        let md_content = "---\nsubject: Test\nattachments:\n  - email__file.pdf\n---\nBody text\n";
+        fs::write(&md_src, md_content).unwrap();
+
+        delete_email(&md_src).unwrap();
+
+        // Exclusive: the .md is gone.
+        assert!(!md_src.exists(), "deleted .md must not remain");
+        // Exclusive: the attachment is no longer at its original path.
+        assert!(!att_src.exists(), "attachment must be moved out of staging");
+        // Inclusive: the attachment is preserved under _deleted.
+        let recovered = src_dir.join("_deleted").join("email__file.pdf");
+        assert!(recovered.exists(), "attachment must be relocated to _deleted");
+        assert_eq!(fs::read(&recovered).unwrap(), b"PDF content");
+    }
+
+    // No attachments → just remove the .md, no _deleted folder created.
+    #[test]
+    fn test_delete_email_without_attachments_creates_no_deleted_dir() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("staging");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let md_src = src_dir.join("plain.md");
+        fs::write(&md_src, "---\nsubject: Plain\n---\nNo attachments\n").unwrap();
+
+        delete_email(&md_src).unwrap();
+
+        assert!(!md_src.exists(), "deleted .md must not remain");
+        assert!(
+            !src_dir.join("_deleted").exists(),
+            "_deleted must not be created when there are no attachments"
+        );
+    }
+
+    // delete_email refuses a symlink source (no FS mutation), mirroring move_email.
+    #[cfg(not(windows))]
+    #[test]
+    fn test_delete_email_rejects_symlink() {
+        let temp = TempDir::new().unwrap();
+        let real_file = temp.path().join("real.md");
+        fs::write(&real_file, "---\nsubject: Real\n---\n").unwrap();
+
+        let symlink_path = temp.path().join("link.md");
+        std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
+
+        let result = delete_email(&symlink_path);
+        assert!(result.is_err(), "delete_email must refuse a symlink source");
+        // Exclusive: the real target is untouched.
+        assert!(real_file.exists(), "symlink target must not be deleted");
     }
 
     // ── parse_destinations ───────────────────────────────────────────────────

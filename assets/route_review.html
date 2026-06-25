@@ -45,6 +45,23 @@
   .toolbar input[type="text"] { cursor: text; min-width: 220px; }
   .toolbar button { background: #1e88e5; color: #fff; border-color: #1e88e5; }
   .toolbar button:hover { background: #1565c0; }
+  .toolbar button.btn-danger { background: #e53935; border-color: #e53935; }
+  .toolbar button.btn-danger:hover { background: #c62828; }
+  /* Per-row delete button */
+  .btn-row-delete {
+    display: inline-block;
+    margin-top: 4px;
+    margin-left: 4px;
+    font-size: 11px;
+    color: #c62828;
+    cursor: pointer;
+    border: 1px solid #ef9a9a;
+    border-radius: 3px;
+    background: #ffebee;
+    padding: 2px 6px;
+    line-height: 1.4;
+  }
+  .btn-row-delete:hover { background: #ffcdd2; border-color: #e53935; }
   .table-wrap {
     flex: 1;
     overflow-y: auto;
@@ -260,6 +277,7 @@
   </label>
   <input type="text" id="bulk-dest" list="known-paths" placeholder="Chemin en masse (Perso/X/Y)">
   <button id="btn-bulk-dest">Assigner chemin</button>
+  <button id="btn-delete-selected" class="btn-danger" title="Supprimer les emails cochés (le .md est supprimé, les pièces jointes vont dans _deleted)">Supprimer la sélection</button>
   <span style="margin-left:auto; color:#666;" id="summary-badge"></span>
 </div>
 
@@ -537,6 +555,18 @@
       if (td) {
         mountRuleForm(td, i, rows[i]);
       }
+
+      // Mount per-row "Supprimer" button
+      if (td) {
+        var delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'btn-row-delete';
+        delBtn.textContent = '🗑 Supprimer';
+        delBtn.addEventListener('click', function () {
+          requestDelete([rows[i].file]);
+        });
+        td.appendChild(delBtn);
+      }
     });
 
     // row-check listeners
@@ -744,6 +774,35 @@
     updateSummary();
   });
 
+  // ── delete ─────────────────────────────────────────────────────────────────
+  // Ask Rust to delete the given staging files. The .md is removed; any
+  // attachments are relocated to a `_deleted` folder (handled Rust-side).
+  function requestDelete(files) {
+    files = (files || []).filter(function (f) { return !!f; });
+    if (files.length === 0) { return; }
+    var label = files.length === 1
+      ? 'Supprimer cet email ?'
+      : 'Supprimer ' + files.length + ' emails ?';
+    if (typeof window.confirm === 'function' && !window.confirm(
+        label + '\n\nLe fichier .md sera supprimé ; les pièces jointes seront déplacées dans _deleted.')) {
+      return;
+    }
+    clearError();
+    var msg = JSON.stringify({ action: 'delete', files: files });
+    if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      window.ipc.postMessage(msg);
+    } else {
+      showError('IPC non disponible.');
+    }
+  }
+
+  document.getElementById('btn-delete-selected').addEventListener('click', function () {
+    var files = rows.filter(function (r) { return r.checked; })
+                    .map(function (r) { return r.file; });
+    if (files.length === 0) { alert('Cochez au moins un email à supprimer.'); return; }
+    requestDelete(files);
+  });
+
   // ── error banner ──────────────────────────────────────────────────────────
   function showError(msg) {
     var banner = document.getElementById('error-banner');
@@ -794,6 +853,18 @@
   // the apply step encounters a validation error for a specific file.
   window.route_review_error = function (msg) {
     showError(msg);
+  };
+
+  // ── delete feedback from Rust ─────────────────────────────────────────────
+  // Called by Rust after delete_email succeeds, passing the array of staging
+  // paths that were removed. Drops those rows from the table.
+  window.route_review_deleted = function (filesArray) {
+    if (!Array.isArray(filesArray) || filesArray.length === 0) { return; }
+    var gone = {};
+    filesArray.forEach(function (f) { gone[f] = true; });
+    rows = rows.filter(function (r) { return !gone[r.file]; });
+    buildTable();
+    syncSelectAll();
   };
 
   // ── rule feedback from Rust ───────────────────────────────────────────────

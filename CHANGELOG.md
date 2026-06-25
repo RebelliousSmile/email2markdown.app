@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Suppression d'emails dans la revue du routage** : la fenêtre de revue propose désormais un bouton « 🗑 Supprimer » par ligne et un bouton « Supprimer la sélection » dans la barre d'outils, pour écarter un email du staging sans le router vers `Perso/Messy/Emails`. Comportement : le fichier `.md` est supprimé ; ses pièces jointes sont relocalisées dans un dossier `_deleted` (sibling du `.md`) afin de rester récupérables. Nouveau helper `route::delete_email(md_path)` — garde-fou anti-symlink, parsing de la liste `attachments:` (réutilise `parse_frontmatter_attachments`), création paresseuse de `_deleted`, repli `copy`+`remove` cross-device. Côté IPC, un payload `{action: "delete", files: [...]}` est traité dans le handler de la fenêtre ; les lignes effectivement supprimées sont retirées du tableau via `route_review_deleted([...])`. 3 tests unitaires.
+- **Sous-menu « Reprendre le tri » (par compte)** : nouvelle entrée du menu du tray, une par compte (comme « Export compte »), qui rouvre la fenêtre de revue pour les emails restés en staging — typiquement après un « Annuler » de la revue précédente. `tray_actions::action_resume_sort` scanne récursivement l'`export_directory` du compte (en excluant `_deleted`, `_failed` et `contacts`), reconstruit un `EmailMeta` depuis le frontmatter de chaque `.md` (parité avec l'export : adresse via `extract_emails`, domaine, date RFC3339 avec repli epoch) et recalcule la proposition de routage via `route_email`.
+
+### Changed
+
+- **`route::load_destinations()`** : la résolution + parsing de `destinations.txt` (honorant `settings.destinations_file`, repli `<app_config_dir>/destinations.txt`, liste vide + avertissement sur fichier absent/invalide) est factorisée dans un helper réutilisable, partagé entre `export_account` et le scan « Reprendre le tri ».
+
+### Tests
+
+- `test_delete_email_removes_md_and_moves_attachments` : le `.md` est supprimé, la pièce jointe est déplacée intacte sous `_deleted/`.
+- `test_delete_email_without_attachments_creates_no_deleted_dir` : sans pièce jointe, aucun dossier `_deleted` n'est créé.
+- `test_delete_email_rejects_symlink` : `delete_email` refuse une source symlink sans toucher à la cible.
+
 ## [0.13.0] - 2026-06-26
 
 ### Fixed
