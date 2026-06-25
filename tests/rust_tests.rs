@@ -680,54 +680,6 @@ mod sort_emails_tests {
         assert_eq!(stats.total_emails, 0);
     }
 
-    #[test]
-    fn test_join_safe_segments_nested_path() {
-        let root = PathBuf::from("/notes");
-        let joined = join_safe_segments(&root, "Travail/Projets/Client A").unwrap();
-        assert_eq!(joined, root.join("Travail").join("Projets").join("Client A"));
-    }
-
-    #[test]
-    fn test_join_safe_segments_accented_segment_allowed() {
-        let root = PathBuf::from("/notes");
-        let joined = join_safe_segments(&root, "Été/Réunions").unwrap();
-        assert_eq!(joined, root.join("Été").join("Réunions"));
-    }
-
-    #[test]
-    fn test_join_safe_segments_empty_and_trim_segments_skipped() {
-        let root = PathBuf::from("/notes");
-        let joined = join_safe_segments(&root, "/Travail//Projets/ ").unwrap();
-        assert_eq!(joined, root.join("Travail").join("Projets"));
-    }
-
-    #[test]
-    fn test_join_safe_segments_rejects_parent_traversal() {
-        let root = PathBuf::from("/notes");
-        let err = join_safe_segments(&root, "Travail/../etc").unwrap_err();
-        assert!(err.to_string().contains(".."));
-    }
-
-    #[test]
-    fn test_join_safe_segments_rejects_dot_segment() {
-        let root = PathBuf::from("/notes");
-        assert!(join_safe_segments(&root, "Travail/./Projets").is_err());
-    }
-
-    #[test]
-    fn test_join_safe_segments_rejects_backslash() {
-        let root = PathBuf::from("/notes");
-        let err = join_safe_segments(&root, "Travail\\Projets").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("Travail") || msg.contains("forbidden") || msg.contains("invalid"));
-    }
-
-    #[test]
-    fn test_join_safe_segments_rejects_forbidden_characters() {
-        let root = PathBuf::from("/notes");
-        assert!(join_safe_segments(&root, "Travail/Projets:Secrets").is_err());
-        assert!(join_safe_segments(&root, "Travail/Projets*").is_err());
-    }
 }
 
 mod edge_case_tests {
@@ -1365,5 +1317,180 @@ mod sort_apply_tests {
         apply_report(&report, "_local", None).unwrap();
         let fallback = temp.path().join("_local").join("to-summarize").join("a.md");
         assert!(fallback.exists(), "must fall back to to-summarize when notes_dir is absent");
+    }
+}
+
+mod route_tests {
+    use email_to_markdown::route::{join_safe_segments, move_email};
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    // --- join_safe_segments: migrated from sort_emails_tests ---
+
+    #[test]
+    fn test_join_safe_segments_nested_path() {
+        let root = PathBuf::from("/notes");
+        let joined = join_safe_segments(&root, "Travail/Projets/Client A").unwrap();
+        assert_eq!(joined, root.join("Travail").join("Projets").join("Client A"));
+    }
+
+    #[test]
+    fn test_join_safe_segments_accented_segment_allowed() {
+        let root = PathBuf::from("/notes");
+        let joined = join_safe_segments(&root, "Été/Réunions").unwrap();
+        assert_eq!(joined, root.join("Été").join("Réunions"));
+    }
+
+    #[test]
+    fn test_join_safe_segments_empty_and_trim_segments_skipped() {
+        let root = PathBuf::from("/notes");
+        let joined = join_safe_segments(&root, "/Travail//Projets/ ").unwrap();
+        assert_eq!(joined, root.join("Travail").join("Projets"));
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_parent_traversal() {
+        let root = PathBuf::from("/notes");
+        let err = join_safe_segments(&root, "Travail/../etc").unwrap_err();
+        assert!(err.to_string().contains(".."));
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_dot_segment() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/./Projets").is_err());
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_backslash() {
+        let root = PathBuf::from("/notes");
+        let err = join_safe_segments(&root, "Travail\\Projets").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Travail") || msg.contains("forbidden") || msg.contains("invalid"));
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_forbidden_characters() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/Projets:Secrets").is_err());
+        assert!(join_safe_segments(&root, "Travail/Projets*").is_err());
+    }
+
+    // --- move_email: .md + _attachments/ dir moved and paths rewritten ---
+
+    #[test]
+    fn test_move_email_moves_md_and_attachments_dir() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("staging");
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        // Create the .md file with an attachments block
+        let md_src = src_dir.join("email.md");
+        let attachments_dir_src = src_dir.join("email_attachments");
+        fs::create_dir_all(&attachments_dir_src).unwrap();
+        fs::write(attachments_dir_src.join("file.pdf"), b"PDF content").unwrap();
+
+        let md_content = "---\nsubject: Test\nattachments:\n  - email_attachments/file.pdf\n---\nBody text\n";
+        fs::write(&md_src, md_content).unwrap();
+
+        // Act
+        move_email(&md_src, &dst_dir).unwrap();
+
+        // Inclusive: new paths exist
+        let md_dest = dst_dir.join("email.md");
+        let attachments_dir_dest = dst_dir.join("email_attachments");
+        assert!(md_dest.exists(), "moved .md must exist at dest");
+        assert!(attachments_dir_dest.exists(), "moved _attachments/ dir must exist at dest");
+        assert!(attachments_dir_dest.join("file.pdf").exists(), "attachment file must exist in dest dir");
+
+        // Exclusive: old paths no longer exist
+        assert!(!md_src.exists(), "original .md must not remain at src");
+        assert!(!attachments_dir_src.exists(), "original _attachments/ dir must not remain at src");
+
+        // Inclusive: attachment path updated in moved .md
+        let new_content = fs::read_to_string(&md_dest).unwrap();
+        assert!(
+            new_content.contains("email_attachments/file.pdf"),
+            "moved .md must reference the co-located attachments dir"
+        );
+        // Exclusive: no stale relative path pointing back to src
+        assert!(
+            !new_content.contains("../staging/"),
+            "moved .md must not contain a path pointing back to staging dir"
+        );
+    }
+
+    #[test]
+    fn test_move_email_without_attachments_dir() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("staging");
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        let md_src = src_dir.join("plain.md");
+        fs::write(&md_src, "---\nsubject: Plain\n---\nNo attachments\n").unwrap();
+
+        move_email(&md_src, &dst_dir).unwrap();
+
+        // Inclusive: .md moved
+        assert!(dst_dir.join("plain.md").exists(), "moved .md must exist at dest");
+        // Exclusive: original gone
+        assert!(!md_src.exists(), "original .md must not remain at src");
+        // Exclusive: no spurious _attachments dir created
+        assert!(
+            !dst_dir.join("plain_attachments").exists(),
+            "no _attachments dir must be created when there was none"
+        );
+    }
+
+    #[test]
+    fn test_move_email_rejects_symlink() {
+        let temp = TempDir::new().unwrap();
+        let real_file = temp.path().join("real.md");
+        fs::write(&real_file, "---\nsubject: Real\n---\n").unwrap();
+
+        let symlink_path = temp.path().join("link.md");
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        // Creating symlinks on Windows may require elevated privileges.
+        // Guard: attempt to create the symlink; if it fails with a permission error,
+        // skip the test rather than fail (but the production guard is still in place).
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::symlink_file;
+            match symlink_file(&real_file, &symlink_path) {
+                Ok(()) => {
+                    let result = move_email(&symlink_path, &dst_dir);
+                    assert!(result.is_err(), "move_email must refuse a symlink source");
+                    let msg = result.unwrap_err().to_string();
+                    assert!(
+                        msg.contains("symlink") || msg.contains("link.md"),
+                        "error must mention symlink: {msg}"
+                    );
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    // Symlink creation requires elevated privileges on this Windows build.
+                    // Skip gracefully — the production guard is still present in move_email.
+                    eprintln!("Skipping symlink test: insufficient privileges ({e})");
+                }
+                Err(e) => panic!("unexpected error creating symlink: {e}"),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
+            let result = move_email(&symlink_path, &dst_dir);
+            assert!(result.is_err(), "move_email must refuse a symlink source");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("symlink") || msg.contains("link.md"),
+                "error must mention symlink: {msg}"
+            );
+        }
     }
 }

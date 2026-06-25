@@ -1,5 +1,6 @@
 pub mod email_export;
 pub mod fix_yaml;
+pub mod route;
 pub mod sort_emails;
 pub mod config;
 pub mod utils;

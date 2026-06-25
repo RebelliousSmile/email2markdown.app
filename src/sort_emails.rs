@@ -1,4 +1,7 @@
 use crate::config::SortConfig;
+// Re-export join_safe_segments from route so existing call-sites in this module
+// continue to resolve between M2 and M6 (when sort_emails.rs is removed).
+pub use crate::route::join_safe_segments;
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Utc};
 use regex::Regex;
@@ -13,40 +16,6 @@ use walkdir::WalkDir;
 
 static UNSUBSCRIBE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)https?://[^\s)>\]]*unsubscribe[^\s)>\]]*").expect("static regex"));
-
-/// Safe path-segment shape — alphanumerics, space, dash, underscore, dot.
-/// Used to validate user-typed notes destinations against path-traversal.
-static SAFE_PATH_SEGMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9À-ſ _.\-]+$").expect("static regex"));
-
-/// Join `dest` (user-typed `Travail/Projets/X`) onto `root` safely.
-///
-/// Rejects segments that:
-/// - contain a Windows separator `\`
-/// - are `..` or `.` (path-traversal)
-/// - contain any character outside `SAFE_PATH_SEGMENT_RE`
-///
-/// Returns the joined `PathBuf` on success, or an error naming the bad segment.
-pub fn join_safe_segments(root: &Path, dest: &str) -> anyhow::Result<PathBuf> {
-    let mut out = root.to_path_buf();
-    for raw in dest.split('/') {
-        let seg = raw.trim();
-        if seg.is_empty() {
-            continue;
-        }
-        if seg == ".." || seg == "." || seg.contains('\\') {
-            anyhow::bail!("invalid path segment in notes destination: {:?}", seg);
-        }
-        if !SAFE_PATH_SEGMENT_RE.is_match(seg) {
-            anyhow::bail!(
-                "notes destination segment contains forbidden characters: {:?}",
-                seg
-            );
-        }
-        out = out.join(seg);
-    }
-    Ok(out)
-}
 
 /// Email sorting category.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
