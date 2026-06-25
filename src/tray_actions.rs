@@ -14,11 +14,9 @@ use rfd;
 
 use crate::progress::ProgressUpdate;
 
-use crate::config::{self, Config, Settings, SortConfig};
+use crate::config::{self, Config, Settings};
 use crate::email_export::{self, ImapExporter};
-use crate::fix_yaml;
-use crate::sort_emails::EmailSorter;
-use crate::summarize;
+use crate::route::RouteDecision;
 use crate::thunderbird;
 
 /// Result of an action, sent back to the main thread for notification.
@@ -29,11 +27,6 @@ pub enum ActionResult {
     /// Import completed — the main thread should rebuild the tray menu.
     Imported(String),
     Error(String),
-    /// Sort completed — the main thread should open the review window.
-    SortCompleted {
-        account: String,
-        report_path: std::path::PathBuf,
-    },
 }
 
 fn classify_error(e: &anyhow::Error) -> Option<String> {
@@ -102,8 +95,19 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
             });
         };
         match run_export(&account_name, Some(&on_progress), Some(&on_status), cancel_token_worker) {
-            Ok(summary) => {
+            Ok((summary, decisions)) => {
                 let _ = progress_tx.send(ProgressUpdate::Done { summary });
+                // D6: files stay in staging. Open the route review window so the
+                // user can validate/reassign paths before any file is moved.
+                // The AutoClose sent by ProgressUpdate::Done will close the progress
+                // window; the route review window opens after that via the event loop.
+                if !decisions.is_empty() {
+                    if let Err(e) = crate::tray::send_command(
+                        crate::tray::AppCommand::OpenRouteReview(decisions),
+                    ) {
+                        eprintln!("Failed to open route review window: {:#}", e);
+                    }
+                }
             }
             Err(e) => {
                 let _ = progress_tx.send(ProgressUpdate::Error {
@@ -115,12 +119,15 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
     });
 }
 
+/// Returns `(summary_string, decisions)`.
+/// Decisions are the `Vec<(PathBuf, RouteDecision)>` produced by `export_account`.
+/// In GUI mode the caller opens the route review window; no files are moved here (D6).
 fn run_export(
     account_name: &str,
     on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
     on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
     cancel_token: Arc<AtomicBool>,
-) -> Result<String> {
+) -> Result<(String, Vec<(PathBuf, RouteDecision)>)> {
     dotenvy::from_path(config::env_file_path()).ok();
 
     let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
@@ -141,9 +148,11 @@ fn run_export(
     let mut exporter = ImapExporter::new(account.clone(), false);
     exporter.connect().context("Failed to connect to IMAP server")?;
 
-    let results = exporter
+    let (results, decisions) = exporter
         .export_account(on_progress, on_status, Some(cancel_token.as_ref()))
         .context("Export failed")?;
+    // `decisions` holds `Vec<(PathBuf, RouteDecision)>` — deferred move (D6).
+    // GUI mode: files stay in staging; the route review window handles the move.
 
     exporter.disconnect().ok();
 
@@ -153,96 +162,13 @@ fn run_export(
     let total_errors: usize = results.values().map(|s| s.errors).sum();
 
     let prefix = if cancelled { "Export annulé" } else { "Export terminé" };
-    Ok(format!(
-        "{} — {} exportés, {} ignorés, {} erreurs",
-        prefix, total_exported, total_skipped, total_errors
+    Ok((
+        format!(
+            "{} — {} exportés, {} ignorés, {} erreurs",
+            prefix, total_exported, total_skipped, total_errors
+        ),
+        decisions,
     ))
-}
-
-/// Sort emails for a specific account.
-///
-/// Runs in a separate thread to avoid blocking the UI.
-pub fn action_sort(account_name: String, result_sender: Sender<ActionResult>) {
-    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
-    let result_sender_worker = result_sender.clone();
-
-    if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
-        action_name: "Sort".to_string(),
-        warning: None,
-        progress_rx,
-        on_close: None,
-        error_action: Some(Box::new(|| { let _ = action_open_config(); })),
-        sender: result_sender.clone(),
-        cancel_token: None,
-    }) {
-        let _ = result_sender.send(ActionResult::Error(format!(
-            "Fenêtre de progression : {}",
-            e
-        )));
-        return;
-    }
-
-    thread::spawn(move || {
-        let progress_tx_clone = progress_tx.clone();
-        let on_progress = move |current: usize, total: usize, label: &str| {
-            let _ = progress_tx_clone.send(ProgressUpdate::Step {
-                current,
-                total,
-                message: label.to_string(),
-            });
-        };
-        match run_sort(&account_name, Some(&on_progress)) {
-            Ok((report_path, email_count)) => {
-                if email_count > 0 {
-                    // Send result directly — progress window closes automatically.
-                    let _ = result_sender_worker.send(ActionResult::SortCompleted {
-                        account: account_name,
-                        report_path,
-                    });
-                    let _ = progress_tx.send(ProgressUpdate::AutoClose);
-                } else {
-                    let _ = progress_tx.send(ProgressUpdate::Done {
-                        summary: "Tri terminé — rien à réviser".to_string(),
-                    });
-                }
-            }
-            Err(e) => {
-                let _ = progress_tx.send(ProgressUpdate::Error {
-                    message: format!("Sort error: {:#}", e),
-                    action_label: classify_error(&e),
-                });
-            }
-        }
-    });
-}
-
-fn run_sort(
-    account_name: &str,
-    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
-) -> Result<(PathBuf, usize)> {
-    dotenvy::from_path(config::env_file_path()).ok();
-
-    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
-
-    let account = config
-        .get_account(account_name)
-        .context(format!("Account '{}' not found", account_name))?;
-
-    let sort_directory = PathBuf::from(&account.export_directory);
-    let sort_config = SortConfig::default();
-
-    let mut sorter = EmailSorter::new(sort_directory.clone(), sort_config);
-    sorter.sort_emails(on_progress)?;
-
-    let report = sorter.generate_report();
-    let email_count: usize = report.categories.values().map(|v| v.len()).sum();
-    let report_path = sort_directory.join("sort_report.json");
-    let path_str = report_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("sort report path contains non-UTF-8 characters"))?;
-    sorter.save_report(&report, path_str).context("failed to save sort report")?;
-
-    Ok((report_path, email_count))
 }
 
 /// Import accounts from Thunderbird.
@@ -427,171 +353,6 @@ fn set_notes_dir(base_dir: &std::path::Path) -> Result<String> {
     Ok(format!("Défini sur {}", base_dir.display()))
 }
 
-/// Open a folder picker, walk it for `.md` notes, and open the organize window.
-pub fn action_organize_notes_folder(result_sender: Sender<ActionResult>) {
-    let mut dialog = rfd::FileDialog::new().set_title("Choisir un dossier de notes");
-    if let Some(notes_dir) = Settings::load(&config::settings_path())
-        .ok()
-        .and_then(|s| s.notes_dir.clone())
-    {
-        dialog = dialog.set_directory(notes_dir);
-    }
-    let Some(folder) = dialog.pick_folder() else {
-        return;
-    };
-    thread::spawn(move || {
-        let entries = match crate::notes_review::collect_notes(&folder) {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = result_sender.send(ActionResult::Error(format!(
-                    "Lecture du dossier : {:#}",
-                    e
-                )));
-                return;
-            }
-        };
-        if entries.is_empty() {
-            let _ = result_sender.send(ActionResult::Success(
-                "Organiser les notes".into(),
-                "Aucune note .md trouvée".into(),
-            ));
-            return;
-        }
-        if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenOrganize {
-            entries,
-            sender: result_sender.clone(),
-        }) {
-            let _ = result_sender.send(ActionResult::Error(format!(
-                "Ouverture Organiser : {:#}",
-                e
-            )));
-        }
-    });
-}
-
-/// Open a multi-file picker for `.md` notes and open the organize window.
-pub fn action_organize_notes_files(result_sender: Sender<ActionResult>) {
-    let mut dialog = rfd::FileDialog::new()
-        .set_title("Choisir des notes .md")
-        .add_filter("Markdown", &["md"]);
-    if let Some(notes_dir) = Settings::load(&config::settings_path())
-        .ok()
-        .and_then(|s| s.notes_dir.clone())
-    {
-        dialog = dialog.set_directory(notes_dir);
-    }
-    let Some(files) = dialog.pick_files() else {
-        return;
-    };
-    thread::spawn(move || {
-        let entries = match crate::notes_review::collect_files(&files) {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = result_sender.send(ActionResult::Error(format!(
-                    "Lecture des fichiers : {:#}",
-                    e
-                )));
-                return;
-            }
-        };
-        if entries.is_empty() {
-            let _ = result_sender.send(ActionResult::Success(
-                "Organiser les notes".into(),
-                "Aucune note .md valide".into(),
-            ));
-            return;
-        }
-        if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenOrganize {
-            entries,
-            sender: result_sender.clone(),
-        }) {
-            let _ = result_sender.send(ActionResult::Error(format!(
-                "Ouverture Organiser : {:#}",
-                e
-            )));
-        }
-    });
-}
-
-/// Run the Python summarize pipeline for an account.
-pub fn action_summarize(account_name: String, result_sender: Sender<ActionResult>) {
-    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
-
-    if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
-        action_name: "Summarize".to_string(),
-        warning: None,
-        progress_rx,
-        on_close: None,
-        error_action: Some(Box::new(|| { let _ = action_open_config(); })),
-        sender: result_sender.clone(),
-        cancel_token: None,
-    }) {
-        let _ = result_sender.send(ActionResult::Error(format!(
-            "Fenêtre de progression : {}",
-            e
-        )));
-        return;
-    }
-
-    thread::spawn(move || {
-        let progress_tx_status = progress_tx.clone();
-        let on_line = move |line: &str| {
-            let _ = progress_tx_status.send(ProgressUpdate::StatusLine {
-                text: line.to_string(),
-            });
-        };
-        let _ = progress_tx.send(ProgressUpdate::Indeterminate {
-            message: format!("Summarize — {}", account_name),
-        });
-        match run_summarize(&account_name, &on_line) {
-            Ok(summary) => {
-                let _ = progress_tx.send(ProgressUpdate::Done { summary });
-            }
-            Err(e) => {
-                let _ = progress_tx.send(ProgressUpdate::Error {
-                    message: format!("Summarize error: {:#}", e),
-                    action_label: classify_error(&e),
-                });
-            }
-        }
-    });
-}
-
-fn run_summarize(
-    account_name: &str,
-    on_line: &(dyn Fn(&str) + Send + Sync),
-) -> Result<String> {
-    dotenvy::from_path(config::env_file_path()).ok();
-
-    let config = Config::load(&config::accounts_yaml_path())
-        .context("failed to load accounts configuration")?;
-
-    let account = config
-        .get_account(account_name)
-        .context(format!("Account '{}' not found", account_name))?;
-
-    let settings = Settings::load(&config::settings_path()).unwrap_or_default();
-    let python = summarize::find_python(&settings)
-        .context("failed to resolve python interpreter")?;
-    let scripts_dir = config::resolve_tools_scripts_dir(&settings)
-        .context("failed to resolve tools/scripts directory")?;
-    let script = scripts_dir.join("summarize.py");
-
-    let input_dir = PathBuf::from(&account.export_directory);
-    let notes_dir = settings.notes_dir.as_deref().map(PathBuf::from);
-
-    let mut lines = 0usize;
-    let counter = std::sync::atomic::AtomicUsize::new(0);
-    summarize::run_summarize(&python, &script, &input_dir, notes_dir.as_deref(), &|line| {
-        on_line(line);
-        counter.fetch_add(1, Ordering::Relaxed);
-    })
-    .with_context(|| format!("summarize failed for {}", account_name))?;
-    lines += counter.load(Ordering::Relaxed);
-
-    Ok(format!("Résumé terminé — {} ligne(s) de sortie", lines))
-}
-
 /// Open the documentation (README.md) in the default viewer.
 pub fn action_open_documentation() -> Result<()> {
     let readme_paths = [
@@ -645,72 +406,6 @@ defaults:
 
     open::that(&settings_path).context("Failed to open settings file")?;
     Ok(())
-}
-
-/// Fix YAML frontmatter for a specific account's export directory.
-pub fn action_fix_yaml(account_name: String, result_sender: Sender<ActionResult>) {
-    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
-
-    if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
-        action_name: "Fix YAML".to_string(),
-        warning: None,
-        progress_rx,
-        on_close: None,
-        error_action: Some(Box::new(|| { let _ = action_open_config(); })),
-        sender: result_sender.clone(),
-        cancel_token: None,
-    }) {
-        let _ = result_sender.send(ActionResult::Error(format!(
-            "Fenêtre de progression : {}",
-            e
-        )));
-        return;
-    }
-
-    thread::spawn(move || {
-        let progress_tx_clone = progress_tx.clone();
-        let on_progress = move |current: usize, total: usize, label: &str| {
-            let _ = progress_tx_clone.send(ProgressUpdate::Step {
-                current,
-                total,
-                message: label.to_string(),
-            });
-        };
-        match run_fix_yaml(&account_name, Some(&on_progress)) {
-            Ok(summary) => {
-                let _ = progress_tx.send(ProgressUpdate::Done { summary });
-            }
-            Err(e) => {
-                let _ = progress_tx.send(ProgressUpdate::Error {
-                    message: format!("Fix YAML error: {:#}", e),
-                    action_label: classify_error(&e),
-                });
-            }
-        }
-    });
-}
-
-fn run_fix_yaml(
-    account_name: &str,
-    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
-) -> Result<String> {
-    dotenvy::from_path(config::env_file_path()).ok();
-
-    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
-
-    let account = config
-        .get_account(account_name)
-        .context(format!("Account '{}' not found", account_name))?;
-
-    let dir = PathBuf::from(&account.export_directory);
-
-    let stats = fix_yaml::scan_and_fix_directory(&dir, false, on_progress)
-        .context("Failed to fix YAML frontmatter")?;
-
-    Ok(format!(
-        "{}: {} corrigés, {} réécrits, {} erreurs",
-        account_name, stats.files_fixed, stats.files_rewritten, stats.errors
-    ))
 }
 
 /// Fix HTML bodies to Markdown for a specific account's export directory.

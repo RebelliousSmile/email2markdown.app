@@ -45,11 +45,6 @@ pub fn settings_path() -> PathBuf {
     app_config_dir().join("settings.yaml")
 }
 
-/// Path to `sort_config.json`.
-pub fn sort_config_path() -> PathBuf {
-    app_config_dir().join("sort_config.json")
-}
-
 // ── Settings (settings.yaml) ─────────────────────────────────────────────────
 
 /// Per-account behaviour overrides stored in settings.yaml.
@@ -74,8 +69,6 @@ pub struct AccountBehavior {
     pub cleanup_empty_dirs: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub organize_by_type: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sort: Option<SortConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -88,19 +81,27 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_folder_name: Option<String>,
 
-    /// Path to a Python virtualenv used to run `tools/scripts/*.py` subprocesses.
-    /// Expected layout: `{venv}/Scripts/python.exe` (Windows) or `{venv}/bin/python` (Unix).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub python_venv_path: Option<String>,
-
-    /// Root directory of the user's notes tree (target of classify / summarize / organize).
+    /// Root of the user's second-brain tree.
+    /// Plain base path — joined with `(Perso|Pro)/<Category>/<Sub>/<Year>/<Month>`.
+    /// NOT the tree of valid paths; that tree is defined by `destinations.txt`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes_dir: Option<String>,
 
-    /// Path to the `tools/` directory bundled with the binary.
-    /// Resolved at runtime: this override → `{exe_dir}/tools` → `{cwd}/tools`.
+    /// Path to `destinations.txt` (routing rules).
+    /// Defaults to `<config_dir>/destinations.txt` when absent.
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools_dir: Option<String>,
+    pub destinations_file: Option<String>,
+
+    /// Enable AI-assisted routing for emails that do not match any deterministic rule.
+    /// Defaults to `false` — the app is fully functional without AI.
+    #[serde(default)]
+    pub ai_routing_enabled: bool,
+
+    /// Minimum confidence score (0.0–1.0) required to accept an AI routing suggestion.
+    /// Suggestions below this threshold fall back to the default path.
+    #[serde(default = "default_ai_confidence_threshold")]
+    pub ai_confidence_threshold: f32,
 
     /// Default behaviour applied to every account unless overridden.
     #[serde(default)]
@@ -132,72 +133,6 @@ impl Settings {
         fs::write(path, serde_yaml::to_string(self)?)?;
         Ok(())
     }
-}
-
-// ── Python tools resolution ──────────────────────────────────────────────────
-
-/// Resolves a subdirectory of `tools/` using a 3-step fallback:
-/// `settings.tools_dir/<sub>` → `{exe_dir}/tools/<sub>` → `{cwd}/tools/<sub>`.
-fn resolve_tools_subdir(settings: &Settings, sub: &str) -> Result<PathBuf, ConfigError> {
-    if let Some(dir) = &settings.tools_dir {
-        let p = PathBuf::from(dir).join(sub);
-        if p.exists() {
-            return Ok(p);
-        }
-    }
-    let candidates = [
-        env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(|p| p.to_path_buf())),
-        env::current_dir().ok(),
-    ];
-    for base in candidates.into_iter().flatten() {
-        let p = base.join("tools").join(sub);
-        if p.exists() {
-            return Ok(p);
-        }
-    }
-    Err(ConfigError::ToolsDirNotFound(sub.to_string()))
-}
-
-/// Returns `tools/scripts/` — Python entry-point scripts.
-pub fn resolve_tools_scripts_dir(settings: &Settings) -> Result<PathBuf, ConfigError> {
-    resolve_tools_subdir(settings, "scripts")
-}
-
-/// Returns `tools/templates/` — Jinja2 templates for the Organize window.
-pub fn resolve_tools_templates_dir(settings: &Settings) -> Result<PathBuf, ConfigError> {
-    resolve_tools_subdir(settings, "templates")
-}
-
-/// Returns `tools/data/` — corpus, model, vectorizer, known_classes.
-pub fn resolve_tools_data_dir(settings: &Settings) -> Result<PathBuf, ConfigError> {
-    resolve_tools_subdir(settings, "data")
-}
-
-/// Returns the path to the Python interpreter inside the configured venv.
-/// Errors with an actionable message if `python_venv_path` is unset or the binary is missing.
-pub fn find_python(settings: &Settings) -> Result<PathBuf, ConfigError> {
-    let venv = settings
-        .python_venv_path
-        .as_deref()
-        .ok_or(ConfigError::PythonVenvNotConfigured)?;
-    let venv = PathBuf::from(venv);
-    let python = if cfg!(windows) {
-        venv.join("Scripts").join("python.exe")
-    } else {
-        venv.join("bin").join("python")
-    };
-    if !python.exists() {
-        return Err(ConfigError::PythonNotFound(python));
-    }
-    Ok(python)
-}
-
-/// Returns `{root}/{settings.local_folder()}` — the work-folder where intermediate
-/// outputs go (`to-summarize/`, `_generated/`, `.archive/`). Never the root itself.
-pub fn work_dir(root: &Path, settings: &Settings) -> PathBuf {
-    root.join(settings.local_folder())
 }
 
 // ── Raw accounts.yaml (connection info only) ─────────────────────────────────
@@ -290,12 +225,6 @@ pub enum ConfigError {
     NoPassword(String),
     #[error("Configuration validation error: {0}")]  // [6]
     ValidationError(String),
-    #[error("python_venv_path not set in settings.yaml — configure a Python virtualenv")]
-    PythonVenvNotConfigured,
-    #[error("python binary not found at {0:?} — check python_venv_path in settings.yaml")]
-    PythonNotFound(PathBuf),
-    #[error("tools/{0} directory not found — set tools_dir in settings.yaml or place tools/ next to the binary")]
-    ToolsDirNotFound(String),
 }
 
 /// Fully-resolved account used by the exporter.
@@ -319,10 +248,6 @@ pub struct Account {
     pub delete_after_export: bool,
     pub cleanup_empty_dirs: bool,
     pub organize_by_type: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -423,219 +348,13 @@ impl Config {
     }
 }
 
-/// Configuration for the email sorting tool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SortConfig {
-    #[serde(default = "default_delete_keywords")]
-    pub delete_keywords: Vec<String>,
-    #[serde(default)]
-    pub delete_senders: Vec<String>,
-    #[serde(default)]
-    pub delete_subjects: Vec<String>,
-
-    #[serde(default = "default_summarize_max_length")]
-    pub summarize_max_length: usize,
-    #[serde(default)]
-    pub summarize_keywords: Vec<String>,
-
-    #[serde(default = "default_keep_keywords")]
-    pub keep_keywords: Vec<String>,
-    #[serde(default)]
-    pub keep_senders: Vec<String>,
-    #[serde(default)]
-    pub keep_subjects: Vec<String>,
-
-    #[serde(default)]
-    pub whitelist: Vec<String>,
-
-    #[serde(default = "default_recent_threshold")]
-    pub recent_threshold_days: i64,
-    #[serde(default = "default_old_threshold")]
-    pub old_threshold_days: i64,
-
-    #[serde(default = "default_small_threshold")]
-    pub small_email_threshold: usize,
-    #[serde(default = "default_large_threshold")]
-    pub large_email_threshold: usize,
-
-    #[serde(default = "default_true")]
-    pub keep_with_attachments: bool,
-
-    #[serde(default = "default_type_weights")]
-    pub type_weights: HashMap<String, i32>,
-
-    #[serde(default = "default_true")]
-    pub use_folder_score: bool,
-    #[serde(default = "default_true")]
-    pub use_subfolder_bonus: bool,
-    #[serde(default = "default_true")]
-    pub use_body_keywords: bool,
-    #[serde(default = "default_true")]
-    pub use_sender_rules: bool,
-    #[serde(default = "default_true")]
-    pub use_subject_rules: bool,
-    #[serde(default = "default_true")]
-    pub use_age_scoring: bool,
-    #[serde(default = "default_true")]
-    pub use_size_scoring: bool,
-    #[serde(default = "default_true")]
-    pub use_type_weights: bool,
-    #[serde(default)]
-    pub delete_newsletters: bool,
-    #[serde(default)]
-    pub penalize_recurring: bool,
-    #[serde(default)]
-    pub organize_by_type: bool,
-}
-
-fn default_delete_keywords() -> Vec<String> {
-    vec![
-        "newsletter".into(),
-        "bulletin".into(),
-        "digest".into(),
-        "promotion".into(),
-        "offer".into(),
-        "coupon".into(),
-        "sale".into(),
-        "unsubscribe".into(),
-        "marketing".into(),
-        "advertisement".into(),
-    ]
-}
-
-fn default_keep_keywords() -> Vec<String> {
-    vec![
-        "contract".into(),
-        "invoice".into(),
-        "legal".into(),
-        "urgent".into(),
-        "important".into(),
-        "confidential".into(),
-    ]
-}
-
-fn default_summarize_max_length() -> usize {
-    5000
-}
-
-fn default_recent_threshold() -> i64 {
-    30
-}
-
-fn default_old_threshold() -> i64 {
-    365
-}
-
-fn default_small_threshold() -> usize {
-    500
-}
-
-fn default_large_threshold() -> usize {
-    10000
-}
-
-fn default_type_weights() -> HashMap<String, i32> {
-    let mut weights = HashMap::new();
-    weights.insert("newsletter".into(), -2);
-    weights.insert("mailing_list".into(), -1);
-    weights.insert("group".into(), 0);
-    weights.insert("direct".into(), 1);
-    weights.insert("unknown".into(), 0);
-    weights
-}
-
-impl Default for SortConfig {
-    fn default() -> Self {
-        SortConfig {
-            delete_keywords: default_delete_keywords(),
-            delete_senders: Vec::new(),
-            delete_subjects: Vec::new(),
-            summarize_max_length: default_summarize_max_length(),
-            summarize_keywords: Vec::new(),
-            keep_keywords: default_keep_keywords(),
-            keep_senders: Vec::new(),
-            keep_subjects: Vec::new(),
-            whitelist: Vec::new(),
-            recent_threshold_days: default_recent_threshold(),
-            old_threshold_days: default_old_threshold(),
-            small_email_threshold: default_small_threshold(),
-            large_email_threshold: default_large_threshold(),
-            keep_with_attachments: true,
-            type_weights: default_type_weights(),
-            use_folder_score: true,
-            use_subfolder_bonus: true,
-            use_body_keywords: true,
-            use_sender_rules: true,
-            use_subject_rules: true,
-            use_age_scoring: true,
-            use_size_scoring: true,
-            use_type_weights: true,
-            delete_newsletters: false,
-            penalize_recurring: false,
-            organize_by_type: true,
-        }
-    }
-}
-
-impl SortConfig {
-    /// Load configuration from JSON file.
-    pub fn load(config_path: &Path) -> Result<Self, ConfigError> {
-        if config_path.exists() {
-            let content = fs::read_to_string(config_path)?;
-            let config: SortConfig = serde_json::from_str(&content)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            Ok(config)
-        } else {
-            Ok(Self::default())
-        }
-    }
-
-    /// Save configuration to JSON file.
-    pub fn save(&self, config_path: &Path) -> Result<(), std::io::Error> {
-        let content = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        fs::write(config_path, content)
-    }
-
-    /// Check if a sender is whitelisted.
-    pub fn is_whitelisted(&self, sender_email: &str) -> bool {
-        if sender_email.is_empty() {
-            return false;
-        }
-
-        let sender_lower = sender_email.to_lowercase();
-
-        for entry in &self.whitelist {
-            let entry_lower = entry.to_lowercase();
-            // Exact email match
-            if sender_lower == entry_lower {
-                return true;
-            }
-            // Domain match (@company.com)
-            if entry_lower.starts_with('@') && sender_lower.ends_with(&entry_lower) {
-                return true;
-            }
-            // Prefix match (john@)
-            if entry_lower.ends_with('@') && sender_lower.starts_with(&entry_lower) {
-                return true;
-            }
-        }
-
-        false
-    }
+fn default_ai_confidence_threshold() -> f32 {
+    0.7
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_sort_config_default() {
-        let config = SortConfig::default();
-        assert!(config.delete_keywords.contains(&"newsletter".to_string()));
-        assert!(config.keep_keywords.contains(&"contract".to_string()));
-        assert_eq!(config.recent_threshold_days, 30);
-    }
 
     #[test]
     fn test_env_var_name_gmail() {
@@ -726,68 +445,4 @@ mod tests {
         assert!(config.accounts[0].cleanup_empty_dirs);
     }
 
-    #[test]
-    fn test_is_whitelisted() {
-        let mut config = SortConfig::default();
-        config.whitelist = vec![
-            "important@client.com".into(),
-            "@company.com".into(),
-            "boss@".into(),
-        ];
-
-        assert!(config.is_whitelisted("important@client.com"));
-        assert!(config.is_whitelisted("anyone@company.com"));
-        assert!(config.is_whitelisted("boss@anywhere.com"));
-        assert!(!config.is_whitelisted("random@other.com"));
-    }
-
-    #[test]
-    fn test_resolve_tools_subdir_explicit_dir() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let tools = temp.path().join("custom-tools");
-        std::fs::create_dir_all(tools.join("scripts")).unwrap();
-
-        let mut settings = Settings::default();
-        settings.tools_dir = Some(tools.to_string_lossy().into_owned());
-
-        let resolved = resolve_tools_scripts_dir(&settings).unwrap();
-        assert_eq!(resolved, tools.join("scripts"));
-    }
-
-    #[test]
-    fn test_find_python_not_configured() {
-        let settings = Settings::default();
-        let err = find_python(&settings).unwrap_err();
-        assert!(matches!(err, ConfigError::PythonVenvNotConfigured));
-    }
-
-    #[test]
-    fn test_find_python_binary_missing() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let mut settings = Settings::default();
-        settings.python_venv_path = Some(temp.path().to_string_lossy().into_owned());
-
-        let err = find_python(&settings).unwrap_err();
-        assert!(matches!(err, ConfigError::PythonNotFound(_)));
-    }
-
-    #[test]
-    fn test_find_python_happy_path() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let (subdir, bin) = if cfg!(windows) {
-            ("Scripts", "python.exe")
-        } else {
-            ("bin", "python")
-        };
-        let bin_dir = temp.path().join(subdir);
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        let bin_path = bin_dir.join(bin);
-        std::fs::write(&bin_path, b"").unwrap();
-
-        let mut settings = Settings::default();
-        settings.python_venv_path = Some(temp.path().to_string_lossy().into_owned());
-
-        let resolved = find_python(&settings).unwrap();
-        assert_eq!(resolved, bin_path);
-    }
 }

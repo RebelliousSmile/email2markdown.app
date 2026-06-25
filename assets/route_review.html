@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Revue du routage</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    background: #f5f5f5;
+    color: #222;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    background: #1e88e5;
+    color: #fff;
+    padding: 10px 16px;
+    font-size: 15px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #fff;
+    border-bottom: 1px solid #ddd;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .toolbar label { display: flex; align-items: center; gap: 4px; }
+  .toolbar select, .toolbar button, .toolbar input[type="text"] {
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .toolbar input[type="text"] { cursor: text; min-width: 220px; }
+  .toolbar button { background: #1e88e5; color: #fff; border-color: #1e88e5; }
+  .toolbar button:hover { background: #1565c0; }
+  .table-wrap {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+  }
+  thead th {
+    position: sticky;
+    top: 0;
+    background: #eee;
+    font-weight: 600;
+    padding: 7px 10px;
+    text-align: left;
+    border-bottom: 1px solid #ccc;
+    white-space: nowrap;
+    z-index: 1;
+  }
+  thead th[data-col] {
+    cursor: pointer;
+    user-select: none;
+  }
+  thead th[data-col]:hover { background: #e0e0e0; }
+  tbody tr:nth-child(even) { background: #fafafa; }
+  tbody tr:hover { background: #e3f2fd; }
+  tbody td {
+    padding: 5px 10px;
+    border-bottom: 1px solid #eee;
+    vertical-align: middle;
+  }
+  tbody td.subject { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.sender  { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.dest    { min-width: 260px; }
+  tbody td.dest input.dest-input {
+    width: 100%;
+    padding: 3px 6px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 12px;
+    background: #fff;
+  }
+  tbody td.dest input.dest-input.modified {
+    border-color: #1e88e5;
+    background: #e3f2fd;
+  }
+  .badge-default {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #9e9e9e;
+    color: #fff;
+    vertical-align: middle;
+  }
+  .footer {
+    padding: 10px 16px;
+    background: #fff;
+    border-top: 1px solid #ddd;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .footer button {
+    padding: 7px 20px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  #btn-apply {
+    background: #4caf50;
+    color: #fff;
+    border-color: #4caf50;
+  }
+  #btn-apply:hover { background: #388e3c; }
+  #btn-cancel { background: #fff; }
+  #btn-cancel:hover { background: #eee; }
+  #error-banner {
+    display: none;
+    padding: 8px 16px;
+    background: #ffeaea;
+    border-top: 1px solid #f44336;
+    color: #c62828;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+<script>
+  window.__DECISIONS_DATA__ = __DECISIONS_JSON__;
+  window.__KNOWN_PATHS__    = __KNOWN_PATHS_JSON__;
+</script>
+
+<header>Revue du routage — propositions de déplacement</header>
+
+<div class="toolbar">
+  <label>
+    <input type="checkbox" id="select-all"> Tout sélectionner
+  </label>
+  <input type="text" id="bulk-dest" list="known-paths" placeholder="Chemin en masse (Perso/X/Y)">
+  <button id="btn-bulk-dest">Assigner chemin</button>
+  <span style="margin-left:auto; color:#666;" id="summary-badge"></span>
+</div>
+
+<datalist id="known-paths"></datalist>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="header-check"></th>
+        <th data-col="subject">Sujet</th>
+        <th data-col="sender">Expéditeur</th>
+        <th data-col="date">Date</th>
+        <th data-col="dest_path">Chemin proposé</th>
+        <th data-col="is_default">Défaut ?</th>
+      </tr>
+    </thead>
+    <tbody id="email-table-body"></tbody>
+  </table>
+</div>
+
+<div id="error-banner"></div>
+
+<div class="footer">
+  <button id="btn-cancel">Annuler</button>
+  <button id="btn-apply">Appliquer</button>
+</div>
+
+<script>
+(function () {
+  // ── data ──────────────────────────────────────────────────────────────────
+  // __DECISIONS_DATA__ is an array of { file, subject, sender, date, dest_path, is_default }.
+  // dest_path is always relative to notes_dir.
+  var rawDecisions = Array.isArray(window.__DECISIONS_DATA__) ? window.__DECISIONS_DATA__ : [];
+  var knownPaths   = Array.isArray(window.__KNOWN_PATHS__)    ? window.__KNOWN_PATHS__    : [];
+
+  // Populate datalist
+  var datalist = document.getElementById('known-paths');
+  knownPaths.forEach(function (p) {
+    var opt = document.createElement('option');
+    opt.value = p;
+    datalist.appendChild(opt);
+  });
+
+  // Build mutable rows
+  var rows = rawDecisions.map(function (d) {
+    return {
+      file:          d.file      || '',
+      subject:       d.subject   || '',
+      sender:        d.sender    || '',
+      date:          d.date      || '',
+      dest_path:     d.dest_path || '',
+      orig_path:     d.dest_path || '',  // original proposal for "modified" highlight
+      is_default:    !!d.is_default,
+      checked:       false
+    };
+  });
+
+  // ── sort ─────────────────────────────────────────────────────────────────
+  var sortCol = null;
+  var sortDir = 'asc';
+
+  var colLabels = {
+    subject:    'Sujet',
+    sender:     'Expéditeur',
+    date:       'Date',
+    dest_path:  'Chemin proposé',
+    is_default: 'Défaut ?'
+  };
+
+  function sortRows() {
+    rows.sort(function (a, b) {
+      var av = a[sortCol], bv = b[sortCol];
+      if (typeof av === 'boolean') {
+        // sort defaults last (false first)
+        return sortDir === 'asc' ? (av === bv ? 0 : av ? 1 : -1)
+                                 : (av === bv ? 0 : av ? -1 : 1);
+      }
+      var cmp = String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }
+
+  function updateSortIndicators() {
+    document.querySelectorAll('thead th[data-col]').forEach(function (th) {
+      var col = th.dataset.col;
+      th.textContent = colLabels[col] +
+        (col === sortCol ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+    });
+  }
+
+  // ── HTML helpers ─────────────────────────────────────────────────────────
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // ── table ─────────────────────────────────────────────────────────────────
+  var tbody = document.getElementById('email-table-body');
+
+  function buildTable() {
+    tbody.innerHTML = '';
+    rows.forEach(function (row, i) {
+      var tr = document.createElement('tr');
+      tr.dataset.file = row.file;
+
+      var modifiedClass = (row.dest_path !== row.orig_path) ? ' modified' : '';
+
+      tr.innerHTML =
+        '<td><input type="checkbox" class="row-check" data-i="' + i + '"' +
+          (row.checked ? ' checked' : '') + '></td>' +
+        '<td class="subject" title="' + esc(row.subject) + '">' + esc(row.subject) + '</td>' +
+        '<td class="sender"  title="' + esc(row.sender)  + '">' + esc(row.sender)  + '</td>' +
+        '<td>' + esc(row.date) + '</td>' +
+        '<td class="dest">' +
+          '<input type="text" class="dest-input' + modifiedClass + '" list="known-paths"' +
+            ' data-i="' + i + '"' +
+            ' value="' + esc(row.dest_path) + '"' +
+            ' placeholder="Perso/Catégorie/Sous-cat/YYYY/MM">' +
+        '</td>' +
+        '<td style="text-align:center">' +
+          (row.is_default ? '<span class="badge-default">défaut</span>' : '') +
+        '</td>';
+
+      tbody.appendChild(tr);
+    });
+
+    // dest-input change listeners
+    document.querySelectorAll('input.dest-input').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        var i = parseInt(this.dataset.i);
+        rows[i].dest_path = this.value;
+        if (this.value !== rows[i].orig_path) {
+          this.classList.add('modified');
+        } else {
+          this.classList.remove('modified');
+        }
+      });
+    });
+
+    // row-check listeners
+    document.querySelectorAll('.row-check').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        rows[parseInt(this.dataset.i)].checked = this.checked;
+        syncSelectAll();
+      });
+    });
+
+    updateSummary();
+  }
+
+  function updateSummary() {
+    var total    = rows.length;
+    var defaults = rows.filter(function (r) { return r.is_default; }).length;
+    var modified = rows.filter(function (r) { return r.dest_path !== r.orig_path; }).length;
+    var parts = [total + ' email' + (total !== 1 ? 's' : '')];
+    if (defaults > 0) { parts.push(defaults + ' défaut' + (defaults !== 1 ? 's' : '')); }
+    if (modified > 0) { parts.push(modified + ' modifié' + (modified !== 1 ? 's' : '')); }
+    document.getElementById('summary-badge').textContent = parts.join(' · ');
+  }
+
+  buildTable();
+
+  // ── select-all sync ───────────────────────────────────────────────────────
+  function syncSelectAll() {
+    var allChecked = rows.length > 0 && rows.every(function (r) { return r.checked; });
+    document.getElementById('header-check').checked = allChecked;
+    document.getElementById('select-all').checked   = allChecked;
+  }
+
+  function setAllChecked(val) {
+    rows.forEach(function (r) { r.checked = val; });
+    document.querySelectorAll('.row-check').forEach(function (cb) { cb.checked = val; });
+    document.getElementById('header-check').checked = val;
+    document.getElementById('select-all').checked   = val;
+  }
+
+  document.getElementById('header-check').addEventListener('change', function () {
+    setAllChecked(this.checked);
+  });
+  document.getElementById('select-all').addEventListener('change', function () {
+    setAllChecked(this.checked);
+  });
+
+  // ── column sort ───────────────────────────────────────────────────────────
+  document.querySelectorAll('thead th[data-col]').forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col = this.dataset.col;
+      if (sortCol === col) {
+        sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortCol = col;
+        sortDir = 'asc';
+      }
+      sortRows();
+      buildTable();
+      updateSortIndicators();
+    });
+  });
+
+  // ── bulk assign ───────────────────────────────────────────────────────────
+  document.getElementById('btn-bulk-dest').addEventListener('click', function () {
+    var dest = document.getElementById('bulk-dest').value.trim();
+    if (!dest) { alert('Saisissez un chemin de destination d\'abord.'); return; }
+    rows.forEach(function (r, i) {
+      if (!r.checked) { return; }
+      r.dest_path = dest;
+      var inp = document.querySelector('input.dest-input[data-i="' + i + '"]');
+      if (inp) {
+        inp.value = dest;
+        if (dest !== r.orig_path) {
+          inp.classList.add('modified');
+        } else {
+          inp.classList.remove('modified');
+        }
+      }
+    });
+    updateSummary();
+  });
+
+  // ── error banner ──────────────────────────────────────────────────────────
+  function showError(msg) {
+    var banner = document.getElementById('error-banner');
+    banner.textContent = msg;
+    banner.style.display = 'block';
+  }
+
+  function clearError() {
+    var banner = document.getElementById('error-banner');
+    banner.style.display = 'none';
+    banner.textContent = '';
+  }
+
+  // ── cancel / apply ────────────────────────────────────────────────────────
+  document.getElementById('btn-cancel').addEventListener('click', function () {
+    clearError();
+    if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      window.ipc.postMessage('cancel');
+    }
+  });
+
+  document.getElementById('btn-apply').addEventListener('click', function () {
+    clearError();
+
+    // Validate: no empty dest_path
+    var emptyRow = rows.find(function (r) { return !r.dest_path.trim(); });
+    if (emptyRow) {
+      showError('Chemin de destination vide pour : ' + (emptyRow.subject || emptyRow.file));
+      return;
+    }
+
+    // Build payload: [{ file, dest_path }]
+    // dest_path is always relative to notes_dir (the user types/selects relative paths).
+    var decisions = rows.map(function (r) {
+      return { file: r.file, dest_path: r.dest_path.trim() };
+    });
+
+    var msg = JSON.stringify({ decisions: decisions });
+    if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      window.ipc.postMessage(msg);
+    } else {
+      alert('IPC non disponible.');
+    }
+  });
+
+  // ── error feedback from Rust ──────────────────────────────────────────────
+  // Called by Rust via webview.evaluate_script("route_review_error('...')") if
+  // the apply step encounters a validation error for a specific file.
+  window.route_review_error = function (msg) {
+    showError(msg);
+  };
+})();
+</script>
+</body>
+</html>

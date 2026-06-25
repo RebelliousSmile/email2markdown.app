@@ -1,7 +1,6 @@
-use email_to_markdown::config::{SortConfig, Config, Account, Settings, AccountBehavior, RawAccount, load_raw_accounts, save_accounts};
+use email_to_markdown::config::{Config, Settings, AccountBehavior, RawAccount, load_raw_accounts, save_accounts};
 use email_to_markdown::network::{NetworkConfig, ProgressIndicator};  // [3][4]
 use email_to_markdown::utils::*;
-use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -153,53 +152,10 @@ mod config_tests {
     use super::*;
 
     #[test]
-    fn test_sort_config_default() {
-        let config = SortConfig::default();
-        assert!(config.delete_keywords.contains(&"newsletter".to_string()));
-        assert!(config.keep_keywords.contains(&"contract".to_string()));
-        assert_eq!(config.recent_threshold_days, 30);
-    }
-
-    #[test]
     fn test_config_validation_empty_accounts_is_ok() {
         // Empty account list is valid — no error expected
         let config = Config { accounts: vec![] };
         assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_is_whitelisted_exact_match() {
-        let mut config = SortConfig::default();
-        config.whitelist = vec!["important@client.com".into()];
-
-        assert!(config.is_whitelisted("important@client.com"));
-        assert!(!config.is_whitelisted("other@client.com"));
-    }
-
-    #[test]
-    fn test_is_whitelisted_domain() {
-        let mut config = SortConfig::default();
-        config.whitelist = vec!["@company.com".into()];
-
-        assert!(config.is_whitelisted("anyone@company.com"));
-        assert!(config.is_whitelisted("ceo@company.com"));
-        assert!(!config.is_whitelisted("user@other.com"));
-    }
-
-    #[test]
-    fn test_is_whitelisted_prefix() {
-        let mut config = SortConfig::default();
-        config.whitelist = vec!["boss@".into()];
-
-        assert!(config.is_whitelisted("boss@anywhere.com"));
-        assert!(config.is_whitelisted("boss@company.com"));
-        assert!(!config.is_whitelisted("employee@anywhere.com"));
-    }
-
-    #[test]
-    fn test_is_whitelisted_empty() {
-        let config = SortConfig::default();
-        assert!(!config.is_whitelisted("anyone@example.com"));
     }
 
     #[test]
@@ -287,18 +243,6 @@ mod config_tests {
         assert_eq!(loaded[2].name, "AccountC");
     }
 
-    #[test]
-    fn test_sort_config_save_load() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("test_config.json");
-
-        let config = SortConfig::default();
-        config.save(&config_path).unwrap();
-
-        let loaded = SortConfig::load(&config_path).unwrap();
-        assert_eq!(loaded.recent_threshold_days, config.recent_threshold_days);
-        assert_eq!(loaded.delete_keywords.len(), config.delete_keywords.len());
-    }
 }
 
 mod settings_tests {
@@ -400,31 +344,6 @@ mod settings_tests {
         let config = Config::load_with_settings(&accounts_path, &missing_settings);
         // Should fail validation: export_directory is empty because no export_base_dir set
         assert!(config.is_err());
-    }
-
-    #[test]
-    fn test_per_account_sort_config_in_settings() {
-        let temp = TempDir::new().unwrap();
-        let settings_yaml = r#"
-export_base_dir: /tmp/exports
-accounts:
-  TestAccount:
-    sort:
-      delete_newsletters: true
-      penalize_recurring: true
-"#;
-        let settings_path = temp.path().join("settings.yaml");
-        std::fs::write(&settings_path, settings_yaml).unwrap();
-
-        let settings = Settings::load(&settings_path).unwrap();
-        let behavior = settings.accounts.get("TestAccount").unwrap();
-        let sort_cfg = behavior.sort.as_ref().unwrap();
-        assert!(sort_cfg.delete_newsletters);
-        assert!(sort_cfg.penalize_recurring);
-        // Omitted fields get serde defaults
-        assert!(sort_cfg.use_folder_score);
-        assert!(sort_cfg.keep_with_attachments);
-        assert_eq!(sort_cfg.recent_threshold_days, 30);
     }
 
     #[test]
@@ -609,127 +528,6 @@ mod email_export_tests {
     }
 }
 
-mod fix_yaml_tests {
-    use email_to_markdown::fix_yaml::*;
-
-    #[test]
-    fn test_fix_complex_yaml_tags_python_object() {
-        let content = "subject: !!python/object:email.header.Header test";
-        let fixed = fix_complex_yaml_tags(content);
-        assert!(!fixed.contains("!!python/object:"));
-    }
-
-    #[test]
-    fn test_fix_complex_yaml_tags_anchor() {
-        let content = "field: &anchor value";
-        let fixed = fix_complex_yaml_tags(content);
-        assert!(!fixed.contains("&anchor"));
-    }
-
-    #[test]
-    fn test_extract_frontmatter_valid() {
-        let content = "---\nfrom: test@example.com\n---\n\nBody content";
-        let result = extract_frontmatter(content);
-        assert!(result.is_some());
-
-        let (frontmatter, body) = result.unwrap();
-        assert!(frontmatter.contains("from:"));
-        assert!(body.contains("Body content"));
-    }
-
-    #[test]
-    fn test_extract_frontmatter_no_closing() {
-        let content = "---\nfrom: test@example.com\n\nBody content";
-        let result = extract_frontmatter(content);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_extract_frontmatter_no_opening() {
-        let content = "from: test@example.com\n---\n\nBody content";
-        let result = extract_frontmatter(content);
-        assert!(result.is_none());
-    }
-}
-
-mod sort_emails_tests {
-    use email_to_markdown::sort_emails::*;
-    use email_to_markdown::config::SortConfig;
-    use std::path::PathBuf;
-
-    #[test]
-    fn test_category_display() {
-        assert_eq!(Category::Delete.to_string(), "delete");
-        assert_eq!(Category::Summarize.to_string(), "summarize");
-        assert_eq!(Category::Keep.to_string(), "keep");
-    }
-
-    #[test]
-    fn test_email_sort_type_display() {
-        assert_eq!(EmailSortType::Direct.to_string(), "direct");
-        assert_eq!(EmailSortType::Newsletter.to_string(), "newsletter");
-        assert_eq!(EmailSortType::Group.to_string(), "group");
-    }
-
-    #[test]
-    fn test_email_sorter_new() {
-        let config = SortConfig::default();
-        let sorter = EmailSorter::new(PathBuf::from("/tmp"), config);
-
-        let stats = sorter.stats();
-        assert_eq!(stats.total_emails, 0);
-    }
-
-    #[test]
-    fn test_join_safe_segments_nested_path() {
-        let root = PathBuf::from("/notes");
-        let joined = join_safe_segments(&root, "Travail/Projets/Client A").unwrap();
-        assert_eq!(joined, root.join("Travail").join("Projets").join("Client A"));
-    }
-
-    #[test]
-    fn test_join_safe_segments_accented_segment_allowed() {
-        let root = PathBuf::from("/notes");
-        let joined = join_safe_segments(&root, "Été/Réunions").unwrap();
-        assert_eq!(joined, root.join("Été").join("Réunions"));
-    }
-
-    #[test]
-    fn test_join_safe_segments_empty_and_trim_segments_skipped() {
-        let root = PathBuf::from("/notes");
-        let joined = join_safe_segments(&root, "/Travail//Projets/ ").unwrap();
-        assert_eq!(joined, root.join("Travail").join("Projets"));
-    }
-
-    #[test]
-    fn test_join_safe_segments_rejects_parent_traversal() {
-        let root = PathBuf::from("/notes");
-        let err = join_safe_segments(&root, "Travail/../etc").unwrap_err();
-        assert!(err.to_string().contains(".."));
-    }
-
-    #[test]
-    fn test_join_safe_segments_rejects_dot_segment() {
-        let root = PathBuf::from("/notes");
-        assert!(join_safe_segments(&root, "Travail/./Projets").is_err());
-    }
-
-    #[test]
-    fn test_join_safe_segments_rejects_backslash() {
-        let root = PathBuf::from("/notes");
-        let err = join_safe_segments(&root, "Travail\\Projets").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("Travail") || msg.contains("forbidden") || msg.contains("invalid"));
-    }
-
-    #[test]
-    fn test_join_safe_segments_rejects_forbidden_characters() {
-        let root = PathBuf::from("/notes");
-        assert!(join_safe_segments(&root, "Travail/Projets:Secrets").is_err());
-        assert!(join_safe_segments(&root, "Travail/Projets*").is_err());
-    }
-}
-
 mod edge_case_tests {
     use super::*;
 
@@ -803,7 +601,7 @@ mod network_tests {
 
     #[test]
     fn test_progress_indicator_create() {
-        let progress = ProgressIndicator::new("Test", 100);
+        let _progress = ProgressIndicator::new("Test", 100);
         // Just verify it creates without panic
         assert!(true);
     }
@@ -1074,296 +872,622 @@ Content-Transfer-Encoding: quoted-printable\r\n\
     }
 }
 
-mod sort_apply_tests {
-    use email_to_markdown::sort_emails::{apply_report, EmailSummary, SortDetails, SortReport, SortSummary};
-    use std::collections::HashMap;
+mod route_tests {
+    use email_to_markdown::route::{
+        apply_decision, ai_route, join_safe_segments, move_email,
+        parse_destinations, route_email,
+        Destination, EmailMeta, MatchRule,
+    };
+    use chrono::DateTime;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn make_email_summary(file: &str, sender: &str) -> EmailSummary {
-        EmailSummary {
-            file: file.to_string(),
-            subject: "Test subject".to_string(),
-            sender: sender.to_string(),
-            date: "2024-01-01".to_string(),
-            score: 0,
-            email_type: "direct".to_string(),
-            size: 1000,
-            attachments: 0,
-            breakdown: vec![],
-            notes_destination: None,
-            classify_confidence: None,
-            classify_method: None,
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn make_meta(from: &str, domain: &str, subject: &str, account: &str, date_str: &str) -> EmailMeta {
+        EmailMeta {
+            from: from.to_string(),
+            domain: domain.to_string(),
+            subject: subject.to_string(),
+            account: account.to_string(),
+            date: DateTime::parse_from_rfc3339(date_str).expect("valid date"),
         }
     }
 
-    fn make_sort_report(base_directory: &str, entries: Vec<(&str, EmailSummary)>) -> SortReport {
-        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
-        for (category, summary) in entries {
-            categories.entry(category.to_string()).or_default().push(summary);
-        }
-        SortReport {
-            base_directory: base_directory.to_string(),
-            organize_by_type: false,
-            summary: SortSummary {
-                total_emails: 0,
-                categories: HashMap::new(),
-                recommendations: HashMap::new(),
-            },
-            details: SortDetails {
-                by_type: HashMap::new(),
-                by_sender: vec![],
-                by_date: HashMap::new(),
-            },
-            categories,
-        }
+    // --- join_safe_segments: migrated from sort_emails_tests ---
+
+    #[test]
+    fn test_join_safe_segments_nested_path() {
+        let root = PathBuf::from("/notes");
+        let joined = join_safe_segments(&root, "Travail/Projets/Client A").unwrap();
+        assert_eq!(joined, root.join("Travail").join("Projets").join("Client A"));
     }
 
     #[test]
-    fn test_apply_report_summarize() {
-        let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        fs::create_dir_all(&base).unwrap();
-        let md_file = base.join("test_email.md");
-        fs::write(&md_file, "---\nsubject: Test\n---\nBody").unwrap();
-
-        let report = make_sort_report(
-            &base.to_string_lossy(),
-            vec![("summarize", make_email_summary("test_email.md", "sender@example.com"))],
-        );
-
-        let stats = apply_report(&report, "_local", None).unwrap();
-
-        assert_eq!(stats.moved, 1);
-        assert_eq!(stats.deleted, 0);
-        assert_eq!(stats.skipped, 0);
-
-        // File should no longer be at original path
-        assert!(!md_file.exists(), "original file should have been moved");
-
-        // File should exist at _local/to-summarize/ destination
-        let dest = temp.path().join("_local").join("to-summarize").join("test_email.md");
-        assert!(dest.exists(), "file should exist at _local/to-summarize/ destination");
+    fn test_join_safe_segments_accented_segment_allowed() {
+        let root = PathBuf::from("/notes");
+        let joined = join_safe_segments(&root, "Été/Réunions").unwrap();
+        assert_eq!(joined, root.join("Été").join("Réunions"));
     }
 
     #[test]
-    fn test_apply_report_keep() {
-        let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        fs::create_dir_all(&base).unwrap();
-
-        let report = make_sort_report(
-            &base.to_string_lossy(),
-            vec![("keep", make_email_summary("some_email.md", "sender@example.com"))],
-        );
-
-        let stats = apply_report(&report, "_local", None).unwrap();
-
-        assert_eq!(stats.skipped, 1);
-        assert_eq!(stats.deleted, 0);
-        assert_eq!(stats.moved, 0);
+    fn test_join_safe_segments_empty_and_trim_segments_skipped() {
+        let root = PathBuf::from("/notes");
+        let joined = join_safe_segments(&root, "/Travail//Projets/ ").unwrap();
+        assert_eq!(joined, root.join("Travail").join("Projets"));
     }
 
     #[test]
-    fn test_apply_report_summarize_with_custom_folder() {
-        let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        fs::create_dir_all(&base).unwrap();
-        let md_file = base.join("test_email.md");
-        fs::write(&md_file, "---\nsubject: Test\n---\nBody").unwrap();
-
-        let report = make_sort_report(
-            &base.to_string_lossy(),
-            vec![("summarize", make_email_summary("test_email.md", "sender@example.com"))],
-        );
-
-        apply_report(&report, "_archive", None).unwrap();
-
-        // File should exist at _archive/to-summarize/ destination (custom folder)
-        let dest = temp.path().join("_archive").join("to-summarize").join("test_email.md");
-        assert!(dest.exists(), "file should exist at _archive/to-summarize/ destination");
-
-        // File must NOT exist at _local/to-summarize/ (wrong default folder)
-        let wrong_dest = temp.path().join("_local").join("to-summarize").join("test_email.md");
-        assert!(!wrong_dest.exists(), "file must not be placed under the default _local folder");
+    fn test_join_safe_segments_rejects_parent_traversal() {
+        let root = PathBuf::from("/notes");
+        let err = join_safe_segments(&root, "Travail/../etc").unwrap_err();
+        assert!(err.to_string().contains(".."));
     }
 
     #[test]
-    fn test_apply_report_missing_file() {
-        let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        fs::create_dir_all(&base).unwrap();
-
-        let report = make_sort_report(
-            &base.to_string_lossy(),
-            vec![("delete", make_email_summary("nonexistent.md", "sender@example.com"))],
-        );
-
-        // Missing files are silently skipped — deleted count stays 0
-        let stats = apply_report(&report, "_local", None).unwrap();
-        assert_eq!(stats.deleted, 0);
+    fn test_join_safe_segments_rejects_dot_segment() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/./Projets").is_err());
     }
 
     #[test]
-    fn test_apply_report_organize_by_type_moves_count() {
-        let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        fs::create_dir_all(&base).unwrap();
-        fs::write(base.join("email_test.md"), "---\nsubject: Test\n---\nBody").unwrap();
-        let mut summary = make_email_summary("email_test.md", "sender@example.com");
-        summary.email_type = "newsletter".to_string();
-        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
-        categories.insert("keep".to_string(), vec![summary]);
-        let report = SortReport {
-            base_directory: base.to_string_lossy().to_string(),
-            organize_by_type: true,
-            summary: SortSummary { total_emails: 1, categories: HashMap::new(), recommendations: HashMap::new() },
-            details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
-            categories,
-        };
-        let stats = apply_report(&report, "_local", None).unwrap();
-        assert_eq!(stats.moved, 1);
+    fn test_join_safe_segments_rejects_backslash() {
+        let root = PathBuf::from("/notes");
+        let err = join_safe_segments(&root, "Travail\\Projets").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Travail") || msg.contains("forbidden") || msg.contains("invalid"));
     }
 
     #[test]
-    fn test_apply_report_organize_by_type_moves_to_subfolder() {
-        let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        fs::create_dir_all(&base).unwrap();
-        fs::write(base.join("email_test.md"), "---\nsubject: Test\n---\nBody").unwrap();
-        let mut summary = make_email_summary("email_test.md", "sender@example.com");
-        summary.email_type = "newsletter".to_string();
-        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
-        categories.insert("keep".to_string(), vec![summary]);
-        let report = SortReport {
-            base_directory: base.to_string_lossy().to_string(),
-            organize_by_type: true,
-            summary: SortSummary { total_emails: 1, categories: HashMap::new(), recommendations: HashMap::new() },
-            details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
-            categories,
-        };
-        apply_report(&report, "_local", None).unwrap();
-        assert!(base.join("newsletter").join("email_test.md").exists());
+    fn test_join_safe_segments_rejects_forbidden_characters() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/Projets:Secrets").is_err());
+        assert!(join_safe_segments(&root, "Travail/Projets*").is_err());
     }
 
-    #[test]
-    fn test_apply_report_organize_by_type_already_in_subfolder_skipped() {
-        let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        let newsletter_dir = base.join("newsletter");
-        fs::create_dir_all(&newsletter_dir).unwrap();
-        fs::write(newsletter_dir.join("email_test.md"), "---\nsubject: Test\n---\nBody").unwrap();
-        let mut summary = make_email_summary("newsletter/email_test.md", "sender@example.com");
-        summary.email_type = "newsletter".to_string();
-        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
-        categories.insert("keep".to_string(), vec![summary]);
-        let report = SortReport {
-            base_directory: base.to_string_lossy().to_string(),
-            organize_by_type: true,
-            summary: SortSummary { total_emails: 1, categories: HashMap::new(), recommendations: HashMap::new() },
-            details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
-            categories,
-        };
-        let stats = apply_report(&report, "_local", None).unwrap();
-        assert_eq!(stats.skipped, 1);
-    }
+    // --- move_email: .md + _attachments/ dir moved and paths rewritten ---
 
     #[test]
-    fn test_apply_report_organize_by_type_already_in_subfolder_location() {
+    fn test_move_email_moves_md_and_attachments_dir() {
         let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        let newsletter_dir = base.join("newsletter");
-        fs::create_dir_all(&newsletter_dir).unwrap();
-        fs::write(newsletter_dir.join("email_test.md"), "---\nsubject: Test\n---\nBody").unwrap();
-        let mut summary = make_email_summary("newsletter/email_test.md", "sender@example.com");
-        summary.email_type = "newsletter".to_string();
-        let mut categories: HashMap<String, Vec<EmailSummary>> = HashMap::new();
-        categories.insert("keep".to_string(), vec![summary]);
-        let report = SortReport {
-            base_directory: base.to_string_lossy().to_string(),
-            organize_by_type: true,
-            summary: SortSummary { total_emails: 1, categories: HashMap::new(), recommendations: HashMap::new() },
-            details: SortDetails { by_type: HashMap::new(), by_sender: vec![], by_date: HashMap::new() },
-            categories,
-        };
-        apply_report(&report, "_local", None).unwrap();
-        assert!(newsletter_dir.join("email_test.md").exists());
-    }
+        let src_dir = temp.path().join("staging");
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
 
-    #[test]
-    fn test_apply_report_summarize_routes_to_notes_destination() {
-        let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        fs::create_dir_all(&base).unwrap();
-        let md_file = base.join("a.md");
-        fs::write(&md_file, "---\nsubject: A\n---\nBody").unwrap();
+        // Create the .md file with an attachments block
+        let md_src = src_dir.join("email.md");
+        let attachments_dir_src = src_dir.join("email_attachments");
+        fs::create_dir_all(&attachments_dir_src).unwrap();
+        fs::write(attachments_dir_src.join("file.pdf"), b"PDF content").unwrap();
 
-        let notes_root = temp.path().join("notes");
-        fs::create_dir_all(&notes_root).unwrap();
+        let md_content = "---\nsubject: Test\nattachments:\n  - email_attachments/file.pdf\n---\nBody text\n";
+        fs::write(&md_src, md_content).unwrap();
 
-        let mut summary = make_email_summary("a.md", "x@y");
-        summary.notes_destination = Some("Travail/Projets/ClientX".to_string());
+        // Act
+        move_email(&md_src, &dst_dir).unwrap();
 
-        let report = make_sort_report(
-            &base.to_string_lossy(),
-            vec![("summarize", summary)],
-        );
+        // Inclusive: new paths exist
+        let md_dest = dst_dir.join("email.md");
+        let attachments_dir_dest = dst_dir.join("email_attachments");
+        assert!(md_dest.exists(), "moved .md must exist at dest");
+        assert!(attachments_dir_dest.exists(), "moved _attachments/ dir must exist at dest");
+        assert!(attachments_dir_dest.join("file.pdf").exists(), "attachment file must exist in dest dir");
 
-        apply_report(&report, "_local", Some(&notes_root)).unwrap();
+        // Exclusive: old paths no longer exist
+        assert!(!md_src.exists(), "original .md must not remain at src");
+        assert!(!attachments_dir_src.exists(), "original _attachments/ dir must not remain at src");
 
-        let dest = notes_root.join("Travail").join("Projets").join("ClientX").join("a.md");
-        assert!(dest.exists(), "file should land under notes_dir/<dest>/");
-        let wrong = temp.path().join("_local").join("to-summarize").join("a.md");
-        assert!(!wrong.exists(), "must not fall back to to-summarize when notes_destination is set");
-    }
-
-    #[test]
-    fn test_apply_report_rejects_path_traversal_in_destination() {
-        let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        fs::create_dir_all(&base).unwrap();
-        let md_file = base.join("a.md");
-        fs::write(&md_file, "---\nsubject: A\n---\nBody").unwrap();
-
-        let notes_root = temp.path().join("notes");
-        fs::create_dir_all(&notes_root).unwrap();
-
-        let mut summary = make_email_summary("a.md", "x@y");
-        summary.notes_destination = Some("Travail/../../escape".to_string());
-
-        let report = make_sort_report(
-            &base.to_string_lossy(),
-            vec![("summarize", summary)],
-        );
-
-        let result = apply_report(&report, "_local", Some(&notes_root));
-        assert!(result.is_err(), "path traversal must be rejected");
-        let msg = format!("{:#}", result.err().unwrap());
+        // Inclusive: attachment path updated in moved .md
+        let new_content = fs::read_to_string(&md_dest).unwrap();
         assert!(
-            msg.contains("invalid path segment") || msg.contains("forbidden"),
-            "unexpected error: {}",
-            msg
+            new_content.contains("email_attachments/file.pdf"),
+            "moved .md must reference the co-located attachments dir"
+        );
+        // Exclusive: no stale relative path pointing back to src
+        assert!(
+            !new_content.contains("../staging/"),
+            "moved .md must not contain a path pointing back to staging dir"
         );
     }
 
     #[test]
-    fn test_apply_report_summarize_falls_back_to_to_summarize_without_notes_dir() {
+    fn test_move_email_without_attachments_dir() {
         let temp = TempDir::new().unwrap();
-        let base = temp.path().join("emails");
-        fs::create_dir_all(&base).unwrap();
-        fs::write(base.join("a.md"), "---\nsubject: A\n---\nBody").unwrap();
+        let src_dir = temp.path().join("staging");
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
 
-        let mut summary = make_email_summary("a.md", "x@y");
-        // destination set but no notes_dir → must still fall back
-        summary.notes_destination = Some("Travail/Projets/Client".to_string());
+        let md_src = src_dir.join("plain.md");
+        fs::write(&md_src, "---\nsubject: Plain\n---\nNo attachments\n").unwrap();
 
-        let report = make_sort_report(
-            &base.to_string_lossy(),
-            vec![("summarize", summary)],
+        move_email(&md_src, &dst_dir).unwrap();
+
+        // Inclusive: .md moved
+        assert!(dst_dir.join("plain.md").exists(), "moved .md must exist at dest");
+        // Exclusive: original gone
+        assert!(!md_src.exists(), "original .md must not remain at src");
+        // Exclusive: no spurious _attachments dir created
+        assert!(
+            !dst_dir.join("plain_attachments").exists(),
+            "no _attachments dir must be created when there was none"
+        );
+    }
+
+    #[test]
+    fn test_move_email_rejects_symlink() {
+        let temp = TempDir::new().unwrap();
+        let real_file = temp.path().join("real.md");
+        fs::write(&real_file, "---\nsubject: Real\n---\n").unwrap();
+
+        let symlink_path = temp.path().join("link.md");
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        // Creating symlinks on Windows may require elevated privileges.
+        // Guard: attempt to create the symlink; if it fails with a permission error,
+        // skip the test rather than fail (but the production guard is still in place).
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::symlink_file;
+            match symlink_file(&real_file, &symlink_path) {
+                Ok(()) => {
+                    let result = move_email(&symlink_path, &dst_dir);
+                    assert!(result.is_err(), "move_email must refuse a symlink source");
+                    let msg = result.unwrap_err().to_string();
+                    assert!(
+                        msg.contains("symlink") || msg.contains("link.md"),
+                        "error must mention symlink: {msg}"
+                    );
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    // Symlink creation requires elevated privileges on this Windows build.
+                    // Skip gracefully — the production guard is still present in move_email.
+                    eprintln!("Skipping symlink test: insufficient privileges ({e})");
+                }
+                Err(e) => panic!("unexpected error creating symlink: {e}"),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
+            let result = move_email(&symlink_path, &dst_dir);
+            assert!(result.is_err(), "move_email must refuse a symlink source");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("symlink") || msg.contains("link.md"),
+                "error must mention symlink: {msg}"
+            );
+        }
+    }
+
+    // ── parse_destinations ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_destinations_ok() {
+        let content = r#"
+Perso/Finance/Banque | domain:credit-agricole.fr, from:noreply@ca.fr
+Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
+"#;
+        let dests = parse_destinations(content).unwrap();
+        // Inclusive: both entries parsed
+        assert_eq!(dests.len(), 2);
+        assert_eq!(dests[0].path, "Perso/Finance/Banque");
+        assert!(dests[0].rules.contains(&MatchRule::Domain("credit-agricole.fr".to_string())));
+        assert!(dests[0].rules.contains(&MatchRule::From("noreply@ca.fr".to_string())));
+        assert_eq!(dests[1].path, "Pro/Clients/Acme");
+        // Exclusive: no spurious rules
+        assert!(!dests[0].rules.contains(&MatchRule::Subject("Invoice".to_string())));
+        assert!(!dests[1].is_default);
+    }
+
+    #[test]
+    fn test_parse_destinations_comments_and_empty_lines_skipped() {
+        let content = "# This is a comment\n\nPerso/Inbox | domain:example.com\n# another comment\n";
+        let dests = parse_destinations(content).unwrap();
+        // Inclusive: only the real entry
+        assert_eq!(dests.len(), 1);
+        assert_eq!(dests[0].path, "Perso/Inbox");
+        // Exclusive: no comment or empty entries
+        assert!(!dests.iter().any(|d| d.path.starts_with('#')));
+        assert!(!dests.iter().any(|d| d.path.is_empty()));
+    }
+
+    #[test]
+    fn test_parse_destinations_single_default_ok() {
+        let content = "Perso/Messy/Emails | default\n";
+        let dests = parse_destinations(content).unwrap();
+        assert_eq!(dests.len(), 1);
+        assert!(dests[0].is_default);
+        // Exclusive: no rules besides the default flag
+        assert!(dests[0].rules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_destinations_duplicate_default_is_error() {
+        let content = "Perso/Messy/Emails | default\nPerso/Misc | default\n";
+        let result = parse_destinations(content);
+        // Inclusive: error returned
+        assert!(result.is_err(), "duplicate default must be a hard error");
+        let msg = format!("{:#}", result.unwrap_err());
+        // Inclusive: message mentions the constraint
+        assert!(
+            msg.contains("default") || msg.contains("more than one"),
+            "error message should mention 'default': {msg}"
+        );
+        // Exclusive: not a parse-skip warning disguised as success
+        // (already ensured by the is_err() check above)
+    }
+
+    // ── route_email — domain matching ────────────────────────────────────────
+
+    #[test]
+    fn test_route_email_matches_domain_exact() {
+        let content = "Perso/Finance/Banque | domain:acme.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta("alice@acme.com", "acme.com", "Hello", "personal", "2026-06-15T10:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: path starts with expected dir
+        assert!(decision.rel_path.starts_with("Perso/Finance/Banque/"), "got: {}", decision.rel_path);
+        assert!(!decision.is_default);
+        // Exclusive: not the default fallback
+        assert!(!decision.rel_path.starts_with("Perso/Messy"));
+    }
+
+    #[test]
+    fn test_route_email_domain_suffix_matches_subdomain() {
+        let content = "Perso/Finance/Banque | domain:acme.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta("bob@mail.acme.com", "mail.acme.com", "Hello", "personal", "2026-06-15T10:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: subdomain "mail.acme.com" matches rule "acme.com"
+        assert!(decision.rel_path.starts_with("Perso/Finance/Banque/"), "got: {}", decision.rel_path);
+        assert!(!decision.is_default);
+    }
+
+    #[test]
+    fn test_route_email_domain_no_false_suffix_match() {
+        let content = "Perso/Finance/Banque | domain:acme.com\n";
+        let dests = parse_destinations(content).unwrap();
+        // "notacme.com" must NOT match rule "acme.com"
+        let meta = make_meta("evil@notacme.com", "notacme.com", "Hello", "personal", "2026-06-15T10:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: falls to default
+        assert!(decision.is_default, "notacme.com must not match acme.com rule");
+        // Exclusive: not routed to the finance folder
+        assert!(!decision.rel_path.starts_with("Perso/Finance"));
+    }
+
+    // ── route_email — from matching ──────────────────────────────────────────
+
+    #[test]
+    fn test_route_email_matches_from_case_insensitive() {
+        let content = "Pro/Clients/X | from:BILLING@ACME.COM\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta("billing@acme.com", "acme.com", "Invoice", "work", "2026-03-01T00:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: from rule matched despite case difference
+        assert!(decision.rel_path.starts_with("Pro/Clients/X/"), "got: {}", decision.rel_path);
+        assert!(!decision.is_default);
+        // Exclusive: not default path
+        assert!(!decision.rel_path.contains("Messy"));
+    }
+
+    // ── route_email — subject matching ───────────────────────────────────────
+
+    #[test]
+    fn test_route_email_matches_subject_substring() {
+        let content = "Perso/Shopping | subject:invoice\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta("shop@store.com", "store.com", "Your Invoice #123", "personal", "2026-01-05T00:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: substring "invoice" found case-insensitively in "Your Invoice #123"
+        assert!(decision.rel_path.starts_with("Perso/Shopping/"), "got: {}", decision.rel_path);
+        assert!(!decision.is_default);
+    }
+
+    #[test]
+    fn test_route_email_subject_no_match_on_different_keyword() {
+        let content = "Perso/Shopping | subject:invoice\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta("shop@store.com", "store.com", "Hello world", "personal", "2026-01-05T00:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: subject "Hello world" does not contain "invoice" → falls to default
+        assert!(decision.is_default, "non-matching subject must fall to default");
+        // Exclusive: not routed to Shopping
+        assert!(!decision.rel_path.starts_with("Perso/Shopping"));
+    }
+
+    // ── route_email — account matching ───────────────────────────────────────
+
+    #[test]
+    fn test_route_email_matches_account() {
+        let content = "Pro/Work | account:work@corp.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta("sender@any.com", "any.com", "Hello", "work@corp.com", "2026-04-10T00:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: account rule matched
+        assert!(decision.rel_path.starts_with("Pro/Work/"), "got: {}", decision.rel_path);
+        assert!(!decision.is_default);
+    }
+
+    // ── route_email — Perso/Pro polarity ─────────────────────────────────────
+
+    #[test]
+    fn test_route_email_perso_default_polarity() {
+        // No rule matches → default → Perso
+        let dests: Vec<Destination> = vec![];
+        let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-05-20T00:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: starts with Perso
+        assert!(decision.rel_path.starts_with("Perso/"), "default must start with Perso, got: {}", decision.rel_path);
+        assert!(decision.is_default);
+    }
+
+    #[test]
+    fn test_route_email_pro_forced_by_first_segment() {
+        let content = "Pro/Contracts | domain:corp.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta("legal@corp.com", "corp.com", "Contract", "work", "2026-02-14T00:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: first segment is Pro
+        assert!(decision.rel_path.starts_with("Pro/"), "matched rule must start with Pro, got: {}", decision.rel_path);
+        assert!(!decision.is_default);
+        // Exclusive: not Perso
+        assert!(!decision.rel_path.starts_with("Perso/"));
+    }
+
+    // ── route_email — year/month append ──────────────────────────────────────
+
+    #[test]
+    fn test_route_email_appends_year_month() {
+        let content = "Perso/Finance | domain:bank.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta("noreply@bank.com", "bank.com", "Statement", "personal", "2026-03-15T00:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: ends with 2026/03
+        assert!(decision.rel_path.ends_with("2026/03"), "expected year/month suffix, got: {}", decision.rel_path);
+        // Exclusive: no wrong format (not "2026/3" or double slash)
+        assert!(!decision.rel_path.contains("2026/3/"), "month must be zero-padded, got: {}", decision.rel_path);
+        assert!(!decision.rel_path.contains("//"), "no double slash, got: {}", decision.rel_path);
+    }
+
+    #[test]
+    fn test_route_email_default_appends_year_month() {
+        let dests: Vec<Destination> = vec![];
+        let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-11-30T00:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: path ends with 2026/11
+        assert!(decision.rel_path.ends_with("2026/11"), "got: {}", decision.rel_path);
+        // Exclusive: not "2026/1" (not zero-padded)
+        assert!(!decision.rel_path.ends_with("2026/1"), "month must be 2 digits");
+    }
+
+    // ── route_email — path outside destinations.txt → default ────────────────
+
+    #[test]
+    fn test_route_email_unknown_domain_falls_to_default() {
+        let content = "Perso/Finance/Banque | domain:bank.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta("x@unknown.org", "unknown.org", "Hi", "acc", "2026-06-01T00:00:00+00:00");
+        let decision = route_email(&meta, &dests);
+        // Inclusive: is_default flag set
+        assert!(decision.is_default, "unknown domain must fall to default");
+        // Exclusive: not routed to a known destination
+        assert!(!decision.rel_path.starts_with("Perso/Finance"));
+    }
+
+    // ── AI off → default ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ai_route_off_returns_none() {
+        let dests: Vec<Destination> = vec![];
+        let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-06-01T00:00:00+00:00");
+        // AI disabled: must return None regardless of input
+        let result = ai_route(&meta, &dests, false, 0.7);
+        assert!(result.is_none(), "ai_route must return None when disabled");
+    }
+
+    #[test]
+    fn test_ai_route_on_returns_none_for_now() {
+        // Even when enabled, the M5 no-op returns None (future work).
+        let dests: Vec<Destination> = vec![];
+        let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-06-01T00:00:00+00:00");
+        let result = ai_route(&meta, &dests, true, 0.7);
+        // Inclusive: no crash
+        // (returns None because AI is not yet implemented — no exclusive assertion needed)
+        assert!(result.is_none(), "ai_route no-op must return None");
+    }
+
+    // ── apply_decision — creates missing dir and moves ────────────────────────
+
+    #[test]
+    fn test_apply_decision_creates_dir_and_moves() {
+        let temp = TempDir::new().unwrap();
+        let notes_dir = temp.path().join("notes");
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        // notes_dir intentionally NOT created — apply_decision must create it.
+        let md_src = staging.join("email.md");
+        fs::write(&md_src, "---\nsubject: Test\n---\nBody\n").unwrap();
+
+        let rel_path = "Perso/Finance/Banque/2026/06";
+        apply_decision(&md_src, rel_path, &notes_dir).unwrap();
+
+        let expected_dir = notes_dir.join("Perso").join("Finance").join("Banque").join("2026").join("06");
+        let expected_md = expected_dir.join("email.md");
+
+        // Inclusive: directory created and file moved
+        assert!(expected_dir.exists(), "target directory must be created");
+        assert!(expected_md.exists(), "moved .md must exist at target");
+        // Exclusive: original no longer at staging
+        assert!(!md_src.exists(), "original .md must not remain at staging");
+    }
+
+    #[test]
+    fn test_apply_decision_rejects_path_traversal() {
+        let temp = TempDir::new().unwrap();
+        let notes_dir = temp.path().join("notes");
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        let md_src = staging.join("email.md");
+        fs::write(&md_src, "---\nsubject: Test\n---\nBody\n").unwrap();
+
+        // Path traversal via ".."
+        let result = apply_decision(&md_src, "Perso/../../etc/passwd", &notes_dir);
+        // Inclusive: error returned
+        assert!(result.is_err(), "path traversal must be rejected");
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            msg.contains("..") || msg.contains("invalid"),
+            "error must mention the bad segment: {msg}"
+        );
+        // Exclusive: original file not moved
+        assert!(md_src.exists(), "original file must remain when apply is rejected");
+    }
+
+    // ── M7: route review window — apply-layer validator (IPC contract) ───────
+    // These tests exercise the same join_safe_segments + apply_decision path that
+    // apply_route_decisions (tray IPC handler) delegates to.  No WebView needed.
+
+    /// A dest_path value containing ".." (as would arrive from the HTML IPC)
+    /// must be rejected by join_safe_segments, not applied.
+    #[test]
+    fn test_route_review_rejects_dotdot_dest_path() {
+        let result = join_safe_segments(&PathBuf::from("/notes"), "../etc/passwd");
+        assert!(result.is_err(), "'..' in dest_path must be rejected");
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            msg.contains("..") || msg.contains("invalid"),
+            "error must describe the bad segment: {msg}"
+        );
+    }
+
+    /// A dest_path value containing a backslash must be rejected.
+    #[test]
+    fn test_route_review_rejects_backslash_dest_path() {
+        let result = join_safe_segments(&PathBuf::from("/notes"), r"Perso\Windows\Path");
+        assert!(result.is_err(), "backslash in dest_path must be rejected");
+    }
+
+    // ── route_email — file order priority (multi-destination) ────────────────
+    //
+    // The router evaluates destinations in the order they appear in destinations.txt.
+    // There is NO priority hierarchy between rule types (Domain / From / Subject /
+    // Account). The first destination whose first matching rule fires wins.
+
+    /// When two destinations could both match the same email, the one listed FIRST in
+    /// destinations.txt must win, regardless of rule type.
+    #[test]
+    fn test_route_email_first_destination_in_file_wins_over_second() {
+        // dest-A is listed first and matches via `from:`
+        // dest-B is listed second and would also match via `domain:`
+        // Expected: dest-A wins because it appears first.
+        let content =
+            "Perso/First | from:sender@acme.com\nPerso/Second | domain:acme.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta(
+            "sender@acme.com",
+            "acme.com",
+            "Hello",
+            "acc",
+            "2026-06-01T00:00:00+00:00",
         );
 
-        apply_report(&report, "_local", None).unwrap();
-        let fallback = temp.path().join("_local").join("to-summarize").join("a.md");
-        assert!(fallback.exists(), "must fall back to to-summarize when notes_dir is absent");
+        let decision = route_email(&meta, &dests);
+
+        // Inclusive: first destination matched
+        assert!(
+            decision.rel_path.starts_with("Perso/First/"),
+            "first destination must win; got: {}",
+            decision.rel_path
+        );
+        assert!(!decision.is_default);
+        // Exclusive: second destination must NOT be returned
+        assert!(
+            !decision.rel_path.starts_with("Perso/Second"),
+            "second destination must not be returned when first matched; got: {}",
+            decision.rel_path
+        );
+    }
+
+    /// Reversing the order in destinations.txt must reverse the winner — proving that
+    /// file order, not rule type, determines priority.
+    #[test]
+    fn test_route_email_file_order_reversed_changes_winner() {
+        // Same two destinations as above, but listed in opposite order.
+        // Now dest-B (domain:) is first → it must win over dest-A (from:).
+        let content =
+            "Perso/Second | domain:acme.com\nPerso/First | from:sender@acme.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta(
+            "sender@acme.com",
+            "acme.com",
+            "Hello",
+            "acc",
+            "2026-06-01T00:00:00+00:00",
+        );
+
+        let decision = route_email(&meta, &dests);
+
+        // Inclusive: the destination that is now first in file wins
+        assert!(
+            decision.rel_path.starts_with("Perso/Second/"),
+            "reversed order: 'Second' destination must now win; got: {}",
+            decision.rel_path
+        );
+        assert!(!decision.is_default);
+        // Exclusive: the other destination must not be returned
+        assert!(
+            !decision.rel_path.starts_with("Perso/First"),
+            "reversed order: 'First' destination must not be returned; got: {}",
+            decision.rel_path
+        );
+    }
+
+    /// A free-typed new path (not in destinations.txt) is accepted by apply_decision,
+    /// the directory is created, and the .md is moved.
+    /// destinations.txt must NOT be modified (D10).
+    #[test]
+    fn test_route_review_new_free_path_created_destinations_not_modified() {
+        let temp = TempDir::new().unwrap();
+        let notes_dir = temp.path().join("notes");
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+
+        // Write a minimal destinations.txt — the new path is NOT listed.
+        let destinations_txt = temp.path().join("destinations.txt");
+        let original_content = "Perso/Finance/Banque | domain:bank.com\n";
+        fs::write(&destinations_txt, original_content).unwrap();
+
+        let md_src = staging.join("invoice.md");
+        fs::write(&md_src, "---\nsubject: Free path test\n---\nBody\n").unwrap();
+
+        // Free-typed path not in destinations.txt — apply_decision must still work (D10).
+        let free_path = "Perso/NewCategory/FreeSubcat/2026/06";
+        apply_decision(&md_src, free_path, &notes_dir).unwrap();
+
+        let expected_md = notes_dir
+            .join("Perso").join("NewCategory").join("FreeSubcat")
+            .join("2026").join("06").join("invoice.md");
+
+        // Inclusive: file is at the new location
+        assert!(expected_md.exists(), "md must be moved to the new free path");
+        // Exclusive: original not at staging
+        assert!(!md_src.exists(), "original .md must not remain in staging");
+
+        // D10: destinations.txt must NOT have been modified
+        let after_content = fs::read_to_string(&destinations_txt).unwrap();
+        assert_eq!(
+            after_content, original_content,
+            "destinations.txt must not be modified when a free path is used (D10)"
+        );
+        // Exclusive: no new line for the free path
+        assert!(
+            !after_content.contains("NewCategory"),
+            "free path must not be written to destinations.txt (D10)"
+        );
     }
 }

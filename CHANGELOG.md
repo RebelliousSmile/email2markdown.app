@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Nouveau module `route.rs` : routage déterministe des emails vers un arbre « second cerveau » défini dans `destinations.txt`. Règles de correspondance par `domain:`, `from:`, `subject:`, `account:` (insensible à la casse) ; append automatique `<Année>/<Mois>` ; défaut `Perso/Messy/Emails/<Année>/<Mois>` si aucune règle ne correspond.
+- `destinations.txt` : format plat, une ligne = un chemin de destination, attributs de règle séparés par `|`. Au plus une ligne `default` — doublon = erreur fatale au parsing. Chemins listés mais absents du disque créés automatiquement (`mkdir -p`) à l'apply.
+- `join_safe_segments` (extrait de `sort_emails.rs`) : protection anti-path-traversal — rejette `..`, `.`, `\` et les caractères hors `[A-Za-z0-9À-ſ _.\-]`.
+- `move_email` : déplace le fichier `.md` **et** son répertoire `<stem>_attachments/` ensemble vers la destination, puis réécrit les chemins d'attachements dans le frontmatter YAML.
+- `apply_decision` : apply direct hors GUI — utilisé par la commande CLI en mode automatique.
+- Fenêtre de revue du routage (tray, `assets/route_review.html`) : colonnes Sujet / Expéditeur / Date / Chemin proposé / Défaut ? ; table triable ; réaffectation par autocomplétion depuis `destinations.txt` ou saisie libre d'un chemin nouveau ; validation `join_safe_segments` côté Rust avant tout déplacement. Aucun fichier n'est déplacé avant le clic Appliquer.
+- Paramètre `notes_dir` (existant) documenté comme **racine du second cerveau** — les chemins de `destinations.txt` y sont joints.
+- Paramètres `destinations_file` (chemin vers `destinations.txt`), `ai_routing_enabled` (défaut `false`), `ai_confidence_threshold` (défaut `0.7`) dans `settings.yaml`.
+- Routage câblé dans la commande `export` : `destinations.txt` parsé **une seule fois** par `export_account`, `RouteDecision` calculée par email, apply automatique en CLI ou revue GUI.
+
+### Fixed
+
+- Documentation de `route_email` corrigée : la priorité de routage n'est **pas** hiérarchisée par type de règle (`Domain` > `From` > `Subject` > `Account`). La règle réelle est : les destinations sont évaluées dans l'ordre du fichier `destinations.txt` (première destination = priorité haute) ; au sein d'une destination, les règles sont évaluées dans l'ordre de déclaration sur la ligne. Le premier match gagne, quel que soit le type de règle.
+
+### Removed
+
+- Commandes `fix` (correction YAML Python), `sort` et `sort-apply` (catégorisation delete/summarize/keep) — supprimées ; l'application ne conserve que `import`, `export`, `tray`.
+- Modules `fix_yaml.rs`, `sort_emails.rs`, `summarize.rs`, `notes_review.rs` entièrement retirés.
+- Menus tray « Trier emails », « Résumer (Python) » et « Organiser les notes » supprimés.
+- Champs `SortConfig`, `is_whitelisted`, `sort_config_path`, `python_venv_path`, `tools_dir`, `resolve_tools_*` retirés de `config.rs`.
+- Asset `sort_review.html` remplacé par `route_review.html`.
+- Pipeline Python `tools/` archivé dans un dépôt séparé — hors périmètre de cette application.
+
+### Tests
+
+- 30 tests `route_tests` : parsing `destinations.txt`, correspondance par domain/from/subject/account, défaut Perso, Pro forcé, append year/month, chemin hors fichier → défaut, IA off → défaut, `join_safe_segments` (rejet `..`/`.`/`\`/caractères interdits), `move_email` (déplacement `.md` + `_attachments/`, réécriture chemins, rejet symlink), `apply_decision` (création dossier manquant + déplacement).
+- Delta tests M1→M8 : 326 → 273 (−53 : suppression des tests des modules retirés, +30 `route_tests`).
+
 ## [0.10.0] - 2026-05-12
 
 ### Added

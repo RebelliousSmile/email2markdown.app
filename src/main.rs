@@ -2,12 +2,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
-use email_to_markdown::config::{self, Config, Settings, SortConfig};
-use email_to_markdown::email_export::{fix_html_bodies, ImapExporter};
-use email_to_markdown::fix_yaml;
-use email_to_markdown::sort_emails::{apply_report, review_report, EmailSorter, SortReport};
-use email_to_markdown::summarize;
-use std::fs;
+use email_to_markdown::config::{self, Config, Settings};
+use email_to_markdown::email_export::ImapExporter;
+use email_to_markdown::route;
 use email_to_markdown::thunderbird;  // [1] Import Thunderbird
 
 #[cfg(feature = "tray")]
@@ -74,86 +71,6 @@ enum Commands {
         /// Enable debug mode (verbose IMAP output)
         #[arg(short, long)]
         debug: bool,
-    },
-
-    /// Fix malformed YAML in email files
-    Fix {
-        /// Directory containing email files to fix
-        directory: Option<PathBuf>,
-
-        /// Fix for a specific account (resolves directory automatically)
-        #[arg(short, long)]
-        account: Option<String>,
-
-        /// Convert raw HTML bodies to Markdown in existing .md files
-        #[arg(long)]
-        html_bodies: bool,
-
-        /// Scan only, show what would be fixed
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Actually fix the files (default is dry-run)
-        #[arg(long)]
-        apply: bool,
-    },
-
-    /// Sort emails into categories (delete/summarize/keep)
-    Sort {
-        /// Directory containing email markdown files
-        directory: Option<PathBuf>,
-
-        /// Sort emails for a specific account from accounts.yaml
-        #[arg(short, long)]
-        account: Option<String>,
-
-        /// Config file for sorting rules
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-
-        /// Output report file name
-        #[arg(short, long, default_value = "sort_report.json")]
-        report: String,
-
-        /// Show detailed output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Simulate sorting without creating reports
-        #[arg(long)]
-        dry_run: bool,
-
-        /// List available accounts from accounts.yaml
-        #[arg(long)]
-        list_accounts: bool,
-
-        /// Create a default configuration file
-        #[arg(long)]
-        create_config: bool,
-    },
-
-    /// Apply sorting decisions from a sort report
-    SortApply {
-        /// Path to sort report JSON file
-        #[arg(short, long, default_value = "sort_report.json")]
-        report: String,
-        /// Print resolved paths and per-email actions
-        #[arg(short, long)]
-        verbose: bool,
-        /// Preview actions without executing (no trash, no move)
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Run Python summarize pipeline on an account's export directory
-    Summarize {
-        /// Run only for specific account(s) — comma separated
-        #[arg(short, long)]
-        account: Option<String>,
-
-        /// List available accounts
-        #[arg(long)]
-        list_accounts: bool,
     },
 
     /// Run as system tray application (requires --features tray)
@@ -375,7 +292,7 @@ fn main() -> Result<()> {
                 match exporter.connect() {
                     Ok(_) => {
                         match exporter.export_account(None, None, None) {
-                            Ok(results) => {
+                            Ok((results, decisions)) => {
                                 let total_exported: usize = results.values().map(|s| s.exported).sum();
                                 let total_skipped: usize = results.values().map(|s| s.skipped).sum();
                                 let total_errors: usize = results.values().map(|s| s.errors).sum();
@@ -384,6 +301,42 @@ fn main() -> Result<()> {
                                     "\nExport completed for {}: {} exported, {} skipped, {} errors",
                                     account.name, total_exported, total_skipped, total_errors
                                 );
+
+                                // CLI mode (D8): apply routing decisions automatically, no review.
+                                // Pipeline order: Export → route decisions accumulated above → apply now.
+                                // IMAP deletion flags were set during Export; local .md files remain
+                                // in staging until this apply step moves them into notes_dir.
+                                let settings = Settings::load(&config::settings_path())
+                                    .unwrap_or_default();
+                                if let Some(notes_dir_str) = &settings.notes_dir {
+                                    let notes_dir = PathBuf::from(notes_dir_str);
+                                    let mut moved = 0usize;
+                                    let mut apply_errors = 0usize;
+                                    for (staging_path, decision) in &decisions {
+                                        match route::apply_decision(staging_path, &decision.rel_path, &notes_dir) {
+                                            Ok(()) => moved += 1,
+                                            Err(e) => {
+                                                apply_errors += 1;
+                                                eprintln!(
+                                                    "Warning: could not route {}: {:#}",
+                                                    staging_path.display(), e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if !decisions.is_empty() {
+                                        println!(
+                                            "Routing: {} moved to notes_dir, {} errors",
+                                            moved, apply_errors
+                                        );
+                                    }
+                                } else if !decisions.is_empty() {
+                                    println!(
+                                        "Note: notes_dir not configured in settings.yaml — \
+                                         {} emails remain in staging (not routed)",
+                                        decisions.len()
+                                    );
+                                }
                             }
                             Err(e) => {
                                 println!("Export failed for {}: {}", account.name, e);
@@ -398,280 +351,6 @@ fn main() -> Result<()> {
                         println!("Connection failed for {}: {}", account.name, e);
                     }
                 }
-            }
-        }
-
-        Commands::Fix {
-            directory,
-            account,
-            html_bodies,
-            dry_run,
-            apply,
-        } => {
-            // Resolve directory from --account or positional argument
-            let resolved_dir: PathBuf = if let Some(ref account_name) = account {
-                let accounts_config = Config::load(&config::accounts_yaml_path())
-                    .context("failed to load accounts config")?;
-                let acc = accounts_config
-                    .get_account(account_name)
-                    .with_context(|| format!("account '{}' not found", account_name))?;
-                PathBuf::from(&acc.export_directory)
-            } else if let Some(dir) = directory {
-                dir
-            } else {
-                println!("Error: provide a directory or --account <name>");
-                return Ok(());
-            };
-
-            if !resolved_dir.exists() {
-                println!("Directory not found: {}", resolved_dir.display());
-                return Ok(());
-            }
-
-            let is_dry_run = !apply || dry_run;
-
-            if html_bodies {
-                println!("{}Converting HTML bodies in: {}", if is_dry_run { "[dry-run] " } else { "" }, resolved_dir.display());
-                let stats = fix_html_bodies(&resolved_dir, is_dry_run, None)
-                    .context("failed to fix html bodies")?;
-                println!("Fixed: {} | Skipped: {} | Errors: {}", stats.fixed, stats.skipped, stats.errors);
-            } else {
-                println!("Scanning for malformed email files in: {}", resolved_dir.display());
-                let stats = fix_yaml::scan_and_fix_directory(&resolved_dir, is_dry_run, None)?;
-                fix_yaml::print_summary(&stats, is_dry_run);
-            }
-        }
-
-        Commands::Sort {
-            directory,
-            account,
-            config,
-            report,
-            verbose,
-            dry_run,
-            list_accounts,
-            create_config,
-        } => {
-            if create_config {
-                let config_path = config.unwrap_or_else(config::sort_config_path);
-                let sort_config = SortConfig::default();
-                sort_config.save(&config_path)?;
-                println!("Configuration file created: {}", config_path.display());
-                println!("\nTip: You can override sort config per-account in settings.yaml:");
-                println!("  accounts:");
-                println!("    myaccount@example.com:");
-                println!("      sort:");
-                println!("        delete_newsletters: true");
-                println!("        penalize_recurring: true");
-                return Ok(());
-            }
-
-            if list_accounts {
-                let accounts_config = Config::load(&config::accounts_yaml_path());
-                if let Ok(cfg) = accounts_config {
-                    println!("Available accounts from accounts.yaml:");
-                    for (i, acc) in cfg.accounts.iter().enumerate() {
-                        println!(
-                            "   {}. {} -> {}",
-                            i + 1,
-                            acc.name,
-                            acc.export_directory
-                        );
-                    }
-                } else {
-                    println!("No accounts found in accounts.yaml");
-                }
-                return Ok(());
-            }
-
-            // Determine directory to sort and per-account override
-            let mut per_account_sort: Option<SortConfig> = None;
-            let mut account_organize_by_type: Option<bool> = None;
-            let sort_directory = if let Some(acc_name) = account {
-                let accounts_config = Config::load(&config::accounts_yaml_path())
-                    .context("Failed to load accounts configuration")?;
-
-                let acc = accounts_config
-                    .get_account(&acc_name)
-                    .context(format!("Account '{}' not found", acc_name))?;
-
-                account_organize_by_type = Some(acc.organize_by_type);
-
-                // Check for per-account sort config in settings.yaml
-                let settings = config::Settings::load(&config::settings_path()).unwrap_or_default();
-                if let Some(behavior) = settings.accounts.get(&acc.name) {
-                    if let Some(sort_cfg) = &behavior.sort {
-                        println!("Using per-account sort config for: {}", acc.name);
-                        per_account_sort = Some(sort_cfg.clone());
-                    }
-                }
-
-                println!("Sorting emails for account: {}", acc.name);
-                PathBuf::from(&acc.export_directory)
-            } else if let Some(dir) = directory {
-                dir
-            } else {
-                println!("Please specify a directory or account");
-                return Ok(());
-            };
-
-            // Load sort config: per-account override takes precedence over global
-            let mut sort_config = if let Some(cfg) = per_account_sort {
-                cfg
-            } else {
-                SortConfig::load(&config.unwrap_or_else(config::sort_config_path))?
-            };
-
-            // Apply account-level organize_by_type if set
-            if let Some(obt) = account_organize_by_type {
-                sort_config.organize_by_type = obt;
-            }
-
-            let mut sorter = EmailSorter::new(sort_directory, sort_config);
-
-            if dry_run {
-                println!("DRY RUN MODE: Analyzing emails without creating reports");
-            }
-
-            sorter.sort_emails(None)?;
-
-            let sort_report = sorter.generate_report();
-
-            if !dry_run {
-                sorter.save_report(&sort_report, &report)?;
-            } else {
-                println!("DRY RUN: Would create report at: {}", report);
-            }
-
-            sorter.print_summary();
-
-            if verbose {
-                println!("\nDETAILED RESULTS:");
-                for (category, emails) in sorter.categories() {
-                    println!("\n{} ({} emails):", category.to_string().to_uppercase(), emails.len());
-                    for email in emails.iter().take(5) {
-                        let breakdown_str = if email.score_breakdown.is_empty() {
-                            String::new()
-                        } else {
-                            let parts: Vec<String> = email
-                                .score_breakdown
-                                .iter()
-                                .map(|(name, val)| format!("{}:{}", name, val))
-                                .collect();
-                            format!(" [{}]", parts.join(", "))
-                        };
-                        println!(
-                            "  - {} (from: {}, score: {}){}",
-                            email.subject, email.sender, email.score, breakdown_str
-                        );
-                    }
-                    if emails.len() > 5 {
-                        println!("  ... and {} more", emails.len() - 5);
-                    }
-                }
-            }
-
-            if dry_run {
-                println!("\nDRY RUN COMPLETE");
-                println!("No files were modified. To apply these changes, run without --dry-run");
-            }
-        }
-
-        Commands::SortApply {
-            report,
-            verbose,
-            dry_run,
-        } => {
-            let report_path = PathBuf::from(&report);
-            let json = fs::read_to_string(&report_path)
-                .with_context(|| format!("failed to read report: {}", report))?;
-            let mut sort_report: SortReport = serde_json::from_str(&json)
-                .context("failed to parse sort report JSON")?;
-
-            let confirmed = review_report(&mut sort_report)?;
-            if !confirmed {
-                println!("Aborted.");
-                return Ok(());
-            }
-
-            if dry_run {
-                for email in sort_report.categories.get("delete").unwrap_or(&vec![]) {
-                    println!("[dry-run] would trash: {}", email.file);
-                }
-                for email in sort_report.categories.get("summarize").unwrap_or(&vec![]) {
-                    println!("[dry-run] would move to to-summarize/: {}", email.file);
-                }
-                return Ok(());
-            }
-
-            let settings = Settings::load(&config::settings_path()).unwrap_or_default();
-            let notes_dir = settings.notes_dir.as_ref().map(std::path::PathBuf::from);
-            let stats = apply_report(&sort_report, settings.local_folder(), notes_dir.as_deref())?;
-            if verbose {
-                // per-email actions are printed inside apply_report
-            }
-            println!(
-                "Deleted: {} | Moved to to-summarize: {} | Kept: {}",
-                stats.deleted, stats.moved, stats.skipped
-            );
-        }
-
-        Commands::Summarize {
-            account,
-            list_accounts,
-        } => {
-            // Reload .env explicitly: matches the tray_actions pattern so summarize.py
-            // sees fresh `ANTHROPIC_API_KEY` and friends even if main()'s early load ran
-            // before a recent edit of the env file.
-            dotenvy::from_path(config::env_file_path()).ok();
-
-            let cfg = Config::load(&config::accounts_yaml_path())
-                .context("failed to load accounts configuration")?;
-
-            if list_accounts {
-                println!("Available accounts from accounts.yaml:");
-                for (i, acc) in cfg.accounts.iter().enumerate() {
-                    println!("   {}. {} -> {}", i + 1, acc.name, acc.export_directory);
-                }
-                return Ok(());
-            }
-
-            let settings = Settings::load(&config::settings_path()).unwrap_or_default();
-            let python = summarize::find_python(&settings)
-                .context("failed to resolve python interpreter")?;
-            let scripts_dir = config::resolve_tools_scripts_dir(&settings)
-                .context("failed to resolve tools/scripts directory")?;
-            let script = scripts_dir.join("summarize.py");
-
-            let accounts_to_run: Vec<_> = if let Some(names) = &account {
-                let wanted: Vec<_> = names.split(',').map(|s| s.trim().to_lowercase()).collect();
-                cfg.accounts
-                    .iter()
-                    .filter(|a| wanted.contains(&a.name.to_lowercase()))
-                    .cloned()
-                    .collect()
-            } else {
-                cfg.accounts.clone()
-            };
-
-            if accounts_to_run.is_empty() {
-                println!("No accounts selected for summarize");
-                return Ok(());
-            }
-
-            let notes_dir = settings.notes_dir.as_deref().map(PathBuf::from);
-
-            for acc in accounts_to_run {
-                println!("\nSummarizing: {} -> {}", acc.name, acc.export_directory);
-                let input_dir = PathBuf::from(&acc.export_directory);
-                summarize::run_summarize(
-                    &python,
-                    &script,
-                    &input_dir,
-                    notes_dir.as_deref(),
-                    &|line| println!("{}", line),
-                )
-                .with_context(|| format!("summarize failed for {}", acc.name))?;
             }
         }
 
