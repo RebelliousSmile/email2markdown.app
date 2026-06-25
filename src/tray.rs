@@ -24,7 +24,6 @@ use tray_icon::{
 use wry::{WebView, WebViewBuilder};
 
 use crate::config::{self, settings_path, AccountBehavior, RawAccount, Settings};
-use crate::notes_review::NoteEntry;
 use crate::progress::ProgressUpdate;
 use crate::sort_emails::{apply_report, EmailSummary, SortReport};
 use crate::tray_actions::{self, action_open_config, ActionResult};
@@ -47,11 +46,6 @@ pub enum AppCommand {
     OpenSort {
         report_path: PathBuf,
         account: String,
-        sender: Sender<ActionResult>,
-    },
-    /// Open the "Organize notes" window.
-    OpenOrganize {
-        entries: Vec<NoteEntry>,
         sender: Sender<ActionResult>,
     },
     OpenConfig {
@@ -100,13 +94,6 @@ struct SortState {
     window: Window,
 }
 
-/// Per-organize-window state. Same drop-order discipline as `ProgressState`.
-struct OrganizeState {
-    webview: WebView,
-    #[allow(dead_code)]
-    window: Window,
-}
-
 /// Per-config-window state. Same drop-order discipline as `ProgressState`.
 struct ConfigState {
     #[allow(dead_code)]
@@ -125,7 +112,6 @@ struct UpdateState {
 enum WState {
     Progress(ProgressState),
     Sort(SortState),
-    Organize(OrganizeState),
     Config(#[allow(dead_code)] ConfigState),
     Update(UpdateState),
 }
@@ -152,15 +138,12 @@ mod menu_ids {
     pub const IMPORT_THUNDERBIRD: &str = "import_thunderbird";
     pub const CHOOSE_EXPORT_DIR: &str = "choose_export_dir";
     pub const CHOOSE_NOTES_DIR: &str = "choose_notes_dir";
-    pub const ORGANIZE_FOLDER: &str = "organize_folder";
-    pub const ORGANIZE_FILES: &str = "organize_files";
     pub const OPEN_CONFIG: &str = "open_config";
     pub const OPEN_DOCUMENTATION: &str = "open_documentation";
     pub const UPDATE: &str = "update";
     pub const QUIT: &str = "quit";
     pub const EXPORT_PREFIX: &str = "export_";
     pub const SORT_PREFIX: &str = "sort_";
-    pub const SUMMARIZE_PREFIX: &str = "summarize_";
     pub const FIXYAML_PREFIX: &str = "fixyaml_";
     pub const FIXHTML_PREFIX: &str = "fixhtml_";
 }
@@ -329,7 +312,6 @@ pub fn run_tray() -> Result<()> {
             }) => match build_sort_window(target, &proxy, &report_path, &account, sender.clone()) {
                 Ok((window, webview, window_id)) => {
                     windows.insert(window_id, WState::Sort(SortState { webview, window }));
-                    spawn_classify_stream(proxy.clone(), window_id, report_path.clone());
                 }
                 Err(e) => {
                     let _ = sender.send(ActionResult::Error(format!(
@@ -349,26 +331,7 @@ pub fn run_tray() -> Result<()> {
                     Some(WState::Sort(state)) => {
                         let _ = state.webview.evaluate_script(&js);
                     }
-                    Some(WState::Organize(state)) => {
-                        let _ = state.webview.evaluate_script(&js);
-                    }
                     _ => {}
-                }
-            }
-            Event::UserEvent(AppCommand::OpenOrganize { entries, sender }) => {
-                match build_organize_window(target, &proxy, entries, sender.clone()) {
-                    Ok((window, webview, window_id)) => {
-                        windows.insert(
-                            window_id,
-                            WState::Organize(OrganizeState { webview, window }),
-                        );
-                    }
-                    Err(e) => {
-                        let _ = sender.send(ActionResult::Error(format!(
-                            "Fenêtre Organiser les notes : {:#}",
-                            e
-                        )));
-                    }
                 }
             }
             Event::UserEvent(AppCommand::ActionRequested { window_id }) => {
@@ -400,7 +363,6 @@ pub fn run_tray() -> Result<()> {
                     }
                 }
                 Some(WState::Sort(_)) => {}
-                Some(WState::Organize(_)) => {}
                 Some(WState::Config(_)) => {
                     CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
                 }
@@ -571,74 +533,6 @@ fn load_known_classes_json() -> String {
     }
 }
 
-/// Spawn a background thread that streams `classify.py --batch` for every
-/// `summarize` email in `report_path`, pushing each result back to the sort
-/// window via `EvalScript` → `window.notesDestUpdate(file, path, method, confidence)`.
-///
-/// Silently returns if python or the tools dirs are not configured — classify
-/// is an enrichment, not a requirement, of the sort flow.
-fn spawn_classify_stream(
-    proxy: EventLoopProxy<AppCommand>,
-    window_id: WindowId,
-    report_path: PathBuf,
-) {
-    thread::spawn(move || {
-        if let Err(e) = run_classify_stream(&proxy, window_id, &report_path) {
-            eprintln!("classify stream skipped: {:#}", e);
-        }
-    });
-}
-
-fn run_classify_stream(
-    proxy: &EventLoopProxy<AppCommand>,
-    window_id: WindowId,
-    report_path: &Path,
-) -> Result<()> {
-    let settings = Settings::load(&settings_path()).unwrap_or_default();
-    if settings.python_venv_path.is_none() {
-        return Ok(());
-    }
-    let python = config::find_python(&settings)?;
-    let scripts_dir = config::resolve_tools_scripts_dir(&settings)?;
-    let data_dir = config::resolve_tools_data_dir(&settings)?;
-    let script = scripts_dir.join("classify.py");
-
-    let json = std::fs::read_to_string(report_path)
-        .with_context(|| format!("failed to read report: {}", report_path.display()))?;
-    let report: SortReport =
-        serde_json::from_str(&json).context("failed to parse sort report for classify")?;
-
-    let files: Vec<PathBuf> = report
-        .categories
-        .get("summarize")
-        .map(|v| v.iter().map(|e| PathBuf::from(&e.file)).collect())
-        .unwrap_or_default();
-    if files.is_empty() {
-        return Ok(());
-    }
-    let file_refs: Vec<&Path> = files.iter().map(|p| p.as_path()).collect();
-
-    let proxy_cb = proxy.clone();
-    let _results = crate::summarize::run_classify_batch(
-        &python,
-        &script,
-        &data_dir,
-        &file_refs,
-        &|result| {
-            let js = format!(
-                "window.notesDestUpdate({}, {}, {}, {})",
-                serde_json::to_string(&result.file).unwrap_or_else(|_| "\"\"".into()),
-                serde_json::to_string(&result.suggested_path).unwrap_or_else(|_| "\"\"".into()),
-                serde_json::to_string(&result.method).unwrap_or_else(|_| "\"\"".into()),
-                result.confidence,
-            );
-            let _ = proxy_cb.send_event(AppCommand::EvalScript { window_id, js });
-        },
-    )?;
-
-    Ok(())
-}
-
 /// Parse decisions, rewrite the report, and run `apply_report`. Runs on a worker thread.
 fn apply_sort_decisions(
     body: &str,
@@ -719,12 +613,6 @@ fn apply_sort_decisions(
     let stats = apply_report(&report, settings.local_folder(), notes_dir.as_deref())
         .context("failed to apply sort report")?;
 
-    // Feed the classify corpus with the user-confirmed destinations.
-    // Best-effort: never fail the whole apply on a corpus-record error.
-    if let Err(e) = record_classify_decisions(&report, notes_dir.as_deref(), &settings) {
-        eprintln!("classify record-decisions skipped: {:#}", e);
-    }
-
     Ok(ActionResult::Success(
         format!("Tri appliqué — {}", account),
         format!(
@@ -732,560 +620,6 @@ fn apply_sort_decisions(
             stats.deleted, stats.moved, stats.skipped
         ),
     ))
-}
-
-/// After apply, push every (final_file_path, notes_destination) pair to
-/// `classify.py --record-decisions-batch` in a single subprocess call.
-fn record_classify_decisions(
-    report: &SortReport,
-    notes_dir: Option<&Path>,
-    settings: &Settings,
-) -> Result<()> {
-    let notes_dir = match notes_dir {
-        Some(d) => d,
-        None => return Ok(()), // No notes_dir → nothing was routed there.
-    };
-    if settings.python_venv_path.is_none() {
-        return Ok(());
-    }
-    let python = config::find_python(settings)?;
-    let scripts_dir = config::resolve_tools_scripts_dir(settings)?;
-    let data_dir = config::resolve_tools_data_dir(settings)?;
-    let script = scripts_dir.join("classify.py");
-
-    let summarize = match report.categories.get("summarize") {
-        Some(v) => v,
-        None => return Ok(()),
-    };
-
-    let mut decisions: Vec<(PathBuf, String)> = Vec::new();
-    for email in summarize {
-        let Some(dest) = email.notes_destination.as_ref() else {
-            continue;
-        };
-        let filename = Path::new(&email.file)
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_else(|| email.file.clone());
-        // Reuse the same safe-segment joiner as apply_report so the recorded path matches
-        // the actual on-disk location (rejects `..`, backslashes, forbidden chars).
-        let final_dir = match crate::sort_emails::join_safe_segments(notes_dir, dest) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("record_classify_decisions: skip {} ({:#})", email.file, e);
-                continue;
-            }
-        };
-        let final_path = final_dir.join(&filename);
-        if final_path.exists() {
-            decisions.push((final_path, dest.clone()));
-        }
-    }
-    if decisions.is_empty() {
-        return Ok(());
-    }
-    let _ = crate::summarize::record_decisions_batch(&python, &script, &data_dir, &decisions)?;
-    Ok(())
-}
-
-// ── Organize window ──────────────────────────────────────────────────────────
-
-/// One IPC message from the organize WebView, dispatched by `apply_organize_action`.
-///
-/// Serde uses the `action` JSON field as the tag and matches it to a variant via
-/// `rename_all = "snake_case"` — `TemplatePreview` → `"template_preview"` etc.
-/// New actions added on the JS side without a matching variant fail
-/// deserialisation cleanly instead of silently falling through.
-#[derive(serde::Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum OrganizeIpc {
-    Close,
-    Classify {
-        #[serde(default)]
-        files: Vec<PathBuf>,
-        #[serde(default)]
-        destination: Option<String>,
-    },
-    Summarize {
-        #[serde(default)]
-        files: Vec<PathBuf>,
-    },
-    Group {
-        #[serde(default)]
-        files: Vec<PathBuf>,
-        #[serde(default)]
-        name: Option<String>,
-    },
-    TemplatePreview {
-        #[serde(default)]
-        files: Vec<PathBuf>,
-        #[serde(default)]
-        template: Option<String>,
-    },
-    TemplateApply {
-        #[serde(default)]
-        files: Vec<PathBuf>,
-        #[serde(default)]
-        template: Option<String>,
-    },
-    Archive {
-        #[serde(default)]
-        files: Vec<PathBuf>,
-    },
-    Delete {
-        #[serde(default)]
-        files: Vec<PathBuf>,
-    },
-}
-
-impl OrganizeIpc {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Close => "close",
-            Self::Classify { .. } => "classify",
-            Self::Summarize { .. } => "summarize",
-            Self::Group { .. } => "group",
-            Self::TemplatePreview { .. } => "template_preview",
-            Self::TemplateApply { .. } => "template_apply",
-            Self::Archive { .. } => "archive",
-            Self::Delete { .. } => "delete",
-        }
-    }
-}
-
-/// Build the "Organize notes" window. Injects the entries + known classes +
-/// available templates into the HTML, and wires an IPC handler that dispatches
-/// each action onto a worker thread (UI stays responsive).
-fn build_organize_window(
-    target: &EventLoopWindowTarget<AppCommand>,
-    proxy: &EventLoopProxy<AppCommand>,
-    entries: Vec<NoteEntry>,
-    sender: Sender<ActionResult>,
-) -> Result<(Window, WebView, WindowId)> {
-    let html_template = include_str!("../assets/notes_review.html");
-    let notes_json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
-    let known_classes_json = load_known_classes_json();
-    let templates_json = list_templates_json();
-    let html = html_template
-        .replace("__NOTES_JSON__", &notes_json)
-        .replace("__KNOWN_CLASSES_JSON__", &known_classes_json)
-        .replace("__TEMPLATES_JSON__", &templates_json);
-
-    let window = WindowBuilder::new()
-        .with_title("Organiser les notes")
-        .with_inner_size(LogicalSize::new(1100.0f64, 700.0f64))
-        .build(target)
-        .context("failed to create organize window")?;
-    window.set_focus();
-    let window_id = window.id();
-
-    let proxy_ipc = proxy.clone();
-    let webview = WebViewBuilder::new(&window)
-        .with_html(html)
-        .with_ipc_handler(move |req: wry::http::Request<String>| {
-            let body = req.body().clone();
-            let sender = sender.clone();
-            let proxy = proxy_ipc.clone();
-            thread::spawn(move || {
-                // Close IPC: only tears down the window — no tray notification needed,
-                // since the user explicitly closed the dialog themselves.
-                let is_close = matches!(
-                    serde_json::from_str::<OrganizeIpc>(&body),
-                    Ok(OrganizeIpc::Close)
-                );
-                if is_close {
-                    let _ = proxy.send_event(AppCommand::CloseWindow { window_id });
-                    return;
-                }
-                let result = apply_organize_action(&body, window_id, &proxy)
-                    .unwrap_or_else(|e| ActionResult::Error(format!("Organiser : {:#}", e)));
-                let _ = sender.send(result);
-            });
-        })
-        .build()
-        .context("failed to create organize webview")?;
-
-    Ok((window, webview, window_id))
-}
-
-/// List `.md` files under `tools/templates/` as a JSON array of absolute paths.
-/// Returns `"[]"` on any failure — the template dropdown simply stays empty.
-fn list_templates_json() -> String {
-    let settings = Settings::load(&settings_path()).unwrap_or_default();
-    let templates_dir = match config::resolve_tools_templates_dir(&settings) {
-        Ok(d) => d,
-        Err(_) => return "[]".to_string(),
-    };
-    let mut paths: Vec<String> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&templates_dir) {
-        for entry in rd.flatten() {
-            let Ok(ft) = entry.file_type() else { continue };
-            if ft.is_symlink() || !ft.is_file() {
-                continue;
-            }
-            let p = entry.path();
-            if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")) {
-                paths.push(p.to_string_lossy().replace('\\', "/"));
-            }
-        }
-    }
-    paths.sort();
-    serde_json::to_string(&paths).unwrap_or_else(|_| "[]".into())
-}
-
-/// Dispatch one IPC action from the organize window.
-///
-/// Streams progress back to the WebView via `EvalScript` → `window.setStatus(...)`
-/// and reflects state changes via `window.notesRemove(...)`. Returns an
-/// `ActionResult` that the tray will surface as a notification.
-fn apply_organize_action(
-    body: &str,
-    window_id: WindowId,
-    proxy: &EventLoopProxy<AppCommand>,
-) -> Result<ActionResult> {
-    let payload: OrganizeIpc =
-        serde_json::from_str(body).context("failed to parse organize IPC")?;
-
-    let settings = Settings::load(&settings_path()).unwrap_or_default();
-    let notes_dir = settings.notes_dir.as_ref().map(PathBuf::from);
-    let local = settings.local_folder().to_string();
-
-    push_status(proxy, window_id, &format!("Action : {}…", payload.label()));
-
-    match payload {
-        OrganizeIpc::Close => {
-            // Close is short-circuited up-stream in the IPC handler; reaching here
-            // means a duplicate close arrived. Treat as a no-op success.
-            Ok(ActionResult::Success("Fermeture".into(), String::new()))
-        }
-        OrganizeIpc::Classify { files, destination } => {
-            let dest = destination
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .context("destination manquante")?;
-            let notes_root = notes_dir
-                .as_deref()
-                .context("notes_dir non configuré dans settings.yaml")?;
-            let dest_dir = crate::sort_emails::join_safe_segments(notes_root, dest)
-                .context("destination invalide")?;
-            std::fs::create_dir_all(&dest_dir).with_context(|| {
-                format!("failed to create destination {}", dest_dir.display())
-            })?;
-            let mut decisions: Vec<(PathBuf, String)> = Vec::with_capacity(files.len());
-            let mut removed: Vec<String> = Vec::with_capacity(files.len());
-            for src in &files {
-                let name = src
-                    .file_name()
-                    .map(|f| f.to_owned())
-                    .context("invalid filename")?;
-                let mut target = dest_dir.join(&name);
-                let mut ctr = 1;
-                while target.exists() && target != *src {
-                    let stem = target
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    let ext = target
-                        .extension()
-                        .map(|s| format!(".{}", s.to_string_lossy()))
-                        .unwrap_or_default();
-                    target = dest_dir.join(format!("{}-{}{}", stem, ctr, ext));
-                    ctr += 1;
-                }
-                if target != *src {
-                    std::fs::rename(src, &target).with_context(|| {
-                        format!(
-                            "failed to move {} → {}",
-                            src.display(),
-                            target.display()
-                        )
-                    })?;
-                }
-                decisions.push((target, dest.to_string()));
-                removed.push(src.to_string_lossy().to_string());
-            }
-            record_decisions_best_effort(&settings, &decisions);
-            notes_remove(proxy, window_id, &removed);
-            Ok(ActionResult::Success(
-                "Classification".into(),
-                format!("{} note(s) → {}", decisions.len(), dest),
-            ))
-        }
-        OrganizeIpc::Summarize { files } => {
-            let file_refs: Vec<&Path> = files.iter().map(|p| p.as_path()).collect();
-            let python = config::find_python(&settings).context("python non configuré")?;
-            let scripts_dir = config::resolve_tools_scripts_dir(&settings)?;
-            let script = scripts_dir.join("summarize.py");
-            crate::summarize::run_summarize_files(
-                &python,
-                &script,
-                &file_refs,
-                notes_dir.as_deref(),
-                &|line| eprintln!("summarize: {}", line),
-            )?;
-            Ok(ActionResult::Success(
-                "Résumés".into(),
-                format!("{} note(s) traitée(s)", file_refs.len()),
-            ))
-        }
-        OrganizeIpc::Group { files, name } => {
-            if files.len() < 2 {
-                anyhow::bail!("au moins 2 fichiers requis pour grouper");
-            }
-            let file_refs: Vec<&Path> = files.iter().map(|p| p.as_path()).collect();
-            let python = config::find_python(&settings).context("python non configuré")?;
-            let scripts_dir = config::resolve_tools_scripts_dir(&settings)?;
-            let script = scripts_dir.join("group_notes.py");
-            let work_root = work_root(&settings, &files)?;
-            let generated_dir = work_root.join(&local).join("_generated");
-            std::fs::create_dir_all(&generated_dir)
-                .context("failed to create _generated dir")?;
-            let stem = sanitize_name(name.as_deref().unwrap_or("groupe"));
-            let output = ensure_unique_path(&generated_dir, &stem, "md")?;
-            crate::summarize::run_group(&python, &script, &file_refs, &output, &|line| {
-                eprintln!("group: {}", line)
-            })?;
-            Ok(ActionResult::Success(
-                "Groupe".into(),
-                format!("Écrit : {}", output.display()),
-            ))
-        }
-        OrganizeIpc::TemplatePreview { files, template } => {
-            let (template_path, _) = resolve_template(template.as_deref())?;
-            let file_refs: Vec<&Path> = files.iter().map(|p| p.as_path()).collect();
-            let python = config::find_python(&settings).context("python non configuré")?;
-            let scripts_dir = config::resolve_tools_scripts_dir(&settings)?;
-            let script = scripts_dir.join("apply_template.py");
-            let rendered = crate::summarize::run_apply_template(
-                &python,
-                &script,
-                &template_path,
-                &file_refs,
-                None,
-            )?;
-            show_preview(proxy, window_id, &rendered);
-            Ok(ActionResult::Success(
-                "Aperçu".into(),
-                format!("{} octets", rendered.len()),
-            ))
-        }
-        OrganizeIpc::TemplateApply { files, template } => {
-            let (template_path, stem_hint) = resolve_template(template.as_deref())?;
-            let file_refs: Vec<&Path> = files.iter().map(|p| p.as_path()).collect();
-            let python = config::find_python(&settings).context("python non configuré")?;
-            let scripts_dir = config::resolve_tools_scripts_dir(&settings)?;
-            let script = scripts_dir.join("apply_template.py");
-            let work_root = work_root(&settings, &files)?;
-            let generated_dir = work_root.join(&local).join("_generated");
-            std::fs::create_dir_all(&generated_dir)
-                .context("failed to create _generated dir")?;
-            let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-            let composed = format!("{}_{}", sanitize_name(&stem_hint), ts);
-            let output = ensure_unique_path(&generated_dir, &composed, "md")?;
-            let _ = crate::summarize::run_apply_template(
-                &python,
-                &script,
-                &template_path,
-                &file_refs,
-                Some(&output),
-            )?;
-            Ok(ActionResult::Success(
-                "Template appliqué".into(),
-                format!("Écrit : {}", output.display()),
-            ))
-        }
-        OrganizeIpc::Archive { files } => {
-            let work_root = work_root(&settings, &files)?;
-            let archive_dir = work_root.join(&local).join(".archive");
-            std::fs::create_dir_all(&archive_dir)
-                .context("failed to create .archive dir")?;
-            let mut moved = 0usize;
-            let mut removed: Vec<String> = Vec::with_capacity(files.len());
-            for src in &files {
-                let Some(name) = src.file_name() else { continue };
-                let stem = Path::new(name)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let ext = Path::new(name)
-                    .extension()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "md".into());
-                let target = match ensure_unique_path(&archive_dir, &stem, &ext) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("archive skip {}: {:#}", src.display(), e);
-                        continue;
-                    }
-                };
-                if std::fs::rename(src, &target).is_ok() {
-                    moved += 1;
-                    removed.push(src.to_string_lossy().to_string());
-                }
-            }
-            notes_remove(proxy, window_id, &removed);
-            Ok(ActionResult::Success(
-                "Archivage".into(),
-                format!("{} note(s) → {}", moved, archive_dir.display()),
-            ))
-        }
-        OrganizeIpc::Delete { files } => {
-            // Soft delete — goes to the OS trash, not unlink. The user can recover
-            // from the system Recycle Bin / Trash if needed.
-            let mut deleted = 0usize;
-            let mut removed: Vec<String> = Vec::with_capacity(files.len());
-            for src in &files {
-                if !src.exists() {
-                    continue;
-                }
-                match trash::delete(src) {
-                    Ok(()) => {
-                        deleted += 1;
-                        removed.push(src.to_string_lossy().to_string());
-                    }
-                    Err(e) => {
-                        eprintln!("delete skip {}: {:#}", src.display(), e);
-                    }
-                }
-            }
-            notes_remove(proxy, window_id, &removed);
-            Ok(ActionResult::Success(
-                "Suppression".into(),
-                format!("{} note(s) → corbeille", deleted),
-            ))
-        }
-    }
-}
-
-/// Validate the WebView-supplied template field and return `(absolute path, file stem)`.
-fn resolve_template(template: Option<&str>) -> Result<(PathBuf, String)> {
-    let t = template
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .context("template manquant")?;
-    let path = PathBuf::from(t);
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "template".into());
-    Ok((path, stem))
-}
-
-/// Where to place generated artefacts (grouped notes, template outputs, archive folder).
-///
-/// Strict order:
-///   1. `settings.notes_dir` if set
-///   2. Otherwise the *common* parent shared by **all** selected files — never the parent of
-///      just the first file, which could lie outside the user-intended tree on multi-source picks.
-///
-/// Returns `bail!` if no notes_dir is set and the selection spans more than one parent
-/// directory, or if any file has no parent.
-fn work_root(settings: &Settings, files: &[PathBuf]) -> Result<PathBuf> {
-    if let Some(d) = settings.notes_dir.as_ref() {
-        let p = PathBuf::from(d);
-        if !p.is_dir() {
-            anyhow::bail!("notes_dir configuré mais introuvable : {}", p.display());
-        }
-        return Ok(p);
-    }
-    let mut iter = files.iter();
-    let first = iter
-        .next()
-        .context("aucun fichier sélectionné et notes_dir non configuré")?;
-    let parent = first
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(|p| p.to_path_buf())
-        .context("fichier sans parent — notes_dir non configuré")?;
-    for f in iter {
-        let other = f
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .context("fichier sans parent — notes_dir non configuré")?;
-        if other != parent {
-            anyhow::bail!(
-                "sélection multi-dossiers — configurez notes_dir pour cibler une destination unique"
-            );
-        }
-    }
-    Ok(parent)
-}
-
-/// Generate a non-colliding `<stem>(-N)?.<ext>` path inside `dir`.
-///
-/// Bounded to 999 collisions: beyond that, returns an error rather than looping forever.
-/// Filesystem state can race between the existence check and the caller's write — this is
-/// best-effort, not atomic.
-fn ensure_unique_path(dir: &Path, stem: &str, ext: &str) -> Result<PathBuf> {
-    let candidate = dir.join(format!("{}.{}", stem, ext));
-    if !candidate.exists() {
-        return Ok(candidate);
-    }
-    for ctr in 1..=999 {
-        let p = dir.join(format!("{}-{}.{}", stem, ctr, ext));
-        if !p.exists() {
-            return Ok(p);
-        }
-    }
-    anyhow::bail!(
-        "impossible de générer un nom unique pour {} dans {}",
-        stem,
-        dir.display()
-    )
-}
-
-fn sanitize_name(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect()
-}
-
-fn push_status(proxy: &EventLoopProxy<AppCommand>, window_id: WindowId, msg: &str) {
-    let js = format!(
-        "window.setStatus && window.setStatus({})",
-        serde_json::to_string(msg).unwrap_or_else(|_| "\"\"".into())
-    );
-    let _ = proxy.send_event(AppCommand::EvalScript { window_id, js });
-}
-
-fn show_preview(proxy: &EventLoopProxy<AppCommand>, window_id: WindowId, text: &str) {
-    let js = format!(
-        "window.showPreview && window.showPreview({})",
-        serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
-    );
-    let _ = proxy.send_event(AppCommand::EvalScript { window_id, js });
-}
-
-fn notes_remove(proxy: &EventLoopProxy<AppCommand>, window_id: WindowId, files: &[String]) {
-    let js = format!(
-        "window.notesRemove && window.notesRemove({})",
-        serde_json::to_string(files).unwrap_or_else(|_| "[]".into())
-    );
-    let _ = proxy.send_event(AppCommand::EvalScript { window_id, js });
-}
-
-fn record_decisions_best_effort(settings: &Settings, decisions: &[(PathBuf, String)]) {
-    if decisions.is_empty() || settings.python_venv_path.is_none() {
-        return;
-    }
-    let python = match config::find_python(settings) {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-    let scripts_dir = match config::resolve_tools_scripts_dir(settings) {
-        Ok(d) => d,
-        Err(_) => return,
-    };
-    let data_dir = match config::resolve_tools_data_dir(settings) {
-        Ok(d) => d,
-        Err(_) => return,
-    };
-    let script = scripts_dir.join("classify.py");
-    if let Err(e) = crate::summarize::record_decisions_batch(&python, &script, &data_dir, decisions)
-    {
-        eprintln!("organize record-decisions skipped: {:#}", e);
-    }
 }
 
 // ── Config window ────────────────────────────────────────────────────────────
@@ -1706,33 +1040,6 @@ fn create_menu() -> Result<Menu> {
     }
     menu.append(&sort_submenu)?;
 
-    let summarize_submenu = Submenu::new("Résumer (Python)", has_accounts);
-    for account in &accounts {
-        let id = format!("{}{}", menu_ids::SUMMARIZE_PREFIX, account);
-        let _ = summarize_submenu.append(&MenuItem::with_id(
-            id,
-            account,
-            true,
-            no_accel.clone(),
-        ));
-    }
-    menu.append(&summarize_submenu)?;
-
-    let organize_submenu = Submenu::new("Organiser les notes", true);
-    let _ = organize_submenu.append(&MenuItem::with_id(
-        menu_ids::ORGANIZE_FOLDER,
-        "Choisir un dossier…",
-        true,
-        no_accel.clone(),
-    ));
-    let _ = organize_submenu.append(&MenuItem::with_id(
-        menu_ids::ORGANIZE_FILES,
-        "Choisir des fichiers…",
-        true,
-        no_accel.clone(),
-    ));
-    menu.append(&organize_submenu)?;
-
     let outils_submenu = Submenu::new("Outils", true);
 
     let fixyaml_submenu = Submenu::new("Fix YAML", has_accounts);
@@ -1831,12 +1138,6 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
         menu_ids::CHOOSE_NOTES_DIR => {
             tray_actions::action_choose_notes_dir(result_sender);
         }
-        menu_ids::ORGANIZE_FOLDER => {
-            tray_actions::action_organize_notes_folder(result_sender);
-        }
-        menu_ids::ORGANIZE_FILES => {
-            tray_actions::action_organize_notes_files(result_sender);
-        }
         menu_ids::OPEN_CONFIG => {
             if let Err(e) = send_command(AppCommand::OpenConfig {
                 sender: result_sender.clone(),
@@ -1868,11 +1169,6 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
         id if id.starts_with(menu_ids::SORT_PREFIX) => {
             if let Some(account_name) = id.strip_prefix(menu_ids::SORT_PREFIX) {
                 tray_actions::action_sort(account_name.to_string(), result_sender);
-            }
-        }
-        id if id.starts_with(menu_ids::SUMMARIZE_PREFIX) => {
-            if let Some(account_name) = id.strip_prefix(menu_ids::SUMMARIZE_PREFIX) {
-                tray_actions::action_summarize(account_name.to_string(), result_sender);
             }
         }
         id if id.starts_with(menu_ids::FIXYAML_PREFIX) => {
@@ -1976,80 +1272,3 @@ fn show_notification(result: &ActionResult) {
     });
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sanitize_name_replaces_unsafe_chars() {
-        assert_eq!(sanitize_name("Hello World!"), "Hello_World_");
-        assert_eq!(sanitize_name("path/to:file"), "path_to_file");
-        assert_eq!(sanitize_name("ok-_safe123"), "ok-_safe123");
-    }
-
-    #[test]
-    fn test_ensure_unique_path_no_collision() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let p = ensure_unique_path(temp.path(), "report", "md").unwrap();
-        assert_eq!(p, temp.path().join("report.md"));
-    }
-
-    #[test]
-    fn test_ensure_unique_path_collision_increments() {
-        let temp = tempfile::TempDir::new().unwrap();
-        std::fs::write(temp.path().join("report.md"), b"x").unwrap();
-        let p = ensure_unique_path(temp.path(), "report", "md").unwrap();
-        assert_eq!(p, temp.path().join("report-1.md"));
-
-        std::fs::write(&p, b"x").unwrap();
-        let p2 = ensure_unique_path(temp.path(), "report", "md").unwrap();
-        assert_eq!(p2, temp.path().join("report-2.md"));
-    }
-
-    #[test]
-    fn test_work_root_uses_notes_dir_when_set() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let mut settings = Settings::default();
-        settings.notes_dir = Some(temp.path().to_string_lossy().into_owned());
-
-        let root = work_root(&settings, &[]).unwrap();
-        assert_eq!(root, temp.path());
-    }
-
-    #[test]
-    fn test_work_root_errors_when_notes_dir_missing() {
-        let mut settings = Settings::default();
-        settings.notes_dir = Some("/this/path/does/not/exist/abcxyz".into());
-        let err = work_root(&settings, &[]).unwrap_err();
-        assert!(err.to_string().contains("notes_dir"));
-    }
-
-    #[test]
-    fn test_work_root_falls_back_to_common_parent() {
-        let settings = Settings::default();
-        let files = vec![
-            PathBuf::from("/data/notes/a.md"),
-            PathBuf::from("/data/notes/b.md"),
-        ];
-        let root = work_root(&settings, &files).unwrap();
-        assert_eq!(root, PathBuf::from("/data/notes"));
-    }
-
-    #[test]
-    fn test_work_root_bails_on_multi_parents() {
-        let settings = Settings::default();
-        let files = vec![
-            PathBuf::from("/data/notes/a.md"),
-            PathBuf::from("/other/place/b.md"),
-        ];
-        let err = work_root(&settings, &files).unwrap_err();
-        assert!(err.to_string().contains("multi-dossiers"));
-    }
-
-    #[test]
-    fn test_work_root_bails_when_no_input() {
-        let settings = Settings::default();
-        let err = work_root(&settings, &[]).unwrap_err();
-        assert!(err.to_string().contains("notes_dir"));
-    }
-}
