@@ -69,6 +69,14 @@ pub enum AppCommand {
     /// Open the route review window after an Export.
     /// Carries the list of (staging_path, RouteDecision) produced by export_account.
     OpenRouteReview(Vec<(PathBuf, RouteDecision)>),
+    /// Persist a new routing rule into destinations.txt and re-inject the updated tree.
+    /// IO is done in the event loop (not in the webview IPC callback).
+    PersistRoutingRule {
+        window_id: WindowId,
+        dest_path: String,
+        attr_kind: String,
+        attr_value: String,
+    },
 }
 
 /// Per-progress-window state. Fields declared in drop order:
@@ -303,6 +311,60 @@ pub fn run_tray() -> Result<()> {
             Event::UserEvent(AppCommand::EvalScript { window_id, js }) => {
                 if let Some(WState::Route(state)) = windows.get(&window_id) {
                     let _ = state.webview.evaluate_script(&js);
+                }
+            }
+            Event::UserEvent(AppCommand::PersistRoutingRule { window_id, dest_path, attr_kind, attr_value }) => {
+                // Resolve destinations.txt path from settings.
+                let settings_path = config::settings_path();
+                let settings = crate::config::Settings::load(&settings_path).unwrap_or_default();
+                let dest_file = settings
+                    .destinations_file
+                    .as_deref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| config::app_config_dir().join("destinations.txt"));
+
+                // Reject subject/account; only domain/from are surfaced in the UI.
+                let rule_opt = match attr_kind.as_str() {
+                    "domain" => Some(crate::route::MatchRule::Domain(attr_value.clone())),
+                    "from"   => Some(crate::route::MatchRule::From(attr_value.clone())),
+                    _        => None,
+                };
+
+                let Some(rule) = rule_opt else {
+                    let msg = format!("unsupported attr_kind {:?} — only domain/from allowed", attr_kind);
+                    if let (Ok(js_str), Some(WState::Route(state))) =
+                        (serde_json::to_string(&msg), windows.get(&window_id))
+                    {
+                        let _ = state.webview.evaluate_script(&format!("route_review_error({})", js_str));
+                    }
+                    return;
+                };
+
+                match crate::route::upsert_rule(&dest_file, &dest_path, rule) {
+                    Err(e) => {
+                        let msg = format!("{:#}", e);
+                        if let (Ok(js_str), Some(WState::Route(state))) =
+                            (serde_json::to_string(&msg), windows.get(&window_id))
+                        {
+                            let _ = state.webview.evaluate_script(&format!("route_review_error({})", js_str));
+                        }
+                    }
+                    Ok(()) => {
+                        // Re-read destinations.txt and inject the updated path list.
+                        let known_paths: Vec<String> = std::fs::read_to_string(&dest_file)
+                            .ok()
+                            .and_then(|c| crate::route::parse_destinations(&c).ok())
+                            .map(|dests| dests.into_iter().map(|d| d.path).collect())
+                            .unwrap_or_default();
+                        if let (Ok(json), Some(WState::Route(state))) =
+                            (serde_json::to_string(&known_paths), windows.get(&window_id))
+                        {
+                            let escaped = escape_json_for_script(&json);
+                            let _ = state.webview.evaluate_script(
+                                &format!("route_review_set_tree({})", escaped),
+                            );
+                        }
+                    }
                 }
             }
             Event::UserEvent(AppCommand::OpenRouteReview(decisions)) => {
@@ -623,6 +685,63 @@ fn build_update_window(
 
 // ── Route review window ───────────────────────────────────────────────────────
 
+/// IPC discriminator — reads the `action` field (default `""`) without failing on unknown shapes.
+#[derive(serde::Deserialize)]
+struct IpcKind {
+    #[serde(default)]
+    action: String,
+}
+
+/// IPC payload for the `create_rule` action emitted by the route review window.
+#[derive(serde::Deserialize)]
+struct RuleCreatePayload {
+    #[allow(dead_code)]
+    action: String,
+    path: String,
+    attr_kind: String,
+    attr_value: String,
+}
+
+/// Extract `(email_address, domain)` from a raw `From:` field.
+///
+/// Priority: address between `<…>` if present; else first whitespace-token containing `@`.
+/// Domain = part after the last `@`, lowercased.
+/// Returns `("", "")` for empty, malformed, or `@`-less input.
+fn extract_addr_and_domain(from_raw: &str) -> (String, String) {
+    let trimmed = from_raw.trim();
+    if trimmed.is_empty() {
+        return (String::new(), String::new());
+    }
+
+    // Extract the address part.
+    let addr: String = if let (Some(lt), Some(gt)) = (trimmed.find('<'), trimmed.rfind('>')) {
+        if lt < gt {
+            trimmed[lt + 1..gt].trim().to_string()
+        } else {
+            trimmed.split_whitespace()
+                .find(|t| t.contains('@'))
+                .unwrap_or("")
+                .to_string()
+        }
+    } else {
+        trimmed.split_whitespace()
+            .find(|t| t.contains('@'))
+            .unwrap_or("")
+            .to_string()
+    };
+
+    if addr.is_empty() || !addr.contains('@') {
+        return (String::new(), String::new());
+    }
+
+    if let Some(at_pos) = addr.rfind('@') {
+        let domain = addr[at_pos + 1..].to_lowercase();
+        (addr, domain)
+    } else {
+        (addr, String::new())
+    }
+}
+
 /// A single row sent from the HTML Apply button: `{ file, dest_path }`.
 /// `dest_path` is always relative to `notes_dir`.
 #[derive(serde::Deserialize)]
@@ -689,7 +808,7 @@ fn build_route_window(
     };
 
     // Build owned rows — extract frontmatter fields for display in the table.
-    let owned_rows: Vec<(String, String, String, String, String, bool)> = decisions
+    let owned_rows: Vec<(String, String, String, String, String, bool, String, String)> = decisions
         .iter()
         .map(|(staging_path, decision)| {
             let file = staging_path.to_string_lossy().into_owned();
@@ -700,22 +819,25 @@ fn build_route_window(
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_default()
                 });
-            let sender = read_frontmatter_field(staging_path, "from").unwrap_or_default();
-            let date   = read_frontmatter_field(staging_path, "date").unwrap_or_default();
-            (file, subject, sender, date, decision.rel_path.clone(), decision.is_default)
+            let from_raw = read_frontmatter_field(staging_path, "from").unwrap_or_default();
+            let date     = read_frontmatter_field(staging_path, "date").unwrap_or_default();
+            let (sender_email, sender_domain) = extract_addr_and_domain(&from_raw);
+            (file, subject, from_raw, date, decision.rel_path.clone(), decision.is_default, sender_email, sender_domain)
         })
         .collect();
 
     let json_rows: Vec<serde_json::Value> = owned_rows
         .iter()
-        .map(|(file, subject, sender, date, dest_path, is_default)| {
+        .map(|(file, subject, sender, date, dest_path, is_default, sender_email, sender_domain)| {
             serde_json::json!({
-                "file":       file,
-                "subject":    subject,
-                "sender":     sender,
-                "date":       date,
-                "dest_path":  dest_path,
-                "is_default": is_default
+                "file":          file,
+                "subject":       subject,
+                "sender":        sender,
+                "date":          date,
+                "dest_path":     dest_path,
+                "is_default":    is_default,
+                "sender_email":  sender_email,
+                "sender_domain": sender_domain
             })
         })
         .collect();
@@ -743,10 +865,38 @@ fn build_route_window(
         .with_html(html)
         .with_ipc_handler(move |req: wry::http::Request<String>| {
             let body = req.body().clone();
+
+            // 1. Raw "cancel" string (not JSON) — close immediately.
             if body.trim() == "cancel" {
                 let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
                 return;
             }
+
+            // 2. Discriminate by `action` field (default `""` when absent).
+            if let Ok(kind) = serde_json::from_str::<IpcKind>(&body) {
+                if kind.action == "create_rule" {
+                    match serde_json::from_str::<RuleCreatePayload>(&body) {
+                        Ok(p) => {
+                            let _ = proxy_ipc.send_event(AppCommand::PersistRoutingRule {
+                                window_id,
+                                dest_path: p.path,
+                                attr_kind: p.attr_kind,
+                                attr_value: p.attr_value,
+                            });
+                        }
+                        Err(e) => {
+                            let msg = format!("invalid create_rule payload: {:#}", e);
+                            if let Ok(js_str) = serde_json::to_string(&msg) {
+                                let js = format!("route_review_error({})", js_str);
+                                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+
+            // 3. Existing apply flow — payload `{ decisions: [...] }` (no `action` field).
             match apply_route_decisions(&body, &notes_dir, window_id, &proxy_ipc) {
                 Ok(()) => {
                     let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });

@@ -473,6 +473,155 @@ pub fn ai_route(
     None
 }
 
+// ── Rule upsert ──────────────────────────────────────────────────────────────
+
+/// Serialize a `MatchRule` to its `destinations.txt` token.
+/// `Domain` value is lowercased — `route_email` compares via `to_lowercase()`.
+fn match_rule_to_token(rule: &MatchRule) -> String {
+    match rule {
+        MatchRule::Domain(d)  => format!("domain:{}", d.to_lowercase()),
+        MatchRule::From(a)    => format!("from:{}", a),
+        MatchRule::Subject(k) => format!("subject:{}", k),
+        MatchRule::Account(n) => format!("account:{}", n),
+    }
+}
+
+/// Extract `(path_part, attrs)` from a raw destination line (no leading `#`).
+/// `path_part` = text before the first ` | `, trimmed.
+/// Returns `None` for `attrs` when there is no ` | ` separator.
+fn extract_line_parts(line: &str) -> (&str, Option<&str>) {
+    if let Some(idx) = line.find(" | ") {
+        let path = line[..idx].trim();
+        let attrs = line[idx + 3..].trim();
+        (path, if attrs.is_empty() { None } else { Some(attrs) })
+    } else {
+        (line.trim(), None)
+    }
+}
+
+/// Rebuild a destination line with `new_token` appended (dedup).
+/// Returns `"path | attr1, attr2, ..."` or just `"path"` if the token list is empty.
+fn merge_attrs(path: &str, existing_attrs: Option<&str>, new_token: &str) -> String {
+    let mut tokens: Vec<String> = existing_attrs
+        .map(|a| {
+            a.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Dedup: only append if the token is not already present.
+    if !tokens.iter().any(|t| t == new_token) {
+        tokens.push(new_token.to_string());
+    }
+
+    if tokens.is_empty() {
+        path.to_string()
+    } else {
+        format!("{} | {}", path, tokens.join(", "))
+    }
+}
+
+/// Upsert a routing rule into `destinations_file`, preserving all non-target lines verbatim.
+///
+/// Behaviour:
+/// - File absent → treated as empty content; the new line is appended.
+/// - Active line whose path matches `target_path` → merge new token (dedup).
+/// - Commented line `# <path> [| attrs]` whose path matches `target_path` → uncomment + merge.
+///   Free prose comments (non-matching path part) are left untouched.
+/// - No match found → append `target_path | <token>` at end.
+///
+/// Order, blank lines, group headers, and all other comments are preserved byte-for-byte.
+/// `Domain` values are lowercased to match `route_email`'s `to_lowercase()` comparison.
+///
+/// # Errors
+/// Returns `Err` if `destinations_file` is a symlink (anti-symlink guard), or on I/O failure.
+pub fn upsert_rule(destinations_file: &Path, target_path: &str, rule: MatchRule) -> Result<()> {
+    // --- Read (absent file → empty content) ---
+    let original: String = if destinations_file.exists() {
+        fs::read_to_string(destinations_file)
+            .with_context(|| format!("failed to read {}", destinations_file.display()))?
+    } else {
+        String::new()
+    };
+
+    // --- Anti-symlink guard before any write (rule 02-rust-filesystem-safety) ---
+    if destinations_file.exists() {
+        let meta = destinations_file
+            .symlink_metadata()
+            .with_context(|| format!("failed to stat {}", destinations_file.display()))?;
+        if meta.file_type().is_symlink() {
+            anyhow::bail!(
+                "refusing to write to symlink: {}",
+                destinations_file.display()
+            );
+        }
+    }
+
+    let new_token = match_rule_to_token(&rule);
+    let had_trailing_newline = original.ends_with('\n');
+
+    let mut output_lines: Vec<String> = Vec::new();
+    let mut matched = false;
+
+    for raw_line in original.lines() {
+        let trimmed = raw_line.trim();
+
+        if trimmed.is_empty() {
+            // Blank line — preserve verbatim.
+            output_lines.push(raw_line.to_string());
+            continue;
+        }
+
+        if trimmed.starts_with('#') {
+            // Could be a group header, free prose, or a commented destination.
+            // Strip '#' + leading spaces and check if the path part matches target_path.
+            let stripped = trimmed.trim_start_matches('#').trim_start();
+            let (candidate_path, attrs_str) = extract_line_parts(stripped);
+
+            if !matched && candidate_path.eq_ignore_ascii_case(target_path) {
+                // Commented destination — uncomment and merge.
+                let merged = merge_attrs(target_path, attrs_str, &new_token);
+                output_lines.push(merged);
+                matched = true;
+            } else {
+                // Free prose, group header, or different commented destination — verbatim.
+                output_lines.push(raw_line.to_string());
+            }
+            continue;
+        }
+
+        // Active line — check if path matches target.
+        let (line_path, attrs_str) = extract_line_parts(trimmed);
+        if !matched && line_path.eq_ignore_ascii_case(target_path) {
+            let merged = merge_attrs(target_path, attrs_str, &new_token);
+            output_lines.push(merged);
+            matched = true;
+        } else {
+            output_lines.push(raw_line.to_string());
+        }
+    }
+
+    if !matched {
+        // Target not found — append new line.
+        output_lines.push(format!("{} | {}", target_path, new_token));
+    }
+
+    // --- Rebuild content ---
+    let mut content = output_lines.join("\n");
+    // Preserve trailing newline if original had one; also add one for a newly created line.
+    if had_trailing_newline || !matched {
+        content.push('\n');
+    }
+
+    // --- Write ---
+    fs::write(destinations_file, content)
+        .with_context(|| format!("failed to write {}", destinations_file.display()))?;
+
+    Ok(())
+}
+
 /// Recursively copy a directory tree from `src` to `dst`.
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)

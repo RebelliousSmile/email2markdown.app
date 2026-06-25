@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-06-25
+
+### Added
+
+- Fenêtre de revue : sélecteur de dossier en cascade hiérarchique (Jalon A) — arbre de navigation à plusieurs niveaux construit depuis `destinations.txt`, partagé entre la barre d'outils (affectation en masse) et chaque ligne du tableau ; implémentation centralisée dans `renderCascade` (règle des trois).
+- Fenêtre de revue : bouton « + règle » par ligne (Jalon B) — affiche un mini-formulaire pré-rempli (`domain:<domaine>` ou `from:<adresse>`) permettant de créer une règle de routage depuis l'email en cours de révision. Désactivé si expéditeur sans adresse connue.
+- `upsert_rule(destinations_file, target_path, rule)` dans `route.rs` — injecte ou fusionne une règle (`MatchRule::Domain` ou `MatchRule::From`) dans `destinations.txt` par réécriture ligne à ligne : préserve commentaires, groupes (`# === X ===`), lignes vides et lignes sans rapport ; active les lignes commentées correspondantes ; déduplique les tokens ; rejette les symlinks (anti-guard). Seuls `domain:` et `from:` sont acceptés (pas `subject:` ni `account:`). Le domaine est toujours normalisé en minuscules.
+- `extract_addr_and_domain` dans `tray.rs` — parse le champ `from` du frontmatter (`"Nom <email>"` ou adresse nue) et retourne `(adresse, domaine)` sans Regex.
+- `RuleCreatePayload` / `IpcKind` dans `tray.rs` — discrimine les messages IPC entrants : `{action: "create_rule", ...}` déclenche `AppCommand::PersistRoutingRule` ; les payloads sans champ `action` (apply existant) passent inchangés.
+- `AppCommand::PersistRoutingRule` — commande routée via `EventLoopProxy` : résout `destinations.txt`, construit le `MatchRule`, appelle `upsert_rule`, re-lit les chemins connus, injecte `route_review_set_tree([...])` dans la WebView.
+- `window.route_review_set_tree` (JS) — reconstruit `knownPaths`, `datalist` et `pathTree` depuis le tableau reçu ; ré-applique la règle en attente (`pendingRule`) sur les lignes correspondantes ; marque `source = "rule"` ; incrémente `ruleOverrideCount` si la ligne avait été modifiée manuellement ; reconstruit le tableau.
+- Suivi de `source` par ligne (`"default"` | `"manual"` | `"rule"`) : la saisie libre/cascade positionne `"manual"` ; la ré-application de règle positionne `"rule"`.
+- Badge visuel `"règle"` (violet) dans la colonne Statut pour les lignes réaffectées par règle.
+- Résumé enrichi : `N réaffectés par règle, dont M choix manuels écrasés` ajouté à `updateSummary()`.
+- **Inversion D10** : l'application peut désormais écrire dans `destinations.txt` (précédemment lecture seule). La persistance est effectuée en main-thread via `EventLoopProxy` ; aucun déplacement de fichier n'a lieu avant le clic Appliquer (staging D6 préservé).
+
+### Tests
+
+- 6 tests `upsert_rule` ajoutés (`tests/rust_tests.rs`) : préservation commentaires/groupes, ordre des chemins, fusion sur ligne existante, création si absent, activation d'une ligne commentée, déduplication du token identique.
+- Delta : 275 → 281 tests.
+
 ## [0.11.0] - 2026-06-25
 
 ### Added
