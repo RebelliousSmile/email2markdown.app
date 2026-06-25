@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-06-25
+
+### Changed
+
+- **Pièces jointes — layout plat** : les pièces jointes sont désormais écrites comme fichiers siblings du `.md`, nommées `<stem>__<hash>_<nom>`, sans aucun sous-dossier dédié (`_attachments/` ou `attachments/`). Le préfixe double-underscore `<stem>__` évite les collisions entre emails partageant le même dossier de destination. Les collisions de noms intra-email sont résolues par suffixe numérique.
+- **`move_email` piloté par les liens** : le déplacement des pièces jointes repose désormais sur la liste `attachments:` du frontmatter YAML (désérialisée via `serde_yaml` — les noms YAML-quotés comme `'invoice #5.pdf'` sont correctement dé-quotés). Plus aucun glob `<stem>*` ni logique de sous-dossier `<stem>_attachments/`. Les liens hors dossier source (exports legacy) sont ignorés avec un avertissement.
+- **Correction bug latent** : le couple producteur (`email_export.rs`) / consommateur (`move_email`) était incohérent — les pièces jointes étaient écrites dans un arbre centralisé `attachments/<relative>/` mais `move_email` cherchait un dossier `<stem>_attachments/` inexistant. Le layout plat unifie les deux côtés et supprime les liens cassés au routage.
+
+### Tests
+
+- `test_move_email_moves_md_and_flat_attachments` remplace l'ancien test `test_move_email_moves_md_and_attachments_dir` : schéma plat (`email__file.pdf` sibling), assertions inclusives + exclusives (`!contains("_attachments/")` et `!contains("attachments/")`).
+- `test_move_email_attachment_with_special_chars` (anti-régression) : vérifie que `serde_yaml` dé-quote correctement un nom YAML-quoté (`'email__a1b2c3d4_invoice #5.pdf'`) et que le fichier est déplacé sans guillemets parasites dans le nom.
+
 ## [0.12.0] - 2026-06-25
 
 ### Added
