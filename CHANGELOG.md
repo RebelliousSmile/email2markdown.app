@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-06-25
 
 ### Added
 
@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 
 - 30 tests `route_tests` : parsing `destinations.txt`, correspondance par domain/from/subject/account, défaut Perso, Pro forcé, append year/month, chemin hors fichier → défaut, IA off → défaut, `join_safe_segments` (rejet `..`/`.`/`\`/caractères interdits), `move_email` (déplacement `.md` + `_attachments/`, réécriture chemins, rejet symlink), `apply_decision` (création dossier manquant + déplacement).
-- Delta tests M1→M8 : 326 → 273 (−53 : suppression des tests des modules retirés, +30 `route_tests`).
+- Delta tests M1→M8 : 326 → 275 (−53 : suppression des tests des modules retirés, +30 `route_tests`, +2 tests ordre-fichier multi-destinations).
 
 ## [0.10.0] - 2026-05-12
 
