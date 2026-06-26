@@ -230,6 +230,43 @@ pub fn remove_rule(config: &mut DestinationsConfig, path: &str, rule: &Destinati
     }
 }
 
+/// Add `rule` to the entry at `path` if it exists and the rule is not already present.
+///
+/// Returns `true` if the rule was inserted.
+pub fn add_rule(config: &mut DestinationsConfig, path: &str, rule: DestinationRule) -> bool {
+    if let Some(entry) = config
+        .destinations
+        .iter_mut()
+        .find(|e| e.path.eq_ignore_ascii_case(path))
+    {
+        if !entry.rules.contains(&rule) {
+            entry.rules.push(rule);
+            return true;
+        }
+    }
+    false
+}
+
+/// Reorder destinations to match `order` (slice of paths).
+///
+/// Entries whose path appears in `order` are moved to that position; any
+/// remaining entries (not mentioned in `order`) are appended at the end in
+/// their original relative order.
+pub fn reorder_destinations(config: &mut DestinationsConfig, order: &[&str]) {
+    let mut reordered = Vec::with_capacity(config.destinations.len());
+    for path in order {
+        if let Some(pos) = config
+            .destinations
+            .iter()
+            .position(|e| e.path.eq_ignore_ascii_case(path))
+        {
+            reordered.push(config.destinations.swap_remove(pos));
+        }
+    }
+    reordered.extend(config.destinations.drain(..));
+    config.destinations = reordered;
+}
+
 // ── Migration ─────────────────────────────────────────────────────────────────
 
 /// One-shot migration: parse a legacy `destinations.txt` and write the YAML form.
