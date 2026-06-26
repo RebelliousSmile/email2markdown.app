@@ -173,6 +173,63 @@ pub fn upsert_entry(config: &mut DestinationsConfig, path: &str, rules: &[Destin
     }
 }
 
+// ── Mutators (pure, for the interactive editor) ───────────────────────────────
+
+/// Remove the entry whose `path` matches (case-insensitive). Returns `true` if one was removed.
+pub fn remove_entry(config: &mut DestinationsConfig, path: &str) -> bool {
+    let before = config.destinations.len();
+    config
+        .destinations
+        .retain(|e| !e.path.eq_ignore_ascii_case(path));
+    config.destinations.len() != before
+}
+
+/// Mark the matching entry as the default and clear `default` on every other entry.
+///
+/// Returns `true` if the path existed (and is now the sole default).
+pub fn set_default(config: &mut DestinationsConfig, path: &str) -> bool {
+    if !config
+        .destinations
+        .iter()
+        .any(|e| e.path.eq_ignore_ascii_case(path))
+    {
+        return false;
+    }
+    for entry in &mut config.destinations {
+        entry.default = entry.path.eq_ignore_ascii_case(path);
+    }
+    true
+}
+
+/// Set (or clear, with `None`) an entry's note. Returns `true` if the path existed.
+pub fn set_note(config: &mut DestinationsConfig, path: &str, note: Option<String>) -> bool {
+    if let Some(entry) = config
+        .destinations
+        .iter_mut()
+        .find(|e| e.path.eq_ignore_ascii_case(path))
+    {
+        entry.note = note;
+        true
+    } else {
+        false
+    }
+}
+
+/// Drop a matching rule from an entry. Returns `true` if a rule was removed.
+pub fn remove_rule(config: &mut DestinationsConfig, path: &str, rule: &DestinationRule) -> bool {
+    if let Some(entry) = config
+        .destinations
+        .iter_mut()
+        .find(|e| e.path.eq_ignore_ascii_case(path))
+    {
+        let before = entry.rules.len();
+        entry.rules.retain(|r| r != rule);
+        entry.rules.len() != before
+    } else {
+        false
+    }
+}
+
 // ── Migration ─────────────────────────────────────────────────────────────────
 
 /// One-shot migration: parse a legacy `destinations.txt` and write the YAML form.

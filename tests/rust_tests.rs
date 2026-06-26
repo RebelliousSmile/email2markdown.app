@@ -2232,3 +2232,110 @@ mod suggest_tests {
         assert_eq!(extract_domain("no-at-sign"), None);
     }
 }
+
+/// Pure helpers backing the `dest` interactive editor.
+mod dest_interactive_tests {
+    use email_to_markdown::dest_cmd::filter_entries;
+    use email_to_markdown::destinations::{
+        remove_entry, remove_rule, set_default, set_note, DestinationEntry, DestinationRule,
+        DestinationsConfig,
+    };
+
+    fn entry(path: &str) -> DestinationEntry {
+        DestinationEntry { path: path.into(), ..Default::default() }
+    }
+
+    fn sample() -> DestinationsConfig {
+        DestinationsConfig {
+            destinations: vec![entry("Perso/Banque"), entry("Perso/Work"), entry("Pro/Clients")],
+        }
+    }
+
+    /// remove_entry drops the matching path (case-insensitive) and reports true.
+    #[test]
+    fn test_remove_entry_by_path() {
+        let mut cfg = sample();
+        assert!(remove_entry(&mut cfg, "perso/work"));
+        assert_eq!(cfg.destinations.len(), 2);
+        assert!(!cfg.destinations.iter().any(|e| e.path == "Perso/Work"));
+    }
+
+    /// remove_entry on an unknown path is a no-op returning false.
+    #[test]
+    fn test_remove_entry_absent_returns_false() {
+        let mut cfg = sample();
+        assert!(!remove_entry(&mut cfg, "Nope"));
+        assert_eq!(cfg.destinations.len(), 3);
+    }
+
+    /// set_default marks one entry and clears the flag on all others.
+    #[test]
+    fn test_set_default_clears_others() {
+        let mut cfg = sample();
+        cfg.destinations[0].default = true;
+        assert!(set_default(&mut cfg, "Pro/Clients"));
+        let defaults: Vec<&str> = cfg
+            .destinations
+            .iter()
+            .filter(|e| e.default)
+            .map(|e| e.path.as_str())
+            .collect();
+        assert_eq!(defaults, vec!["Pro/Clients"]);
+    }
+
+    /// set_note sets then clears a note.
+    #[test]
+    fn test_set_note_sets_and_clears() {
+        let mut cfg = sample();
+        assert!(set_note(&mut cfg, "Perso/Banque", Some("relevés".into())));
+        assert_eq!(cfg.destinations[0].note.as_deref(), Some("relevés"));
+        assert!(set_note(&mut cfg, "Perso/Banque", None));
+        assert_eq!(cfg.destinations[0].note, None);
+    }
+
+    /// remove_rule drops a matching rule from an entry.
+    #[test]
+    fn test_remove_rule_drops_match() {
+        let mut cfg = DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: "Perso/Banque".into(),
+                rules: vec![
+                    DestinationRule::Domain("ubs.ch".into()),
+                    DestinationRule::Subject("facture".into()),
+                ],
+                ..Default::default()
+            }],
+        };
+        assert!(remove_rule(&mut cfg, "Perso/Banque", &DestinationRule::Domain("ubs.ch".into())));
+        assert_eq!(cfg.destinations[0].rules, vec![DestinationRule::Subject("facture".into())]);
+    }
+
+    /// remove_rule for a rule that isn't present is a no-op returning false.
+    #[test]
+    fn test_remove_rule_absent_noop() {
+        let mut cfg = DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: "Perso/Banque".into(),
+                rules: vec![DestinationRule::Domain("ubs.ch".into())],
+                ..Default::default()
+            }],
+        };
+        assert!(!remove_rule(&mut cfg, "Perso/Banque", &DestinationRule::Subject("x".into())));
+        assert_eq!(cfg.destinations[0].rules.len(), 1);
+    }
+
+    /// filter_entries matches paths case-insensitively as a substring.
+    #[test]
+    fn test_filter_entries_substring_ci() {
+        let cfg = sample();
+        let hits = filter_entries(&cfg, "PERSO");
+        assert_eq!(hits, vec![0, 1]);
+    }
+
+    /// An empty filter returns every index.
+    #[test]
+    fn test_filter_entries_empty_returns_all() {
+        let cfg = sample();
+        assert_eq!(filter_entries(&cfg, "  "), vec![0, 1, 2]);
+    }
+}
