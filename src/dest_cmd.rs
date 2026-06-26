@@ -480,32 +480,56 @@ pub fn resolve_scan_root(settings: &config::Settings, cfg: &DestinationsConfig) 
     Ok(notes_dir.join(default_sub))
 }
 
-/// Walk `root` and count emails per sender domain.
-///
-/// Excludes any entry whose name starts with `.` or `_`, never follows symlinks
-/// (rule 02-rust-filesystem-safety), and is depth-bounded as a runaway guard.
-pub fn scan_domains(root: &Path) -> Result<HashMap<String, usize>> {
-    let mut files = Vec::new();
-    if root.exists() {
-        walk_md(root, 0, 6, &mut files)?;
-    }
+/// Result of a single notes-directory walk.
+pub struct ScanResult {
+    /// Sender domain → email count, extracted from `.md` frontmatter.
+    pub domains: HashMap<String, usize>,
+    /// Subdirectory paths relative to the scan root (forward slashes).
+    pub folders: Vec<String>,
+}
 
-    let mut groups: HashMap<String, usize> = HashMap::new();
+/// Walk `root` once, collecting sender domains from `.md` files and all
+/// subdirectory paths up to `max_depth` levels deep.
+///
+/// Excludes entries starting with `.` or `_`, never follows symlinks
+/// (rule 02-rust-filesystem-safety).
+pub fn scan_notes(root: &Path) -> Result<ScanResult> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut folders: Vec<String> = Vec::new();
+    if root.exists() {
+        walk_notes(root, root, 0, 6, &mut files, &mut folders)?;
+    }
+    folders.sort();
+
+    let mut domains: HashMap<String, usize> = HashMap::new();
     for file in files {
         let Ok(content) = std::fs::read_to_string(&file) else {
             continue;
         };
         if let Some(from) = parse_from(&content) {
             if let Some(domain) = extract_domain(&from) {
-                *groups.entry(domain).or_insert(0) += 1;
+                *domains.entry(domain).or_insert(0) += 1;
             }
         }
     }
-    Ok(groups)
+    Ok(ScanResult { domains, folders })
 }
 
-/// Recursively collect `.md` files, honoring the exclusion and symlink rules.
-fn walk_md(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<PathBuf>) -> Result<()> {
+/// Thin wrapper kept for callers that only need domain counts.
+pub fn scan_domains(root: &Path) -> Result<HashMap<String, usize>> {
+    Ok(scan_notes(root)?.domains)
+}
+
+/// Recursively collect `.md` files and subdirectory paths, honoring exclusion
+/// and symlink rules.
+fn walk_notes(
+    base: &Path,
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    files: &mut Vec<PathBuf>,
+    folders: &mut Vec<String>,
+) -> Result<()> {
     if depth > max_depth {
         return Ok(());
     }
@@ -526,11 +550,14 @@ fn walk_md(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<PathBuf>) -
         }
         let path = entry.path();
         if file_type.is_dir() {
-            walk_md(&path, depth + 1, max_depth, out)?;
+            if let Ok(rel) = path.strip_prefix(base) {
+                folders.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+            walk_notes(base, &path, depth + 1, max_depth, files, folders)?;
         } else if file_type.is_file()
             && path.extension().and_then(|e| e.to_str()) == Some("md")
         {
-            out.push(path);
+            files.push(path);
         }
     }
     Ok(())

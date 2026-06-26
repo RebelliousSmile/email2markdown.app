@@ -746,9 +746,11 @@ struct DestGuiIpcMessage {
 enum DestGuiIpcResult {
     StateChanged,
     Suggestions(Vec<(String, usize)>),
+    FolderSuggestions(Vec<String>),
     Close,
     Noop,
 }
+
 
 fn state_json(cfg: &crate::destinations::DestinationsConfig) -> String {
     let json = serde_json::json!({ "type": "state", "destinations": cfg.destinations });
@@ -862,25 +864,72 @@ fn handle_dest_gui_ipc(
             crate::destinations::reorder_destinations(cfg, &order);
             DestGuiIpcResult::StateChanged
         }
-        "scan_suggest" => {
+        "remove_entries" => {
+            let Some(arr) = msg.data.as_ref().and_then(|v| v.as_array()) else {
+                return DestGuiIpcResult::Noop;
+            };
+            for item in arr {
+                let Some(path) = item["path"].as_str() else { continue };
+                crate::destinations::remove_entry(cfg, path);
+            }
+            DestGuiIpcResult::StateChanged
+        }
+        "add_entries" => {
+            let Some(arr) = msg.data.as_ref().and_then(|v| v.as_array()) else {
+                return DestGuiIpcResult::Noop;
+            };
+            for item in arr {
+                let Some(path) = item["path"].as_str() else { continue };
+                let path = path.trim();
+                if path.is_empty() { continue }
+                if crate::route::join_safe_segments(Path::new(""), path).is_err() { continue }
+                if cfg.destinations.iter().any(|e| e.path.eq_ignore_ascii_case(path)) { continue }
+                cfg.destinations.push(crate::destinations::DestinationEntry {
+                    path: path.to_string(),
+                    note: None,
+                    rules: vec![],
+                    default: false,
+                });
+            }
+            DestGuiIpcResult::StateChanged
+        }
+        "scan_suggest" | "scan_folders" => {
             let settings =
                 crate::config::Settings::load(&crate::config::settings_path()).unwrap_or_default();
-            let scan_root = match crate::dest_cmd::resolve_scan_root(&settings, cfg) {
+            let Some(notes_dir_str) = settings.notes_dir.as_deref() else {
+                eprintln!("dest-gui: {}: notes_dir non configuré", msg.action);
+                return if msg.action == "scan_suggest" {
+                    DestGuiIpcResult::Suggestions(vec![])
+                } else {
+                    DestGuiIpcResult::FolderSuggestions(vec![])
+                };
+            };
+            let notes_dir = std::path::PathBuf::from(notes_dir_str);
+            let scan = match crate::dest_cmd::scan_notes(&notes_dir) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("dest-gui: scan_suggest root: {:#}", e);
-                    return DestGuiIpcResult::Noop;
+                    eprintln!("dest-gui: scan_notes: {:#}", e);
+                    return if msg.action == "scan_suggest" {
+                        DestGuiIpcResult::Suggestions(vec![])
+                    } else {
+                        DestGuiIpcResult::FolderSuggestions(vec![])
+                    };
                 }
             };
-            let groups = match crate::dest_cmd::scan_domains(&scan_root) {
-                Ok(g) => g,
-                Err(e) => {
-                    eprintln!("dest-gui: scan_domains: {:#}", e);
-                    return DestGuiIpcResult::Noop;
-                }
-            };
-            let candidates = crate::dest_cmd::uncovered_domains(groups, cfg);
-            DestGuiIpcResult::Suggestions(candidates)
+            if msg.action == "scan_suggest" {
+                let candidates = crate::dest_cmd::uncovered_domains(scan.domains, cfg);
+                DestGuiIpcResult::Suggestions(candidates)
+            } else {
+                let existing: std::collections::HashSet<String> =
+                    cfg.destinations.iter().map(|e| e.path.to_lowercase()).collect();
+                let folders = scan
+                    .folders
+                    .into_iter()
+                    .filter(|f| f.chars().filter(|&c| c == '/').count() < 3)
+                    .filter(|f| !existing.contains(&f.to_lowercase()))
+                    .collect();
+                DestGuiIpcResult::FolderSuggestions(folders)
+            }
         }
         "suggest_confirm" => {
             let Some(pairs_arr) = msg.data.as_ref().and_then(|v| v.as_array()) else {
@@ -964,6 +1013,12 @@ fn build_dest_gui_window(
                         window_id,
                         json: items_json,
                     });
+                }
+                DestGuiIpcResult::FolderSuggestions(paths) => {
+                    drop(cfg_guard);
+                    let json = serde_json::json!({"type": "folder_suggestions", "paths": paths})
+                        .to_string();
+                    let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
                 }
                 DestGuiIpcResult::Close => {
                     drop(cfg_guard);

@@ -64,6 +64,12 @@
   }
   #dest-list li:hover { background: #f5f5f5; }
   #dest-list li.selected { background: #e3f2fd; }
+  #dest-list.select-mode li { user-select: none; }
+  #dest-list.select-mode li.multi-selected { background: #fce4ec; }
+  #dest-list.select-mode li.multi-selected:hover { background: #f8bbd0; }
+  #delete-bar { padding: 8px 12px; border-top: 1px solid #eee; display: none; gap: 8px; align-items: center; flex-shrink: 0; }
+  #delete-bar.active { display: flex; }
+  #btn-select-mode.active { background: #e3f2fd; border-color: #1e88e5; color: #1e88e5; }
   #dest-list li .path { flex: 1; font-size: 12px; word-break: break-all; }
   #dest-list li .badge-default {
     font-size: 10px;
@@ -189,6 +195,35 @@
     display: none;
   }
   #add-entry-form h3 { font-size: 12px; font-weight: 600; margin-bottom: 10px; color: #1565c0; }
+  /* ── Scan overlay ── */
+  #scan-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #scan-overlay.active { display: flex; }
+  #scan-dialog {
+    background: #fff;
+    border-radius: 6px;
+    padding: 20px 24px;
+    width: 480px;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  }
+  #scan-dialog h2 { font-size: 14px; font-weight: 600; }
+  #scan-list { overflow-y: auto; max-height: 320px; border: 1px solid #eee; border-radius: 3px; padding: 4px 0; }
+  #scan-list label { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  #scan-list label:hover { background: #f5f5f5; }
+  #scan-status { font-size: 12px; color: #666; font-style: italic; }
+  #scan-sel-actions { display: flex; gap: 8px; }
+  #scan-sel-actions button { font-size: 11px; padding: 2px 8px; }
+
   /* ── Suggest overlay ── */
   #suggest-overlay {
     display: none;
@@ -214,7 +249,7 @@
   #suggest-table { font-size: 12px; width: 100%; border-collapse: collapse; overflow-y: auto; max-height: 300px; display: block; }
   #suggest-table th, #suggest-table td { padding: 5px 8px; text-align: left; border-bottom: 1px solid #eee; }
   #suggest-table th { font-weight: 600; background: #f5f5f5; position: sticky; top: 0; }
-  #suggest-table input { width: 100%; border: 1px solid #ddd; border-radius: 3px; padding: 3px 6px; font-size: 12px; }
+  #suggest-table input, #suggest-table select { width: 100%; border: 1px solid #ddd; border-radius: 3px; padding: 3px 6px; font-size: 12px; }
   #suggest-status { font-size: 12px; color: #666; font-style: italic; }
   .spinner {
     display: inline-block; width: 14px; height: 14px;
@@ -230,13 +265,20 @@
 <header>
   <span>Gérer les destinations</span>
   <button class="btn" id="btn-add-entry">+ Ajouter</button>
-  <button class="btn" id="btn-suggest">Suggest</button>
+  <button class="btn" id="btn-select-mode">Sélectionner</button>
+  <button class="btn" id="btn-sort-alpha">A→Z</button>
+  <button class="btn" id="btn-scan-folders">Scanner</button>
+  <button class="btn" id="btn-suggest">Suggérer</button>
 </header>
 
 <div class="layout">
   <!-- Left panel: destination list -->
   <aside id="list-panel">
     <ul id="dest-list"></ul>
+    <div id="delete-bar">
+      <button class="btn" id="btn-delete-selection" disabled style="background:#e53935;color:#fff;border-color:#e53935">Supprimer</button>
+      <button class="btn" id="btn-select-cancel">Annuler</button>
+    </div>
   </aside>
 
   <!-- Right panel: selected destination detail -->
@@ -310,6 +352,23 @@
   <button class="btn btn-primary" id="btn-save">Enregistrer</button>
 </div>
 
+<!-- Scan overlay -->
+<div id="scan-overlay">
+  <div id="scan-dialog">
+    <h2>Répertoires non couverts</h2>
+    <p id="scan-status"><span class="spinner"></span> Analyse en cours…</p>
+    <div id="scan-sel-actions" style="display:none">
+      <button class="btn" id="btn-scan-all">Tout sélectionner</button>
+      <button class="btn" id="btn-scan-none">Tout désélectionner</button>
+    </div>
+    <div id="scan-list" style="display:none"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" id="btn-scan-cancel">Annuler</button>
+      <button class="btn btn-primary" id="btn-scan-confirm" style="display:none">Ajouter</button>
+    </div>
+  </div>
+</div>
+
 <!-- Suggest overlay -->
 <div id="suggest-overlay">
   <div id="suggest-dialog">
@@ -331,6 +390,8 @@
   // ── State ──────────────────────────────────────────────────────────────────
   var state = { destinations: [] };
   var selectedPath = null;
+  var selectionMode = false;
+  var multiSelected = new Set();
 
   // ── IPC helpers ────────────────────────────────────────────────────────────
   function send(action, data) {
@@ -354,6 +415,10 @@
       renderSuggestions(data.items || []);
       return;
     }
+    if (data.type === 'folder_suggestions') {
+      renderFolderScan(data.paths || []);
+      return;
+    }
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -365,10 +430,21 @@
   function renderList() {
     var ul = document.getElementById('dest-list');
     ul.innerHTML = '';
-    state.destinations.forEach(function (entry, idx) {
+    ul.classList.toggle('select-mode', selectionMode);
+    state.destinations.forEach(function (entry) {
       var li = document.createElement('li');
-      if (entry.path === selectedPath) li.classList.add('selected');
-      li.addEventListener('click', function () { selectEntry(entry.path); });
+      if (selectionMode) {
+        if (multiSelected.has(entry.path)) li.classList.add('multi-selected');
+        li.addEventListener('click', function () {
+          if (multiSelected.has(entry.path)) multiSelected.delete(entry.path);
+          else multiSelected.add(entry.path);
+          li.classList.toggle('multi-selected', multiSelected.has(entry.path));
+          updateDeleteBar();
+        });
+      } else {
+        if (entry.path === selectedPath) li.classList.add('selected');
+        li.addEventListener('click', function () { selectEntry(entry.path); });
+      }
 
       var pathSpan = document.createElement('span');
       pathSpan.className = 'path';
@@ -384,6 +460,21 @@
 
       ul.appendChild(li);
     });
+  }
+
+  function updateDeleteBar() {
+    var n = multiSelected.size;
+    var btn = document.getElementById('btn-delete-selection');
+    btn.disabled = n === 0;
+    btn.textContent = n > 1 ? 'Supprimer (' + n + ')' : 'Supprimer';
+  }
+
+  function exitSelectionMode() {
+    selectionMode = false;
+    multiSelected.clear();
+    document.getElementById('btn-select-mode').classList.remove('active');
+    document.getElementById('delete-bar').classList.remove('active');
+    renderList();
   }
 
   function renderDetail() {
@@ -482,13 +573,73 @@
     send('reorder', { order: order });
   });
 
+  document.getElementById('btn-sort-alpha').addEventListener('click', function () {
+    var order = state.destinations.map(function (e) { return e.path; })
+      .slice().sort(function (a, b) { return a.localeCompare(b); });
+    send('reorder', { order: order });
+  });
+
+  // Selection mode
+  document.getElementById('btn-select-mode').addEventListener('click', function () {
+    selectionMode = !selectionMode;
+    multiSelected.clear();
+    this.classList.toggle('active', selectionMode);
+    document.getElementById('delete-bar').classList.toggle('active', selectionMode);
+    updateDeleteBar();
+    renderList();
+  });
+
+  document.getElementById('btn-select-cancel').addEventListener('click', exitSelectionMode);
+
+  document.getElementById('btn-delete-selection').addEventListener('click', function () {
+    if (multiSelected.size === 0) return;
+    var names = Array.from(multiSelected).join(', ');
+    if (!confirm('Supprimer ' + multiSelected.size + ' destination(s) ?\n' + names)) return;
+    var entries = Array.from(multiSelected).map(function (p) { return { path: p }; });
+    send('remove_entries', entries);
+    if (multiSelected.has(selectedPath)) selectedPath = null;
+    exitSelectionMode();
+  });
+
   // Add entry form
   document.getElementById('btn-add-entry').addEventListener('click', function () {
-    document.getElementById('add-entry-form').style.display = '';
+    document.getElementById('add-entry-form').style.display = 'block';
     document.getElementById('new-path').focus();
   });
   document.getElementById('btn-add-entry-cancel').addEventListener('click', function () {
     document.getElementById('add-entry-form').style.display = 'none';
+  });
+
+  document.getElementById('btn-scan-folders').addEventListener('click', function () {
+    document.getElementById('scan-status').innerHTML = '<span class="spinner"></span> Analyse en cours…';
+    document.getElementById('scan-list').style.display = 'none';
+    document.getElementById('scan-sel-actions').style.display = 'none';
+    document.getElementById('btn-scan-confirm').style.display = 'none';
+    document.getElementById('scan-overlay').classList.add('active');
+    send('scan_folders');
+  });
+
+  document.getElementById('btn-scan-cancel').addEventListener('click', function () {
+    document.getElementById('scan-overlay').classList.remove('active');
+  });
+
+  document.getElementById('btn-scan-all').addEventListener('click', function () {
+    document.querySelectorAll('#scan-list input[type=checkbox]').forEach(function (cb) { cb.checked = true; });
+    updateScanConfirm();
+  });
+
+  document.getElementById('btn-scan-none').addEventListener('click', function () {
+    document.querySelectorAll('#scan-list input[type=checkbox]').forEach(function (cb) { cb.checked = false; });
+    updateScanConfirm();
+  });
+
+  document.getElementById('btn-scan-confirm').addEventListener('click', function () {
+    var entries = [];
+    document.querySelectorAll('#scan-list input:checked').forEach(function (cb) {
+      entries.push({ path: cb.value });
+    });
+    if (entries.length > 0) send('add_entries', entries);
+    document.getElementById('scan-overlay').classList.remove('active');
   });
   document.getElementById('btn-add-entry-confirm').addEventListener('click', function () {
     var path = document.getElementById('new-path').value.trim();
@@ -523,12 +674,49 @@
     var pairs = [];
     rows.forEach(function (row) {
       var domain = row.dataset.domain;
-      var path = row.querySelector('input').value.trim();
+      var path = row.querySelector('select').value.trim();
       if (path) pairs.push({ domain: domain, path: path });
     });
     if (pairs.length > 0) send('suggest_confirm', pairs);
     document.getElementById('suggest-overlay').classList.remove('active');
   });
+
+  function renderFolderScan(paths) {
+    var list = document.getElementById('scan-list');
+    var status = document.getElementById('scan-status');
+    var selActions = document.getElementById('scan-sel-actions');
+    var confirm = document.getElementById('btn-scan-confirm');
+    list.innerHTML = '';
+    if (paths.length === 0) {
+      status.textContent = 'Aucun répertoire non couvert détecté.';
+      list.style.display = 'none';
+      selActions.style.display = 'none';
+      confirm.style.display = 'none';
+      return;
+    }
+    status.textContent = paths.length + ' répertoire(s) non couvert(s) :';
+    paths.forEach(function (p, i) {
+      var lbl = document.createElement('label');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = p;
+      cb.id = 'scan-cb-' + i;
+      cb.addEventListener('change', updateScanConfirm);
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(p));
+      list.appendChild(lbl);
+    });
+    list.style.display = 'block';
+    selActions.style.display = 'flex';
+    confirm.style.display = 'none';
+  }
+
+  function updateScanConfirm() {
+    var checked = document.querySelectorAll('#scan-list input:checked').length;
+    var btn = document.getElementById('btn-scan-confirm');
+    btn.style.display = checked > 0 ? '' : 'none';
+    btn.textContent = checked > 1 ? 'Ajouter (' + checked + ')' : 'Ajouter';
+  }
 
   function renderSuggestions(items) {
     var tbody = document.getElementById('suggest-tbody');
@@ -542,7 +730,11 @@
     items.forEach(function (item) {
       var tr = document.createElement('tr');
       tr.dataset.domain = item.domain;
-      tr.innerHTML = '<td>' + item.domain + '</td><td>' + item.count + '</td><td><input type="text" placeholder="chemin…"></td>';
+      var opts = '<option value="">— ignorer —</option>' +
+        state.destinations.map(function (e) {
+          return '<option value="' + e.path + '">' + e.path + '</option>';
+        }).join('');
+      tr.innerHTML = '<td>' + item.domain + '</td><td>' + item.count + '</td><td><select>' + opts + '</select></td>';
       tbody.appendChild(tr);
     });
     document.getElementById('suggest-table').style.display = '';
