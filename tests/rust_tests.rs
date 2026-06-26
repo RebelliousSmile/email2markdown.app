@@ -24,17 +24,17 @@ mod utils_tests {
 
     #[test]
     fn test_get_short_name_email() {
-        assert_eq!(get_short_name(Some("sender@example.com")), "SEN");
+        assert_eq!(get_short_name(Some("sender@example.com")), "Sender");
     }
 
     #[test]
     fn test_get_short_name_full_name() {
-        assert_eq!(get_short_name(Some("John Doe <john@example.com>")), "JD");
+        assert_eq!(get_short_name(Some("John Doe <john@example.com>")), "JohnDoe");
     }
 
     #[test]
     fn test_get_short_name_multiple_words() {
-        assert_eq!(get_short_name(Some("John Michael Doe")), "JMD");
+        assert_eq!(get_short_name(Some("John Michael Doe")), "JohnDoe");
     }
 
     #[test]
@@ -556,8 +556,8 @@ mod edge_case_tests {
         let long_local = "a".repeat(100);
         let email = format!("{}@example.com", long_local);
         let result = get_short_name(Some(&email));
-        // Should truncate appropriately
-        assert!(result.len() <= 3);
+        // Single-token local part is truncated to at most 8 letters.
+        assert!(result.chars().count() <= 8);
     }
 
     #[test]

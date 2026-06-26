@@ -14,7 +14,32 @@ pub fn limit_quote_depth(text: &str, max_depth: usize) -> String {
         .join("\n")
 }
 
-/// Extract short name (initials) from email address.
+/// Capitalize the first `n` alphabetic characters of `token`.
+///
+/// Skips non-alphabetic characters, keeps accents, and renders the result as
+/// `Capitalized` (first letter upper, rest lower). Returns an empty string when
+/// `token` has no letters.
+fn take_capitalized(token: &str, n: usize) -> String {
+    let letters: String = token.chars().filter(|c| c.is_alphabetic()).take(n).collect();
+    let mut chars = letters.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+    }
+}
+
+/// Build a readable sender/recipient token for filenames.
+///
+/// Produces up to 8 letters: the first 4 of the first name plus the first 4 of
+/// the last name, each `Capitalized` (e.g. `John Doe` → `JohnDoe`). This is more
+/// telling in a filename than bare initials.
+///
+/// Source of the name: the display name of a `Name <email>` field if present,
+/// otherwise the local part of a plain email address, otherwise the raw string.
+/// The name is split into alphabetic tokens on whitespace **and** the common
+/// separators `.`, `_`, `-`, so local parts like `john.doe` also yield `JohnDoe`.
+/// A single token yields up to its first 8 letters. Accents are preserved.
+/// Returns `"UNK"` when nothing usable remains.
 pub fn get_short_name(email_str: Option<&str>) -> String {
     let email = match email_str {
         Some(s) if !s.is_empty() => s,
@@ -40,24 +65,19 @@ pub fn get_short_name(email_str: Option<&str>) -> String {
         email
     };
 
-    // Get initials or short name
-    let words: Vec<&str> = name_part.split_whitespace().collect();
-    let short_name = if words.len() == 1 {
-        // Single word: use first 3 letters
-        words[0].chars().take(3).collect::<String>().to_uppercase()
-    } else {
-        // Multiple words: use first letter of each word (max 3 words)
-        words
-            .iter()
-            .take(3)
-            .filter_map(|w| w.chars().next())
-            .collect::<String>()
-            .to_uppercase()
-    };
+    // Split into alphabetic tokens on whitespace and common name separators.
+    let tokens: Vec<&str> = name_part
+        .split(|c: char| c.is_whitespace() || c == '.' || c == '_' || c == '-')
+        .filter(|t| t.chars().any(|c| c.is_alphabetic()))
+        .collect();
 
-    // Clean up any remaining special characters
-    let re = Regex::new(r"[^A-Z]").unwrap();
-    let result = re.replace_all(&short_name, "").to_string();
+    let result = match tokens.as_slice() {
+        [] => String::new(),
+        // Single token (single-word name or indivisible local part): up to 8 letters.
+        [only] => take_capitalized(only, 8),
+        // Otherwise: first 4 letters of the first name + first 4 of the last name.
+        [first, .., last] => format!("{}{}", take_capitalized(first, 4), take_capitalized(last, 4)),
+    };
 
     if result.is_empty() {
         "UNK".to_string()
@@ -515,9 +535,16 @@ mod tests {
 
     #[test]
     fn test_get_short_name() {
-        assert_eq!(get_short_name(Some("sender@example.com")), "SEN");
-        assert_eq!(get_short_name(Some("John Doe <john@example.com>")), "JD");
-        assert_eq!(get_short_name(Some("John Michael Doe")), "JMD");
+        // Single-token local part → up to 8 letters, capitalized.
+        assert_eq!(get_short_name(Some("sender@example.com")), "Sender");
+        // Display name → 4 of first name + 4 of last name.
+        assert_eq!(get_short_name(Some("John Doe <john@example.com>")), "JohnDoe");
+        // Multi-word → first + last only (middle dropped).
+        assert_eq!(get_short_name(Some("John Michael Doe")), "JohnDoe");
+        // Long names truncate to 4 + 4.
+        assert_eq!(get_short_name(Some("Alexander Hamilton")), "AlexHami");
+        // Dotted local part splits like first.last.
+        assert_eq!(get_short_name(Some("john.doe@example.com")), "JohnDoe");
         assert_eq!(get_short_name(None), "UNK");
         assert_eq!(get_short_name(Some("")), "UNK");
     }

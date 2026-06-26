@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Nom court plus parlant dans les noms de fichiers** : `get_short_name` ne produit plus des initiales (`JD`, `SEN`) mais jusqu'à 8 lettres — 4 du prénom + 4 du nom, chaque partie capitalisée (`John Doe` → `JohnDoe`, `Alexander Hamilton` → `AlexHami`). Le découpage se fait sur les espaces **et** les séparateurs `.`, `_`, `-`, si bien qu'une partie locale d'email comme `john.doe` donne aussi `JohnDoe`. Un nom à un seul token reçoit jusqu'à ses 8 premières lettres (`sender@…` → `Sender`) ; les accents sont conservés. Affecte les exports à venir (les fichiers déjà exportés ne sont pas renommés).
 - **`route::load_destinations()`** : la résolution + parsing de `destinations.txt` (honorant `settings.destinations_file`, repli `<app_config_dir>/destinations.txt`, liste vide + avertissement sur fichier absent/invalide) est factorisée dans un helper réutilisable, partagé entre `export_account` et le scan « Reprendre le tri ».
 
 ### Tests
