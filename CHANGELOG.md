@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-06-26
+
+### Fixed
+
+- **Fenêtre de mise à jour** : l'URL de l'API GitHub pointait vers un dépôt inexistant (`fxguillois/email-to-markdown` → 404) ; corrigée vers `RebelliousSmile/email2markdown.app`.
+- **Fenêtre de mise à jour** : absence de timeout sur l'appel réseau (ureq n'en a pas par défaut) — ajout d'un timeout de 15 s pour éviter un spinner bloqué indéfiniment si le host est injoignable.
+- **Fenêtre de mise à jour** : un message d'erreur reçu pendant la vérification n'arrêtait pas le spinner ; il est maintenant remplacé inline avec la classe `.error` (texte rouge).
+
 ## [0.15.0] - 2026-06-26
 
 ### Added

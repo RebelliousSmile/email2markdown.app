@@ -1,6 +1,6 @@
 [package]
 name = "email-to-markdown"
-version = "0.15.0"
+version = "0.15.1"
 edition = "2021"
 authors = ["FX Guillois"]
 repository = "https://github.com/fxguillois/email-to-markdown"
