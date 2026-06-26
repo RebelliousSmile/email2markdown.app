@@ -6,7 +6,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 const GITHUB_API_LATEST: &str =
-    "https://api.github.com/repos/fxguillois/email-to-markdown/releases/latest";
+    "https://api.github.com/repos/RebelliousSmile/email2markdown.app/releases/latest";
 
 static SEMVER_V_PREFIX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^v").expect("static regex"));
@@ -32,8 +32,11 @@ struct GhAsset {
 }
 
 pub fn check_update(current: &str) -> Result<Option<Release>> {
+    // Bound the call: ureq has no default timeout, so an unreachable host would
+    // otherwise hang the update window's spinner indefinitely.
     let response: GhRelease = ureq::get(GITHUB_API_LATEST)
         .set("User-Agent", "email-to-markdown-updater")
+        .timeout(std::time::Duration::from_secs(15))
         .call()
         .map_err(|e| anyhow!("GitHub API error: {}", e))?
         .into_json()?;

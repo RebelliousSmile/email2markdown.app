@@ -68,6 +68,7 @@
   }
   #status-msg.up-to-date { color: #388e3c; font-weight: 500; }
   #status-msg.update-available { color: #1565c0; font-weight: 500; }
+  #status-msg.error { color: #c62828; font-weight: 500; }
   #release-notes-section {
     display: none;
   }
@@ -201,6 +202,13 @@
     }
 
     if (data.type === 'msg') {
+      // If the initial check is still spinning, an error/abort surfaced here:
+      // stop the spinner and show the message inline instead of looping forever.
+      var statusEl = document.getElementById('status-msg');
+      if (statusEl.querySelector('.spinner')) {
+        statusEl.textContent = data.text;
+        statusEl.className = 'error';
+      }
       appendMessage(data.text);
       return;
     }
