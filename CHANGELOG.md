@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-26
+
 ### Removed
 
 - **Champs de config morts** (vestiges des fonctionnalités retirées lors du passage au routeur déterministe) : suppression de `organize_by_type` (plus aucune logique métier ne le lisait — remplacé par le routage `destinations.txt`) sur toute la chaîne (`config.rs`, structs IPC de `tray.rs`, formulaire `config_window.html`, fixtures) et de `Settings.local_folder_name` + son getter `Settings::local_folder()` (vestige du « sort-apply » retiré). Les 2 tests `settings` qui s'appuyaient sur `organize_by_type` comme champ d'exemple ont été réécrits sur un champ vivant (`skip_signature_images`), préservant la couverture de la (dé)sérialisation des overrides de compte.
