@@ -279,6 +279,9 @@ La première règle qui correspond l'emporte. Le premier segment du chemin (`Per
 #### Gérer les destinations en ligne de commande — `dest`
 
 ```bash
+# Éditeur interactif guidé (sans sous-commande) — recommandé
+email-to-markdown dest
+
 # Lister les destinations et repérer les anomalies
 email-to-markdown dest list
 
@@ -291,6 +294,8 @@ email-to-markdown dest add "Perso/Banque" --domain mabanque.fr --subject relevé
 # Proposer des règles à partir des emails déjà tombés dans le fourre-tout
 email-to-markdown dest suggest
 ```
+
+Lancé **sans sous-commande**, `dest` ouvre un éditeur interactif guidé : un filtre (sous-chaîne du chemin, insensible à la casse) restreint une liste numérotée, puis des actions au clavier la pilotent — `a`jouter, `e N` éditer la note, `s N` supprimer, `r N` gérer les règles (ajout/suppression), `d N` définir le défaut (efface le précédent), `f`iltrer à nouveau, `q`uitter. Chaque action est **sauvegardée immédiatement** et la liste renumérotée. Adapté aux gros répertoires (100+ entrées) où une liste brute n'est pas exploitable.
 
 `dest suggest` parcourt le dossier par défaut sous `notes_dir`, regroupe les emails par domaine d'expéditeur et propose interactivement une destination pour chacun (les dossiers commençant par `.` ou `_` et les liens symboliques sont ignorés). Aucun email déjà exporté n'est déplacé — les règles ne s'appliquent qu'aux exports suivants.
 

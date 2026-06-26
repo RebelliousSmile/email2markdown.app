@@ -17,8 +17,9 @@ use crate::route;
 
 #[derive(Args)]
 pub struct DestArgs {
+    /// Omit the subcommand to open the guided interactive editor.
     #[command(subcommand)]
-    pub command: DestCommand,
+    pub command: Option<DestCommand>,
 }
 
 #[derive(Subcommand)]
@@ -64,7 +65,11 @@ pub enum DestCommand {
 pub fn run(args: DestArgs) -> Result<()> {
     let dest_file = route::destinations_path();
 
-    match args.command {
+    let Some(command) = args.command else {
+        return interactive(&dest_file);
+    };
+
+    match command {
         DestCommand::List => {
             let cfg = destinations::load_yaml(&dest_file)
                 .with_context(|| format!("failed to load {}", dest_file.display()))?;
@@ -118,6 +123,258 @@ pub fn run(args: DestArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ── interactive editor ────────────────────────────────────────────────────────
+
+/// Read one trimmed line from stdin. `Ok(None)` signals EOF.
+fn prompt_line(prompt: &str) -> Result<Option<String>> {
+    print!("{prompt}");
+    io::stdout().flush().ok();
+    let mut line = String::new();
+    if io::stdin().read_line(&mut line)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(line.trim().to_string()))
+}
+
+/// Print the filtered, 1-based numbered list of entries.
+fn print_list(cfg: &DestinationsConfig, indices: &[usize]) {
+    if indices.is_empty() {
+        println!("No entries match — press f to change filter or a to add.");
+        return;
+    }
+    for (n, &i) in indices.iter().enumerate() {
+        println!("{:>3}. {}", n + 1, format_entry(&cfg.destinations[i]));
+    }
+}
+
+/// Resolve a visible 1-based number to a real index into `cfg.destinations`.
+fn resolve_index(indices: &[usize], token: &str) -> Option<usize> {
+    let n: usize = token.parse().ok()?;
+    if n >= 1 && n <= indices.len() {
+        Some(indices[n - 1])
+    } else {
+        None
+    }
+}
+
+/// Prompt for a rule kind + value. Returns `Ok(None)` on EOF or empty/`none` kind.
+fn prompt_rule(kinds: &str) -> Result<Option<DestinationRule>> {
+    let Some(kind) = prompt_line(&format!("Type [{kinds}]: "))? else {
+        return Ok(None);
+    };
+    let kind = kind.to_lowercase();
+    if kind.is_empty() || kind == "none" {
+        return Ok(None);
+    }
+    let Some(value) = prompt_line("Valeur: ")? else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let rule = match kind.as_str() {
+        "domain" => DestinationRule::Domain(value.to_lowercase()),
+        "from" => DestinationRule::From(value),
+        "subject" => DestinationRule::Subject(value),
+        "account" => DestinationRule::Account(value),
+        _ => {
+            eprintln!("  unknown rule type: {kind}");
+            return Ok(None);
+        }
+    };
+    Ok(Some(rule))
+}
+
+/// Guided interactive editor for `destinations.yaml`.
+///
+/// Outer loop prompts a filter; inner loop dispatches single-key actions.
+/// Every mutating action saves immediately, then recomputes the filtered view.
+fn interactive(dest_file: &Path) -> Result<()> {
+    let mut cfg = destinations::load_yaml(dest_file)
+        .with_context(|| format!("failed to load {}", dest_file.display()))?;
+
+    println!("Editing {} ({} entries).", dest_file.display(), cfg.destinations.len());
+
+    'outer: loop {
+        let filter = match prompt_line("\nFilter [Enter=all]: ")? {
+            None => return Ok(()), // EOF
+            Some(f) => f,
+        };
+        let mut indices = filter_entries(&cfg, &filter);
+        print_list(&cfg, &indices);
+
+        // Inner action loop.
+        loop {
+            let Some(action) = prompt_line("[a]jouter [e]N [s]N [r]N [d]N [f]iltrer [q]uitter > ")?
+            else {
+                return Ok(()); // EOF
+            };
+            let mut parts = action.split_whitespace();
+            let verb = parts.next().unwrap_or("");
+            let arg = parts.next().unwrap_or("");
+
+            match verb {
+                "" => continue,
+                "q" => return Ok(()),
+                "f" => continue 'outer,
+
+                "a" => {
+                    if action_add(&mut cfg)? {
+                        save_and_reprint(dest_file, &cfg, &filter, &mut indices)?;
+                    }
+                }
+
+                "e" => match resolve_index(&indices, arg) {
+                    Some(i) => {
+                        let path = cfg.destinations[i].path.clone();
+                        let note = prompt_line("New note (Enter to clear): ")?.unwrap_or_default();
+                        let note = (!note.is_empty()).then_some(note);
+                        destinations::set_note(&mut cfg, &path, note);
+                        save_and_reprint(dest_file, &cfg, &filter, &mut indices)?;
+                    }
+                    None => eprintln!("Index invalide."),
+                },
+
+                "s" => match resolve_index(&indices, arg) {
+                    Some(i) => {
+                        let path = cfg.destinations[i].path.clone();
+                        println!("{}", format_entry(&cfg.destinations[i]));
+                        let confirm = prompt_line("Delete? [y/N]: ")?.unwrap_or_default();
+                        if confirm.eq_ignore_ascii_case("y") {
+                            destinations::remove_entry(&mut cfg, &path);
+                            save_and_reprint(dest_file, &cfg, &filter, &mut indices)?;
+                        }
+                    }
+                    None => eprintln!("Index invalide."),
+                },
+
+                "d" => match resolve_index(&indices, arg) {
+                    Some(i) => {
+                        let path = cfg.destinations[i].path.clone();
+                        let prev = cfg
+                            .destinations
+                            .iter()
+                            .find(|e| e.default && !e.path.eq_ignore_ascii_case(&path))
+                            .map(|e| e.path.clone());
+                        destinations::set_default(&mut cfg, &path);
+                        if let Some(prev) = prev {
+                            println!("Cleared previous default: {prev}");
+                        }
+                        save_and_reprint(dest_file, &cfg, &filter, &mut indices)?;
+                    }
+                    None => eprintln!("Index invalide."),
+                },
+
+                "r" => match resolve_index(&indices, arg) {
+                    Some(i) => {
+                        if action_rules(&mut cfg, i)? {
+                            save_and_reprint(dest_file, &cfg, &filter, &mut indices)?;
+                        }
+                    }
+                    None => eprintln!("Index invalide."),
+                },
+
+                _ => eprintln!("Action inconnue."),
+            }
+        }
+    }
+}
+
+/// Save the config and reprint the freshly recomputed filtered list.
+fn save_and_reprint(
+    dest_file: &Path,
+    cfg: &DestinationsConfig,
+    filter: &str,
+    indices: &mut Vec<usize>,
+) -> Result<()> {
+    destinations::save_yaml(dest_file, cfg)
+        .with_context(|| format!("failed to save {}", dest_file.display()))?;
+    *indices = filter_entries(cfg, filter);
+    print_list(cfg, indices);
+    Ok(())
+}
+
+/// `a` action: prompt for a new entry (path + optional rule + optional note).
+/// Returns `true` if the config was mutated (and should be saved).
+fn action_add(cfg: &mut DestinationsConfig) -> Result<bool> {
+    let Some(path) = prompt_line("Path: ")? else {
+        return Ok(false);
+    };
+    if path.is_empty() {
+        return Ok(false);
+    }
+    if route::join_safe_segments(Path::new(""), &path).is_err() {
+        eprintln!("  invalid path.");
+        return Ok(false);
+    }
+
+    let rules: Vec<DestinationRule> = match prompt_rule("domain/from/subject/account/none")? {
+        Some(rule) => vec![rule],
+        None => vec![],
+    };
+
+    destinations::upsert_entry(cfg, &path, &rules);
+
+    if let Some(note) = prompt_line("Note (optional): ")? {
+        if !note.is_empty() {
+            destinations::set_note(cfg, &path, Some(note));
+        }
+    }
+
+    println!("Added \"{path}\".");
+    Ok(true)
+}
+
+/// `r N` action: add or remove a rule on entry `i`. Returns `true` if mutated.
+fn action_rules(cfg: &mut DestinationsConfig, i: usize) -> Result<bool> {
+    let path = cfg.destinations[i].path.clone();
+    loop {
+        let rules = cfg.destinations[i].rules.clone();
+        if rules.is_empty() {
+            println!("(no rules)");
+        } else {
+            for (k, rule) in rules.iter().enumerate() {
+                println!("{:>3}. {}", k + 1, rule_label(rule));
+            }
+        }
+        let Some(action) = prompt_line("[a]jouter [r]N supprimer [q]retour > ")? else {
+            return Ok(false);
+        };
+        let mut parts = action.split_whitespace();
+        let verb = parts.next().unwrap_or("");
+        let arg = parts.next().unwrap_or("");
+
+        match verb {
+            "q" | "" => return Ok(false),
+            "a" => {
+                if let Some(rule) = prompt_rule("domain/from/subject/account")? {
+                    destinations::upsert_entry(cfg, &path, &[rule]);
+                    return Ok(true);
+                }
+            }
+            "r" => {
+                let k: usize = arg.parse().unwrap_or(0);
+                if k >= 1 && k <= rules.len() {
+                    destinations::remove_rule(cfg, &path, &rules[k - 1]);
+                    return Ok(true);
+                }
+                eprintln!("Index invalide.");
+            }
+            _ => eprintln!("Action inconnue."),
+        }
+    }
+}
+
+/// One-line label for a rule (reuses the `format_entry` tag style).
+fn rule_label(rule: &DestinationRule) -> String {
+    match rule {
+        DestinationRule::Domain(d) => format!("domain:{d}"),
+        DestinationRule::From(a) => format!("from:{a}"),
+        DestinationRule::Subject(k) => format!("subject:{k}"),
+        DestinationRule::Account(n) => format!("account:{n}"),
+    }
 }
 
 // ── suggest ───────────────────────────────────────────────────────────────────
@@ -382,18 +639,21 @@ pub fn add_entry(
         .with_context(|| format!("failed to save {}", dest_file.display()))
 }
 
+/// Indices into `cfg.destinations` whose `path` contains `query` (case-insensitive).
+/// An empty/whitespace query returns every index.
+pub fn filter_entries(cfg: &DestinationsConfig, query: &str) -> Vec<usize> {
+    let q = query.trim().to_lowercase();
+    cfg.destinations
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| q.is_empty() || e.path.to_lowercase().contains(&q))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Format one entry for `list` output: `path  [rules]  — note`.
 fn format_entry(entry: &DestinationEntry) -> String {
-    let mut tags: Vec<String> = entry
-        .rules
-        .iter()
-        .map(|r| match r {
-            DestinationRule::Domain(d) => format!("domain:{d}"),
-            DestinationRule::From(a) => format!("from:{a}"),
-            DestinationRule::Subject(k) => format!("subject:{k}"),
-            DestinationRule::Account(n) => format!("account:{n}"),
-        })
-        .collect();
+    let mut tags: Vec<String> = entry.rules.iter().map(rule_label).collect();
     if entry.default {
         tags.push("default".to_string());
     }
