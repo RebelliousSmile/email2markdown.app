@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Champs de config morts** (vestiges des fonctionnalités retirées lors du passage au routeur déterministe) : suppression de `organize_by_type` (plus aucune logique métier ne le lisait — remplacé par le routage `destinations.txt`) sur toute la chaîne (`config.rs`, structs IPC de `tray.rs`, formulaire `config_window.html`, fixtures) et de `Settings.local_folder_name` + son getter `Settings::local_folder()` (vestige du « sort-apply » retiré). Les 2 tests `settings` qui s'appuyaient sur `organize_by_type` comme champ d'exemple ont été réécrits sur un champ vivant (`skip_signature_images`), préservant la couverture de la (dé)sérialisation des overrides de compte.
+
 ### Added
 
 - **Suppression d'emails dans la revue du routage** : la fenêtre de revue propose désormais un bouton « 🗑 Supprimer » par ligne et un bouton « Supprimer la sélection » dans la barre d'outils, pour écarter un email du staging sans le router vers `Perso/Messy/Emails`. Comportement : le fichier `.md` est supprimé ; ses pièces jointes sont relocalisées dans un dossier `_deleted` (sibling du `.md`) afin de rester récupérables. Nouveau helper `route::delete_email(md_path)` — garde-fou anti-symlink, parsing de la liste `attachments:` (réutilise `parse_frontmatter_attachments`), création paresseuse de `_deleted`, repli `copy`+`remove` cross-device. Côté IPC, un payload `{action: "delete", files: [...]}` est traité dans le handler de la fenêtre ; les lignes effectivement supprimées sont retirées du tableau via `route_review_deleted([...])`. 3 tests unitaires.

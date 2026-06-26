@@ -510,7 +510,6 @@ struct DefaultsData {
     skip_signature_images: Option<bool>,
     delete_after_export: Option<bool>,
     cleanup_empty_dirs: Option<bool>,
-    organize_by_type: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -521,8 +520,6 @@ struct AccountData {
     username: String,
     #[serde(default)]
     ignored_folders: Vec<String>,
-    #[serde(default)]
-    organize_by_type: Option<bool>,
     #[serde(default)]
     delete_after_export: Option<bool>,
     #[serde(default)]
@@ -1092,7 +1089,6 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
                     skip_signature_images: data.defaults.skip_signature_images,
                     delete_after_export: data.defaults.delete_after_export,
                     cleanup_empty_dirs: data.defaults.cleanup_empty_dirs,
-                    organize_by_type: data.defaults.organize_by_type,
                 };
                 settings
                     .save(&path)
@@ -1159,7 +1155,6 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
 
                 let mut behavior =
                     settings.accounts.get(&canonical_key).cloned().unwrap_or_default();
-                behavior.organize_by_type = data.organize_by_type;
                 behavior.delete_after_export = data.delete_after_export;
                 behavior.cleanup_empty_dirs = data.cleanup_empty_dirs;
                 behavior.skip_existing = data.skip_existing;

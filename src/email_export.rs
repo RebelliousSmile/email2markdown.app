@@ -1451,7 +1451,6 @@ mod tests {
             skip_signature_images: false,
             delete_after_export: false,
             cleanup_empty_dirs: false,
-            organize_by_type: false,
         }
     }
 

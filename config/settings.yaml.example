@@ -7,9 +7,6 @@
 # Root directory — each account creates a sub-folder automatically
 # export_base_dir: C:/Users/YourName/Documents/Emails
 
-# Name of the local output folder created by sort-apply (default: _local)
-# local_folder_name: _local
-
 # Default behaviour applied to every account
 defaults:
   quote_depth: 1             # Max citation depth to preserve

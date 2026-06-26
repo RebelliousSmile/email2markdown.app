@@ -352,10 +352,10 @@ mod settings_tests {
         let path = temp.path().join("settings.yaml");
 
         let settings_yaml = r#"defaults:
-  organize_by_type: false
+  skip_signature_images: false
 accounts:
   myaccount:
-    organize_by_type: true
+    skip_signature_images: true
     delete_after_export: false
     quote_depth: 5
 "#;
@@ -365,14 +365,14 @@ accounts:
 
         let behavior = settings.accounts.get("myaccount").expect("myaccount entry missing");
         // Inclusive: fields set in YAML must round-trip correctly.
-        assert_eq!(behavior.organize_by_type, Some(true), "organize_by_type should be Some(true)");
+        assert_eq!(behavior.skip_signature_images, Some(true), "skip_signature_images should be Some(true)");
         assert_eq!(behavior.delete_after_export, Some(false), "delete_after_export should be Some(false)");
         assert_eq!(behavior.quote_depth, Some(5), "quote_depth should be Some(5)");
         // Exclusive: fields absent from YAML must not bleed in from defaults or other sources.
         assert_eq!(behavior.skip_existing, None, "skip_existing must not bleed from YAML");
         assert_eq!(behavior.collect_contacts, None, "collect_contacts must not bleed");
         assert_eq!(behavior.folder_name, None, "folder_name should be None (not set)");
-        assert_eq!(settings.defaults.organize_by_type, Some(false), "defaults.organize_by_type should be Some(false)");
+        assert_eq!(settings.defaults.skip_signature_images, Some(false), "defaults.skip_signature_images should be Some(false)");
     }
 
     #[test]
@@ -382,7 +382,7 @@ accounts:
 
         let mut settings = Settings::default();
         settings.accounts.insert("myaccount".to_string(), AccountBehavior {
-            organize_by_type: Some(true),
+            skip_signature_images: Some(true),
             ..AccountBehavior::default()
         });
         settings.save(&path).expect("save settings");
