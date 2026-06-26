@@ -1,5 +1,7 @@
 pub mod email_export;
 pub mod route;
+pub mod destinations;  // YAML storage for routing destinations
+pub mod dest_cmd;      // `dest` CLI subcommand (list, add, suggest)
 pub mod config;
 pub mod utils;
 pub mod cleaner;      // Email body cleaner pipeline

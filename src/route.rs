@@ -475,43 +475,85 @@ pub fn delete_email(md_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Load and parse routing destinations from the configured `destinations.txt`.
+/// Resolve the effective destinations file path, migrating a legacy `.txt` once.
 ///
-/// Resolution mirrors the export path: honor `settings.destinations_file`, else
-/// fall back to `<app_config_dir>/destinations.txt`. A missing or malformed file
-/// yields an empty list (every email then routes to the default) with a warning.
-pub fn load_destinations() -> Vec<Destination> {
-    let settings = crate::config::Settings::load(&crate::config::settings_path())
-        .unwrap_or_default();
-    let dest_path = settings
+/// Honors `settings.destinations_file`, else falls back to
+/// `<app_config_dir>/destinations.yaml`. The format is YAML: a configured path
+/// still ending in `.txt` (legacy settings) is normalized to its `.yaml` sibling.
+///
+/// Side effect (idempotent): if the resolved `.yaml` is absent but a sibling
+/// `.txt` exists, it is migrated one-shot here. Centralizing the migration at the
+/// single resolution point means every caller (export, `dest` CLI, tray) gets the
+/// migrated file — not just `load_destinations`.
+pub fn destinations_path() -> PathBuf {
+    let settings =
+        crate::config::Settings::load(&crate::config::settings_path()).unwrap_or_default();
+    let configured = settings
         .destinations_file
         .as_deref()
         .map(PathBuf::from)
-        .unwrap_or_else(|| crate::config::app_config_dir().join("destinations.txt"));
+        .unwrap_or_else(|| crate::config::app_config_dir().join("destinations.yaml"));
 
-    if dest_path.exists() {
-        match fs::read_to_string(&dest_path)
-            .map_err(anyhow::Error::from)
-            .and_then(|content| parse_destinations(&content))
-        {
-            Ok(d) => d,
-            Err(e) => {
+    let yaml_path = if configured.extension().and_then(|e| e.to_str()) == Some("txt") {
+        configured.with_extension("yaml")
+    } else {
+        configured
+    };
+
+    // One-shot migration: yaml absent but legacy sibling .txt present.
+    if !yaml_path.exists() {
+        let txt_path = yaml_path.with_extension("txt");
+        if txt_path.exists() {
+            if let Err(e) = crate::destinations::migrate_from_txt(&txt_path, &yaml_path) {
                 eprintln!(
-                    "warning: could not parse destinations.txt ({}): {:#} — \
-                     all emails will fall to the default path",
-                    dest_path.display(),
+                    "warning: failed to migrate {} → {}: {:#}",
+                    txt_path.display(),
+                    yaml_path.display(),
                     e
                 );
-                vec![]
             }
         }
-    } else {
+    }
+
+    yaml_path
+}
+
+/// Load routing destinations from the configured `destinations.yaml`.
+///
+/// Resolution (and one-shot legacy migration) is handled by [`destinations_path`].
+/// A missing or malformed file yields an empty list (every email then routes to
+/// the default) with a warning.
+pub fn load_destinations() -> Vec<Destination> {
+    let dest_path = destinations_path();
+
+    if !dest_path.exists() {
         eprintln!(
-            "warning: destinations.txt not found at {} — \
+            "warning: destinations file not found at {} — \
              all emails will fall to the default path (Perso/Messy/Emails/<Year>/<Month>)",
             dest_path.display()
         );
-        vec![]
+        return vec![];
+    }
+
+    match crate::destinations::load_yaml(&dest_path) {
+        Ok(config) => config
+            .destinations
+            .into_iter()
+            .map(|e| Destination {
+                path: e.path,
+                rules: e.rules.iter().map(Into::into).collect(),
+                is_default: e.default,
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!(
+                "warning: could not parse {} ({:#}) — \
+                 all emails will fall to the default path",
+                dest_path.display(),
+                e
+            );
+            vec![]
+        }
     }
 }
 
@@ -665,7 +707,7 @@ pub fn parse_destinations(content: &str) -> Result<Vec<Destination>> {
 // ── Router ───────────────────────────────────────────────────────────────────
 
 /// Default fallback path (relative, without year/month — those are appended by the router).
-const DEFAULT_BASE: &str = "Perso/Messy/Emails";
+pub const DEFAULT_BASE: &str = "Perso/Messy/Emails";
 
 /// Route a single email deterministically using the rules from `destinations.txt`.
 ///
@@ -744,7 +786,7 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
 ///
 /// No `Regex::new` — a per-segment character check is sufficient and avoids a
 /// hot-path regex (project rule `02-regex-static-lazylock`).
-fn ends_with_year_month(rel_path: &str) -> bool {
+pub fn ends_with_year_month(rel_path: &str) -> bool {
     let segs: Vec<&str> = rel_path.trim_end_matches('/').split('/').collect();
     if segs.len() < 2 {
         return false;
@@ -814,150 +856,22 @@ pub fn ai_route(
 
 // ── Rule upsert ──────────────────────────────────────────────────────────────
 
-/// Serialize a `MatchRule` to its `destinations.txt` token.
-/// `Domain` value is lowercased — `route_email` compares via `to_lowercase()`.
-fn match_rule_to_token(rule: &MatchRule) -> String {
-    match rule {
-        MatchRule::Domain(d)  => format!("domain:{}", d.to_lowercase()),
-        MatchRule::From(a)    => format!("from:{}", a),
-        MatchRule::Subject(k) => format!("subject:{}", k),
-        MatchRule::Account(n) => format!("account:{}", n),
-    }
-}
-
-/// Extract `(path_part, attrs)` from a raw destination line (no leading `#`).
-/// `path_part` = text before the first ` | `, trimmed.
-/// Returns `None` for `attrs` when there is no ` | ` separator.
-fn extract_line_parts(line: &str) -> (&str, Option<&str>) {
-    if let Some(idx) = line.find(" | ") {
-        let path = line[..idx].trim();
-        let attrs = line[idx + 3..].trim();
-        (path, if attrs.is_empty() { None } else { Some(attrs) })
-    } else {
-        (line.trim(), None)
-    }
-}
-
-/// Rebuild a destination line with `new_token` appended (dedup).
-/// Returns `"path | attr1, attr2, ..."` or just `"path"` if the token list is empty.
-fn merge_attrs(path: &str, existing_attrs: Option<&str>, new_token: &str) -> String {
-    let mut tokens: Vec<String> = existing_attrs
-        .map(|a| {
-            a.split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Dedup: only append if the token is not already present.
-    if !tokens.iter().any(|t| t == new_token) {
-        tokens.push(new_token.to_string());
-    }
-
-    if tokens.is_empty() {
-        path.to_string()
-    } else {
-        format!("{} | {}", path, tokens.join(", "))
-    }
-}
-
-/// Upsert a routing rule into `destinations_file`, preserving all non-target lines verbatim.
+/// Upsert a routing rule into the YAML `destinations_file`.
 ///
-/// Behaviour:
-/// - File absent → treated as empty content; the new line is appended.
-/// - Active line whose path matches `target_path` → merge new token (dedup).
-/// - Commented line `# <path> [| attrs]` whose path matches `target_path` → uncomment + merge.
-///   Free prose comments (non-matching path part) are left untouched.
-/// - No match found → append `target_path | <token>` at end.
-///
-/// Order, blank lines, group headers, and all other comments are preserved byte-for-byte.
-/// `Domain` values are lowercased to match `route_email`'s `to_lowercase()` comparison.
+/// Loads the YAML config, appends `rule` to the entry matching `target_path`
+/// (case-insensitive, dedup), or creates a new entry. A missing file starts from
+/// an empty config. Signature is preserved for the tray callers.
 ///
 /// # Errors
-/// Returns `Err` if `destinations_file` is a symlink (anti-symlink guard), or on I/O failure.
+/// Returns `Err` if `destinations_file` is a symlink (anti-symlink guard), or on
+/// I/O / serialization failure.
 pub fn upsert_rule(destinations_file: &Path, target_path: &str, rule: MatchRule) -> Result<()> {
-    // --- Read (absent file → empty content) ---
-    let original: String = if destinations_file.exists() {
-        fs::read_to_string(destinations_file)
-            .with_context(|| format!("failed to read {}", destinations_file.display()))?
-    } else {
-        String::new()
-    };
-
-    // --- Anti-symlink guard before any write (rule 02-rust-filesystem-safety) ---
-    if destinations_file.exists() {
-        let meta = destinations_file
-            .symlink_metadata()
-            .with_context(|| format!("failed to stat {}", destinations_file.display()))?;
-        if meta.file_type().is_symlink() {
-            anyhow::bail!(
-                "refusing to write to symlink: {}",
-                destinations_file.display()
-            );
-        }
-    }
-
-    let new_token = match_rule_to_token(&rule);
-    let had_trailing_newline = original.ends_with('\n');
-
-    let mut output_lines: Vec<String> = Vec::new();
-    let mut matched = false;
-
-    for raw_line in original.lines() {
-        let trimmed = raw_line.trim();
-
-        if trimmed.is_empty() {
-            // Blank line — preserve verbatim.
-            output_lines.push(raw_line.to_string());
-            continue;
-        }
-
-        if trimmed.starts_with('#') {
-            // Could be a group header, free prose, or a commented destination.
-            // Strip '#' + leading spaces and check if the path part matches target_path.
-            let stripped = trimmed.trim_start_matches('#').trim_start();
-            let (candidate_path, attrs_str) = extract_line_parts(stripped);
-
-            if !matched && candidate_path.eq_ignore_ascii_case(target_path) {
-                // Commented destination — uncomment and merge.
-                let merged = merge_attrs(target_path, attrs_str, &new_token);
-                output_lines.push(merged);
-                matched = true;
-            } else {
-                // Free prose, group header, or different commented destination — verbatim.
-                output_lines.push(raw_line.to_string());
-            }
-            continue;
-        }
-
-        // Active line — check if path matches target.
-        let (line_path, attrs_str) = extract_line_parts(trimmed);
-        if !matched && line_path.eq_ignore_ascii_case(target_path) {
-            let merged = merge_attrs(target_path, attrs_str, &new_token);
-            output_lines.push(merged);
-            matched = true;
-        } else {
-            output_lines.push(raw_line.to_string());
-        }
-    }
-
-    if !matched {
-        // Target not found — append new line.
-        output_lines.push(format!("{} | {}", target_path, new_token));
-    }
-
-    // --- Rebuild content ---
-    let mut content = output_lines.join("\n");
-    // Preserve trailing newline if original had one; also add one for a newly created line.
-    if had_trailing_newline || !matched {
-        content.push('\n');
-    }
-
-    // --- Write ---
-    fs::write(destinations_file, content)
-        .with_context(|| format!("failed to write {}", destinations_file.display()))?;
-
+    let mut config = crate::destinations::load_yaml(destinations_file)
+        .with_context(|| format!("failed to load {}", destinations_file.display()))?;
+    let dest_rule = crate::destinations::DestinationRule::from(rule);
+    crate::destinations::upsert_entry(&mut config, target_path, &[dest_rule]);
+    crate::destinations::save_yaml(destinations_file, &config)
+        .with_context(|| format!("failed to save {}", destinations_file.display()))?;
     Ok(())
 }
 

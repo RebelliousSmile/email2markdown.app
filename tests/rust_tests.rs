@@ -1657,181 +1657,115 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         );
     }
 
-    // ── upsert_rule ──────────────────────────────────────────────────────────
+    // ── upsert_rule (YAML-backed) ─────────────────────────────────────────────
 
-    /// Comments, group headers, and blank lines must be preserved byte-for-byte.
-    #[test]
-    fn test_upsert_rule_preserves_comments_and_groups() {
-        let temp = TempDir::new().unwrap();
-        let dest_file = temp.path().join("destinations.txt");
-        let content =
-            "# === Perso ===\n\
-             Perso/Finance/Banque | domain:credit-agricole.fr\n\
-             # This is a free comment\n\
-             Perso/Inbox | default\n\
-             # === Pro ===\n\
-             Pro/Clients | from:client@corp.com\n";
-        fs::write(&dest_file, content).unwrap();
-
-        let original_comment_count = content.lines()
-            .filter(|l| l.trim().starts_with('#'))
-            .count();
-
-        upsert_rule(&dest_file, "Perso/Finance/Banque", MatchRule::From("alice@bank.fr".to_string())).unwrap();
-
-        let result = fs::read_to_string(&dest_file).unwrap();
-
-        // Inclusive: all comment lines present verbatim
-        assert!(result.contains("# === Perso ==="), "Perso group header must be preserved");
-        assert!(result.contains("# This is a free comment"), "free comment must be preserved");
-        assert!(result.contains("# === Pro ==="), "Pro group header must be preserved");
-
-        // Exclusive: no comment duplicated or deleted (count unchanged)
-        let result_comment_count = result.lines()
-            .filter(|l| l.trim().starts_with('#'))
-            .count();
-        assert_eq!(
-            result_comment_count, original_comment_count,
-            "comment line count must be unchanged; before={} after={}",
-            original_comment_count, result_comment_count
-        );
-    }
-
-    /// Relative order of all non-target paths must be unchanged.
+    /// Relative order of all non-target entries must be unchanged.
     #[test]
     fn test_upsert_rule_preserves_ordering() {
+        use email_to_markdown::destinations::load_yaml;
         let temp = TempDir::new().unwrap();
-        let dest_file = temp.path().join("destinations.txt");
-        let content =
-            "Perso/Alpha | domain:a.com\n\
-             Perso/Beta  | domain:b.com\n\
-             Perso/Gamma | domain:g.com\n";
+        let dest_file = temp.path().join("destinations.yaml");
+        let content = "destinations:\n- path: Perso/Alpha\n  rules:\n  - domain: a.com\n- path: Perso/Beta\n  rules:\n  - domain: b.com\n- path: Perso/Gamma\n  rules:\n  - domain: g.com\n";
         fs::write(&dest_file, content).unwrap();
 
         upsert_rule(&dest_file, "Perso/Beta", MatchRule::From("beta@b.com".to_string())).unwrap();
 
-        let result = fs::read_to_string(&dest_file).unwrap();
-        let alpha_pos = result.find("Perso/Alpha").expect("Alpha missing");
-        let beta_pos  = result.find("Perso/Beta").expect("Beta missing");
-        let gamma_pos = result.find("Perso/Gamma").expect("Gamma missing");
-
+        let cfg = load_yaml(&dest_file).unwrap();
+        let paths: Vec<&str> = cfg.destinations.iter().map(|e| e.path.as_str()).collect();
         // Inclusive: original relative order intact
-        assert!(alpha_pos < beta_pos, "Alpha must still precede Beta; got: {:?}", result);
-        assert!(beta_pos < gamma_pos, "Beta must still precede Gamma; got: {:?}", result);
-
-        // Exclusive: Beta not migrated to file head or tail
-        assert!(!result.starts_with("Perso/Beta"), "Beta must not be at file head");
-        assert!(gamma_pos > beta_pos, "Gamma must follow Beta, not Beta at tail");
+        assert_eq!(paths, vec!["Perso/Alpha", "Perso/Beta", "Perso/Gamma"]);
     }
 
-    /// Existing attributes are kept; the new token is appended (no duplicates, one `|`).
+    /// Existing rules are kept; the new rule is appended to the same entry.
     #[test]
     fn test_upsert_rule_merge_onto_existing() {
+        use email_to_markdown::destinations::{load_yaml, DestinationRule};
         let temp = TempDir::new().unwrap();
-        let dest_file = temp.path().join("destinations.txt");
-        fs::write(&dest_file, "Perso/Work | domain:corp.com\n").unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        fs::write(
+            &dest_file,
+            "destinations:\n- path: Perso/Work\n  rules:\n  - domain: corp.com\n",
+        )
+        .unwrap();
 
         upsert_rule(&dest_file, "Perso/Work", MatchRule::From("bob@corp.com".to_string())).unwrap();
 
-        let result = fs::read_to_string(&dest_file).unwrap();
-
-        // Inclusive: both attrs present on the same line
-        assert!(
-            result.contains("Perso/Work | domain:corp.com, from:bob@corp.com"),
-            "expected merged line; got: {:?}", result
-        );
-        // Exclusive: domain attr not duplicated
-        assert!(
-            !result.contains("domain:corp.com, domain:corp.com"),
-            "domain must not be duplicated; got: {:?}", result
-        );
-        // Exclusive: exactly one ` | ` separator in the result
-        assert_eq!(
-            result.matches(" | ").count(), 1,
-            "exactly one | expected; got: {:?}", result
-        );
+        let cfg = load_yaml(&dest_file).unwrap();
+        // Exclusive: exactly one entry (no new entry created)
+        assert_eq!(cfg.destinations.len(), 1, "must not create a second entry");
+        let work = &cfg.destinations[0];
+        // Inclusive: both rules present on the same entry
+        assert!(work.rules.contains(&DestinationRule::Domain("corp.com".to_string())));
+        assert!(work.rules.contains(&DestinationRule::From("bob@corp.com".to_string())));
+        assert_eq!(work.rules.len(), 2, "exactly two rules expected");
     }
 
-    /// A path absent from the file gets a new line appended at the end.
+    /// A path absent from the file gets a new entry appended at the end.
     #[test]
     fn test_upsert_rule_create_if_absent() {
+        use email_to_markdown::destinations::{load_yaml, DestinationRule};
         let temp = TempDir::new().unwrap();
-        let dest_file = temp.path().join("destinations.txt");
-        let content = "Perso/Known | domain:known.com\n";
-        fs::write(&dest_file, content).unwrap();
-        let original_line_count = content.lines().count();
+        let dest_file = temp.path().join("destinations.yaml");
+        fs::write(
+            &dest_file,
+            "destinations:\n- path: Perso/Known\n  rules:\n  - domain: known.com\n",
+        )
+        .unwrap();
 
-        upsert_rule(&dest_file, "Perso/NewPath", MatchRule::From("new@example.com".to_string())).unwrap();
+        upsert_rule(&dest_file, "Perso/NewPath", MatchRule::From("new@example.com".to_string()))
+            .unwrap();
 
-        let result = fs::read_to_string(&dest_file).unwrap();
-        let result_lines: Vec<&str> = result.lines().collect();
-
-        // Inclusive: new line present
-        assert!(
-            result.contains("Perso/NewPath | from:new@example.com"),
-            "new line must be present; got: {:?}", result
-        );
-        // Inclusive: new line is the last non-empty line
-        assert_eq!(
-            result_lines.last().map(|s| s.trim()),
-            Some("Perso/NewPath | from:new@example.com"),
-            "new line must be last; got: {:?}", result_lines
-        );
-        // Exclusive: exactly one new line added
-        assert_eq!(
-            result_lines.len(), original_line_count + 1,
-            "exactly one line added; before={} after={}", original_line_count, result_lines.len()
-        );
-        // Exclusive: existing line unchanged
-        assert!(
-            result.contains("Perso/Known | domain:known.com"),
-            "existing line must be preserved; got: {:?}", result
-        );
+        let cfg = load_yaml(&dest_file).unwrap();
+        // Exclusive: exactly one entry added
+        assert_eq!(cfg.destinations.len(), 2, "exactly one entry added");
+        // Inclusive: new entry is last, with the rule
+        let last = cfg.destinations.last().unwrap();
+        assert_eq!(last.path, "Perso/NewPath");
+        assert!(last.rules.contains(&DestinationRule::From("new@example.com".to_string())));
+        // Exclusive: existing entry preserved
+        assert_eq!(cfg.destinations[0].path, "Perso/Known");
     }
 
-    /// A commented-out destination is uncommented and its attrs merged.
-    #[test]
-    fn test_upsert_rule_uncomments_commented_line() {
-        let temp = TempDir::new().unwrap();
-        let dest_file = temp.path().join("destinations.txt");
-        let content = "# Perso/Archive | domain:old.com\nPerso/Other | from:x@y.com\n";
-        fs::write(&dest_file, content).unwrap();
-
-        upsert_rule(&dest_file, "Perso/Archive", MatchRule::From("new@x.com".to_string())).unwrap();
-
-        let result = fs::read_to_string(&dest_file).unwrap();
-
-        // Inclusive: line is now active with merged attrs
-        assert!(
-            result.contains("Perso/Archive | domain:old.com, from:new@x.com"),
-            "uncommented+merged line expected; got: {:?}", result
-        );
-        // Exclusive: commented form must not remain
-        assert!(
-            !result.contains("# Perso/Archive"),
-            "commented form must be gone; got: {:?}", result
-        );
-    }
-
-    /// Upserting the same token twice must not produce a duplicate.
+    /// Upserting the same rule twice must not produce a duplicate.
     #[test]
     fn test_upsert_rule_dedups_identical_rule() {
+        use email_to_markdown::destinations::{load_yaml, DestinationRule};
         let temp = TempDir::new().unwrap();
-        let dest_file = temp.path().join("destinations.txt");
-        fs::write(&dest_file, "Perso/Work | from:b@x.com\n").unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        fs::write(
+            &dest_file,
+            "destinations:\n- path: Perso/Work\n  rules:\n  - from: b@x.com\n",
+        )
+        .unwrap();
 
         upsert_rule(&dest_file, "Perso/Work", MatchRule::From("b@x.com".to_string())).unwrap();
 
-        let result = fs::read_to_string(&dest_file).unwrap();
+        let cfg = load_yaml(&dest_file).unwrap();
+        let count = cfg.destinations[0]
+            .rules
+            .iter()
+            .filter(|r| **r == DestinationRule::From("b@x.com".to_string()))
+            .count();
+        assert_eq!(count, 1, "rule must appear exactly once; got {}", count);
+    }
 
-        // Inclusive: the rule is still present
-        assert!(
-            result.contains("from:b@x.com"),
-            "rule must still be present; got: {:?}", result
-        );
-        // Exclusive: appears exactly once
-        let count = result.matches("from:b@x.com").count();
-        assert_eq!(count, 1, "from:b@x.com must appear exactly once; got {} time(s)", count);
+    /// Upserting into an absent file creates it from an empty config.
+    #[test]
+    fn test_upsert_rule_absent_file_creates() {
+        use email_to_markdown::destinations::load_yaml;
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        // File does not exist yet.
+        upsert_rule(&dest_file, "Perso/New", MatchRule::Domain("X.COM".to_string())).unwrap();
+
+        let cfg = load_yaml(&dest_file).unwrap();
+        assert_eq!(cfg.destinations.len(), 1);
+        assert_eq!(cfg.destinations[0].path, "Perso/New");
+        // Domain lowercased on write (parity with legacy behavior).
+        use email_to_markdown::destinations::DestinationRule;
+        assert!(cfg.destinations[0]
+            .rules
+            .contains(&DestinationRule::Domain("x.com".to_string())));
     }
 
     /// A free-typed new path (not in destinations.txt) is accepted by apply_decision,
@@ -1876,5 +1810,425 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             !after_content.contains("NewCategory"),
             "free path must not be written to destinations.txt (D10)"
         );
+    }
+}
+
+mod destinations_tests {
+    use email_to_markdown::destinations::{
+        load_yaml, save_yaml, upsert_entry, DestinationEntry, DestinationRule, DestinationsConfig,
+    };
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// An absent file loads as an empty config, not an error.
+    #[test]
+    fn test_load_yaml_absent_returns_empty() {
+        let temp = TempDir::new().unwrap();
+        let cfg = load_yaml(&temp.path().join("nope.yaml")).unwrap();
+        assert!(cfg.destinations.is_empty());
+    }
+
+    /// save_yaml then load_yaml round-trips entry data, including external-tagged rules.
+    #[test]
+    fn test_load_yaml_round_trip() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("destinations.yaml");
+        let cfg = DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: "Perso/Banque".to_string(),
+                note: Some("relevés".to_string()),
+                rules: vec![
+                    DestinationRule::Domain("ubs.ch".to_string()),
+                    DestinationRule::Subject("facture".to_string()),
+                ],
+                default: false,
+            }],
+        };
+        save_yaml(&path, &cfg).unwrap();
+
+        // External tagging → one-key maps in YAML.
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("domain: ubs.ch"), "external tagging expected; got:\n{raw}");
+
+        let back = load_yaml(&path).unwrap();
+        assert_eq!(back.destinations.len(), 1);
+        assert_eq!(back.destinations[0].path, "Perso/Banque");
+        assert_eq!(back.destinations[0].note.as_deref(), Some("relevés"));
+        assert_eq!(back.destinations[0].rules.len(), 2);
+    }
+
+    /// upsert_entry on an unknown path pushes a new entry.
+    #[test]
+    fn test_upsert_entry_adds_new_path() {
+        let mut cfg = DestinationsConfig::default();
+        upsert_entry(&mut cfg, "Perso/New", &[DestinationRule::Domain("x.com".to_string())]);
+        assert_eq!(cfg.destinations.len(), 1);
+        assert_eq!(cfg.destinations[0].path, "Perso/New");
+    }
+
+    /// upsert_entry must not duplicate an already-present rule (case-insensitive path).
+    #[test]
+    fn test_upsert_entry_dedup_rule() {
+        let mut cfg = DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: "Perso/Work".to_string(),
+                note: None,
+                rules: vec![DestinationRule::Domain("corp.com".to_string())],
+                default: false,
+            }],
+        };
+        // Same path different case + identical rule → no growth.
+        upsert_entry(&mut cfg, "perso/work", &[DestinationRule::Domain("corp.com".to_string())]);
+        assert_eq!(cfg.destinations.len(), 1);
+        assert_eq!(cfg.destinations[0].rules.len(), 1);
+    }
+
+    /// An empty rule slice upserts a bare path (classification option).
+    #[test]
+    fn test_upsert_entry_path_no_rule() {
+        let mut cfg = DestinationsConfig::default();
+        upsert_entry(&mut cfg, "Perso/Bare", &[]);
+        assert_eq!(cfg.destinations.len(), 1);
+        assert!(cfg.destinations[0].rules.is_empty());
+    }
+
+    /// Multiple rules in one call are all appended.
+    #[test]
+    fn test_upsert_entry_multiple_rules() {
+        let mut cfg = DestinationsConfig::default();
+        upsert_entry(
+            &mut cfg,
+            "Perso/Multi",
+            &[
+                DestinationRule::Domain("a.com".to_string()),
+                DestinationRule::Subject("invoice".to_string()),
+            ],
+        );
+        assert_eq!(cfg.destinations[0].rules.len(), 2);
+    }
+
+    /// Migration parses a legacy .txt and writes the YAML equivalent.
+    #[test]
+    fn test_migrate_from_txt() {
+        use email_to_markdown::destinations::migrate_from_txt;
+        let temp = TempDir::new().unwrap();
+        let txt = temp.path().join("destinations.txt");
+        let yaml = temp.path().join("destinations.yaml");
+        fs::write(
+            &txt,
+            "# header\nPerso/Banque | domain:ubs.ch, subject:facture\nPerso/Inbox | default\n",
+        )
+        .unwrap();
+
+        migrate_from_txt(&txt, &yaml).unwrap();
+
+        let cfg = load_yaml(&yaml).unwrap();
+        assert_eq!(cfg.destinations.len(), 2);
+        let banque = cfg.destinations.iter().find(|e| e.path == "Perso/Banque").unwrap();
+        assert_eq!(banque.rules.len(), 2);
+        let inbox = cfg.destinations.iter().find(|e| e.path == "Perso/Inbox").unwrap();
+        assert!(inbox.default, "default flag must carry over");
+    }
+
+    /// Migration honors a custom (non-default-location) path pair.
+    #[test]
+    fn test_migrate_from_txt_custom_path() {
+        use email_to_markdown::destinations::migrate_from_txt;
+        let temp = TempDir::new().unwrap();
+        let txt = temp.path().join("custom").join("routes.txt");
+        let yaml = temp.path().join("custom").join("routes.yaml");
+        fs::create_dir_all(txt.parent().unwrap()).unwrap();
+        fs::write(&txt, "Perso/X | domain:x.com\n").unwrap();
+
+        migrate_from_txt(&txt, &yaml).unwrap();
+
+        assert!(yaml.exists(), "yaml must be written at the custom path");
+        let cfg = load_yaml(&yaml).unwrap();
+        assert_eq!(cfg.destinations[0].path, "Perso/X");
+    }
+
+    /// save_yaml refuses a symlink target (rule 02-rust-filesystem-safety).
+    #[cfg(windows)]
+    #[test]
+    fn test_save_yaml_rejects_symlink() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real.yaml");
+        save_yaml(&real, &DestinationsConfig::default()).unwrap();
+        let link = temp.path().join("link.yaml");
+        // Symlink creation may require privileges; skip the assertion if it fails.
+        if std::os::windows::fs::symlink_file(&real, &link).is_ok() {
+            let err = save_yaml(&link, &DestinationsConfig::default()).unwrap_err();
+            assert!(format!("{err:#}").contains("symlink"));
+        }
+    }
+
+    /// save_yaml refuses a symlink target (rule 02-rust-filesystem-safety).
+    #[cfg(unix)]
+    #[test]
+    fn test_save_yaml_rejects_symlink() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real.yaml");
+        save_yaml(&real, &DestinationsConfig::default()).unwrap();
+        let link = temp.path().join("link.yaml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let err = save_yaml(&link, &DestinationsConfig::default()).unwrap_err();
+        assert!(format!("{err:#}").contains("symlink"));
+    }
+}
+
+mod dest_cmd_tests {
+    use email_to_markdown::dest_cmd::{add_entry, detect_anomalies};
+    use email_to_markdown::destinations::{
+        load_yaml, DestinationEntry, DestinationRule, DestinationsConfig,
+    };
+    use tempfile::TempDir;
+
+    /// detect_anomalies is empty for a clean config.
+    #[test]
+    fn test_list_empty_file() {
+        let cfg = DestinationsConfig::default();
+        assert!(detect_anomalies(&cfg).is_empty());
+    }
+
+    /// Two `default` entries surface a warning.
+    #[test]
+    fn test_list_shows_anomaly_double_default() {
+        let cfg = DestinationsConfig {
+            destinations: vec![
+                DestinationEntry { path: "A".into(), default: true, ..Default::default() },
+                DestinationEntry { path: "B".into(), default: true, ..Default::default() },
+            ],
+        };
+        let warnings = detect_anomalies(&cfg);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("default"));
+    }
+
+    /// add_entry with no rules creates a bare classification entry.
+    #[test]
+    fn test_add_path_only() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        add_entry(&dest_file, "Perso/Bare", &[], None, false).unwrap();
+
+        let cfg = load_yaml(&dest_file).unwrap();
+        assert_eq!(cfg.destinations.len(), 1);
+        assert_eq!(cfg.destinations[0].path, "Perso/Bare");
+        assert!(cfg.destinations[0].rules.is_empty());
+    }
+
+    /// add_entry with a domain rule persists it.
+    #[test]
+    fn test_add_with_domain_rule() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        add_entry(
+            &dest_file,
+            "Perso/Banque",
+            &[DestinationRule::Domain("ubs.ch".into())],
+            None,
+            false,
+        )
+        .unwrap();
+
+        let cfg = load_yaml(&dest_file).unwrap();
+        assert!(cfg.destinations[0]
+            .rules
+            .contains(&DestinationRule::Domain("ubs.ch".into())));
+    }
+
+    /// Multiple flags → multiple rules in one call.
+    #[test]
+    fn test_add_multiple_flags_creates_multiple_rules() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        add_entry(
+            &dest_file,
+            "Perso/Banque",
+            &[
+                DestinationRule::Domain("ubs.ch".into()),
+                DestinationRule::Subject("facture".into()),
+            ],
+            None,
+            false,
+        )
+        .unwrap();
+
+        let cfg = load_yaml(&dest_file).unwrap();
+        assert_eq!(cfg.destinations[0].rules.len(), 2);
+    }
+
+    /// add_entry stores the note.
+    #[test]
+    fn test_add_with_note() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        add_entry(&dest_file, "Perso/Banque", &[], Some("relevés"), false).unwrap();
+
+        let cfg = load_yaml(&dest_file).unwrap();
+        assert_eq!(cfg.destinations[0].note.as_deref(), Some("relevés"));
+    }
+
+    /// Setting `default` when one already exists is an error.
+    #[test]
+    fn test_add_default_conflict_errors() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        add_entry(&dest_file, "Perso/Inbox", &[], None, true).unwrap();
+
+        let err = add_entry(&dest_file, "Perso/Other", &[], None, true).unwrap_err();
+        assert!(format!("{err:#}").contains("default destination already exists"));
+
+        // Exclusive: the conflicting entry was not written.
+        let cfg = load_yaml(&dest_file).unwrap();
+        assert!(!cfg.destinations.iter().any(|e| e.path == "Perso/Other"));
+    }
+
+    /// A traversal path is rejected before any write.
+    #[test]
+    fn test_add_invalid_path_rejected() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        let err = add_entry(&dest_file, "Perso/../etc", &[], None, false).unwrap_err();
+        assert!(format!("{err:#}").contains("invalid"));
+        // Exclusive: no file created.
+        assert!(!dest_file.exists(), "rejected add must not create the file");
+    }
+}
+
+mod suggest_tests {
+    use email_to_markdown::dest_cmd::{
+        extract_domain, scan_domains, strip_trailing_year_month, uncovered_domains,
+    };
+    use email_to_markdown::destinations::{DestinationEntry, DestinationRule, DestinationsConfig};
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Write a `.md` with a `from:` frontmatter field.
+    fn write_md(dir: &std::path::Path, name: &str, from: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(
+            dir.join(name),
+            format!("---\nfrom: {from}\nsubject: test\n---\nBody\n"),
+        )
+        .unwrap();
+    }
+
+    /// Domains are extracted from frontmatter and counted.
+    #[test]
+    fn test_suggest_extracts_domain_from_frontmatter() {
+        let temp = TempDir::new().unwrap();
+        write_md(temp.path(), "a.md", "alice@ubs.ch");
+        write_md(temp.path(), "b.md", "Bob <bob@ubs.ch>");
+        write_md(temp.path(), "c.md", "carol@bnp.fr");
+
+        let groups = scan_domains(temp.path()).unwrap();
+        assert_eq!(groups.get("ubs.ch"), Some(&2));
+        assert_eq!(groups.get("bnp.fr"), Some(&1));
+    }
+
+    /// Directories starting with `.` are not walked.
+    #[test]
+    fn test_suggest_excludes_dot_dirs() {
+        let temp = TempDir::new().unwrap();
+        write_md(&temp.path().join(".obsidian"), "x.md", "x@hidden.com");
+        write_md(temp.path(), "ok.md", "ok@visible.com");
+
+        let groups = scan_domains(temp.path()).unwrap();
+        assert!(groups.get("hidden.com").is_none(), "dot-dir must be skipped");
+        assert_eq!(groups.get("visible.com"), Some(&1));
+    }
+
+    /// Directories starting with `_` are not walked.
+    #[test]
+    fn test_suggest_excludes_underscore_dirs() {
+        let temp = TempDir::new().unwrap();
+        write_md(&temp.path().join("_deleted"), "x.md", "x@gone.com");
+        write_md(temp.path(), "ok.md", "ok@here.com");
+
+        let groups = scan_domains(temp.path()).unwrap();
+        assert!(groups.get("gone.com").is_none(), "underscore-dir must be skipped");
+        assert_eq!(groups.get("here.com"), Some(&1));
+    }
+
+    /// Symlinked directories are not followed.
+    #[cfg(unix)]
+    #[test]
+    fn test_suggest_skips_symlinks() {
+        let temp = TempDir::new().unwrap();
+        let outside = temp.path().join("outside");
+        write_md(&outside, "secret.md", "x@external.com");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        write_md(&root, "ok.md", "ok@inside.com");
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+
+        let groups = scan_domains(&root).unwrap();
+        assert!(groups.get("external.com").is_none(), "symlink must not be followed");
+        assert_eq!(groups.get("inside.com"), Some(&1));
+    }
+
+    /// Symlinked directories are not followed (Windows).
+    #[cfg(windows)]
+    #[test]
+    fn test_suggest_skips_symlinks() {
+        let temp = TempDir::new().unwrap();
+        let outside = temp.path().join("outside");
+        write_md(&outside, "secret.md", "x@external.com");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        write_md(&root, "ok.md", "ok@inside.com");
+        // Symlink creation may require privileges; skip the assertion if it fails.
+        if std::os::windows::fs::symlink_dir(&outside, root.join("link")).is_ok() {
+            let groups = scan_domains(&root).unwrap();
+            assert!(groups.get("external.com").is_none(), "symlink must not be followed");
+            assert_eq!(groups.get("inside.com"), Some(&1));
+        }
+    }
+
+    /// A domain already covered by a Domain rule is filtered out.
+    #[test]
+    fn test_suggest_skips_already_covered_domain() {
+        let mut groups = std::collections::HashMap::new();
+        groups.insert("ubs.ch".to_string(), 5);
+        groups.insert("bnp.fr".to_string(), 3);
+
+        let cfg = DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: "Perso/Banque".into(),
+                rules: vec![DestinationRule::Domain("ubs.ch".into())],
+                ..Default::default()
+            }],
+        };
+
+        let out = uncovered_domains(groups, &cfg);
+        // Inclusive: bnp.fr remains
+        assert!(out.iter().any(|(d, _)| d == "bnp.fr"));
+        // Exclusive: ubs.ch is gone
+        assert!(!out.iter().any(|(d, _)| d == "ubs.ch"));
+    }
+
+    /// A typed path carrying a year/month suffix is stripped to the bare path.
+    #[test]
+    fn test_suggest_strips_year_month_from_path() {
+        assert_eq!(strip_trailing_year_month("Perso/Banque/2026/06"), "Perso/Banque");
+        // No suffix → unchanged.
+        assert_eq!(strip_trailing_year_month("Perso/Banque"), "Perso/Banque");
+    }
+
+    /// An empty / file-less directory yields no groups and no crash.
+    #[test]
+    fn test_suggest_no_md_files() {
+        let temp = TempDir::new().unwrap();
+        let groups = scan_domains(temp.path()).unwrap();
+        assert!(groups.is_empty());
+    }
+
+    /// extract_domain handles bare and display-name forms.
+    #[test]
+    fn test_extract_domain_forms() {
+        assert_eq!(extract_domain("alice@ubs.ch").as_deref(), Some("ubs.ch"));
+        assert_eq!(extract_domain("Alice <alice@UBS.ch>").as_deref(), Some("ubs.ch"));
+        assert_eq!(extract_domain("no-at-sign"), None);
     }
 }

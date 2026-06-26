@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 use email_to_markdown::config::{self, Config, Settings};
+use email_to_markdown::dest_cmd;
 use email_to_markdown::email_export::ImapExporter;
 use email_to_markdown::route;
 use email_to_markdown::thunderbird;  // [1] Import Thunderbird
@@ -72,6 +73,9 @@ enum Commands {
         #[arg(short, long)]
         debug: bool,
     },
+
+    /// Manage routing destinations (list, add)
+    Dest(dest_cmd::DestArgs),
 
     /// Run as system tray application (requires --features tray)
     #[cfg(feature = "tray")]
@@ -352,6 +356,10 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+
+        Commands::Dest(args) => {
+            dest_cmd::run(args)?;
         }
 
         #[cfg(feature = "tray")]

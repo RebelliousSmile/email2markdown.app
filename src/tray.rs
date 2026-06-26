@@ -315,14 +315,8 @@ pub fn run_tray() -> Result<()> {
                 }
             }
             Event::UserEvent(AppCommand::PersistRoutingRule { window_id, dest_path, attr_kind, attr_value }) => {
-                // Resolve destinations.txt path from settings.
-                let settings_path = config::settings_path();
-                let settings = crate::config::Settings::load(&settings_path).unwrap_or_default();
-                let dest_file = settings
-                    .destinations_file
-                    .as_deref()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| config::app_config_dir().join("destinations.txt"));
+                // Resolve destinations.yaml path from settings (shared resolver).
+                let dest_file = crate::route::destinations_path();
 
                 // Reject subject/account; only domain/from are surfaced in the UI.
                 let rule_opt = match attr_kind.as_str() {
@@ -351,12 +345,11 @@ pub fn run_tray() -> Result<()> {
                         }
                     }
                     Ok(()) => {
-                        // Re-read destinations.txt and inject the updated path list.
-                        let known_paths: Vec<String> = std::fs::read_to_string(&dest_file)
-                            .ok()
-                            .and_then(|c| crate::route::parse_destinations(&c).ok())
-                            .map(|dests| dests.into_iter().map(|d| d.path).collect())
-                            .unwrap_or_default();
+                        // Re-read destinations and inject the updated path list.
+                        let known_paths: Vec<String> = crate::route::load_destinations()
+                            .into_iter()
+                            .map(|d| d.path)
+                            .collect();
                         if let (Ok(json), Some(WState::Route(state))) =
                             (serde_json::to_string(&known_paths), windows.get(&window_id))
                         {
@@ -795,24 +788,11 @@ fn build_route_window(
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("notes"));
 
-    // Collect known paths from destinations.txt for the datalist autocomplete.
-    let known_paths: Vec<String> = {
-        let dest_file = settings
-            .destinations_file
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config::app_config_dir().join("destinations.txt"));
-        match std::fs::read_to_string(&dest_file) {
-            Ok(content) => match crate::route::parse_destinations(&content) {
-                Ok(dests) => dests.into_iter().map(|d| d.path).collect(),
-                Err(e) => {
-                    eprintln!("warning: failed to parse destinations.txt: {:#}", e);
-                    vec![]
-                }
-            },
-            Err(_) => vec![],
-        }
-    };
+    // Collect known paths from destinations.yaml for the datalist autocomplete.
+    let known_paths: Vec<String> = crate::route::load_destinations()
+        .into_iter()
+        .map(|d| d.path)
+        .collect();
 
     // Build owned rows — extract frontmatter fields for display in the table.
     let owned_rows: Vec<(String, String, String, String, String, bool, String, String)> = decisions

@@ -77,12 +77,13 @@ pub struct Settings {
 
     /// Root of the user's second-brain tree.
     /// Plain base path — joined with `(Perso|Pro)/<Category>/<Sub>/<Year>/<Month>`.
-    /// NOT the tree of valid paths; that tree is defined by `destinations.txt`.
+    /// NOT the tree of valid paths; that tree is defined by `destinations.yaml`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes_dir: Option<String>,
 
-    /// Path to `destinations.txt` (routing rules).
-    /// Defaults to `<config_dir>/destinations.txt` when absent.
+    /// Path to `destinations.yaml` (routing rules).
+    /// Defaults to `<config_dir>/destinations.yaml` when absent.
+    /// A legacy `.txt` path is auto-migrated to its `.yaml` sibling on load.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destinations_file: Option<String>,

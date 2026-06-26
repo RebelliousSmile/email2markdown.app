@@ -29,8 +29,8 @@ sudo apt-get install build-essential pkg-config libssl-dev
 # 2. Choisir le répertoire d'export et le répertoire de notes dans settings.yaml
 # Voir section Configuration ci-dessous
 
-# 3. Créer destinations.txt pour définir votre arborescence de rangement
-# Voir section Destinations ci-dessous
+# 3. Définir votre arborescence de rangement dans destinations.yaml
+#    (à la main, ou via `dest add` / `dest suggest` — voir section Destinations)
 ```
 
 > Les fichiers de configuration sont stockés dans le répertoire système :
@@ -85,18 +85,18 @@ email-to-markdown import --output /chemin/vers/accounts.yaml
 
 ### `export` — Exporter et ranger les emails
 
-Connecte les comptes IMAP configurés, exporte les emails en fichiers Markdown, puis les déplace automatiquement vers le bon chemin dans votre second cerveau selon `destinations.txt`.
+Connecte les comptes IMAP configurés, exporte les emails en fichiers Markdown, puis les déplace automatiquement vers le bon chemin dans votre second cerveau selon `destinations.yaml`.
 
 **Flux complet :**
 
 1. Connexion IMAP → téléchargement des emails
 2. Conversion en Markdown avec frontmatter YAML (répertoire d'export comme zone tampon)
-3. Calcul du chemin de destination selon les règles de `destinations.txt`
+3. Calcul du chemin de destination selon les règles de `destinations.yaml`
 4. Déplacement automatique vers `notes_dir/<chemin>/<Année>/<Mois>`
 
 Si aucune règle ne correspond, l'email atterrit dans le dossier fourre-tout : `notes_dir/Perso/Messy/Emails/<Année>/<Mois>`.
 
-Si `destinations.txt` est absent ou non configuré, un avertissement est affiché et tous les emails tombent dans le fourre-tout — l'export continue sans erreur fatale.
+Si `destinations.yaml` est absent ou non configuré, un avertissement est affiché et tous les emails tombent dans le fourre-tout — l'export continue sans erreur fatale.
 
 ```
 email-to-markdown export [OPTIONS]
@@ -163,9 +163,9 @@ Au premier lancement sans comptes configurés, le sous-menu **Export** est désa
 
 **Fenêtre de revue du routage** — après chaque export, une fenêtre affiche les emails avec le chemin proposé. Vous pouvez :
 
-- Conserver la proposition (chemin calculé depuis `destinations.txt`)
+- Conserver la proposition (chemin calculé depuis `destinations.yaml`)
 - Réaffecter vers un chemin connu via autocomplétion
-- Saisir librement un chemin nouveau (créé physiquement à l'apply, jamais réécrit dans `destinations.txt`)
+- Saisir librement un chemin nouveau (créé physiquement à l'apply, jamais réécrit dans `destinations.yaml`)
 - Cliquer **Appliquer** pour déplacer tous les fichiers vers leur destination finale
 
 Aucun fichier n'est déplacé avant que vous cliquiez Appliquer.
@@ -210,11 +210,11 @@ accounts:
 # Répertoire d'export (zone tampon) — chaque compte crée un sous-dossier automatiquement
 export_base_dir: C:/Users/VotreNom/Documents/Emails
 
-# Racine du second cerveau — les chemins de destinations.txt sont joints ici
+# Racine du second cerveau — les chemins de destinations.yaml sont joints ici
 notes_dir: C:/Users/VotreNom/Documents/Notes
 
-# Chemin vers destinations.txt (défaut : <config_dir>/destinations.txt)
-# destinations_file: C:/Users/VotreNom/.config/email-to-markdown/destinations.txt
+# Chemin vers destinations.yaml (défaut : <config_dir>/destinations.yaml)
+# destinations_file: C:/Users/VotreNom/.config/email-to-markdown/destinations.yaml
 
 # Routage par IA — désactivé par défaut
 # ai_routing_enabled: false
@@ -237,34 +237,62 @@ defaults:
 #     collect_contacts: true
 ```
 
-### `destinations.txt` — Arborescence de rangement
+### `destinations.yaml` — Arborescence de rangement
 
-Fichier plat décrivant les chemins valides de votre second cerveau et les règles de correspondance. Curé manuellement.
+Fichier YAML décrivant les chemins valides de votre second cerveau et les règles de correspondance. Édité à la main ou via la sous-commande `dest`.
 
+```yaml
+destinations:
+  # Chemin seul — simple option de classement (apparaît dans l'autocomplétion de la revue)
+  - path: Perso/Famille
+
+  # Chemin avec règles — correspondance déterministe (sans IA)
+  - path: Pro/Clients/Acme
+    note: client principal
+    rules:
+      - domain: acme.com
+      - domain: acme.fr
+  - path: Perso/Banque
+    rules:
+      - from: contact@mabanque.fr
+      - subject: relevé
+
+  # Fourre-tout explicite (au plus une entrée default)
+  - path: Perso/Messy/Emails
+    default: true
 ```
-# Chemin seul — disponible pour le routage IA si activé, sinon fourre-tout
-Perso/Famille
 
-# Chemin avec règles — correspondance déterministe (sans IA)
-Pro/Clients/Acme      | domain:acme.com, domain:acme.fr
-Perso/Banque          | from:contact@mabanque.fr, subject:relevé
-Pro/RH                | account:Outlook, subject:contrat
+**Types de règles :**
 
-# Fourre-tout explicite (au plus une ligne default)
-Perso/Messy/Emails    | default
-```
-
-**Syntaxe des règles :**
-
-| Attribut | Description |
+| Règle | Description |
 |----------|-------------|
-| `domain:<d>` | L'expéditeur vient du domaine `d` (insensible à la casse, sous-domaines inclus) |
-| `from:<adresse>` | Adresse exacte de l'expéditeur (insensible à la casse) |
-| `subject:<mot>` | Le sujet contient `mot` (insensible à la casse) |
-| `account:<nom>` | Email reçu sur le compte `nom` |
-| `default` | Chemin fourre-tout si aucune autre règle ne correspond |
+| `domain: <d>` | L'expéditeur vient du domaine `d` (insensible à la casse, sous-domaines inclus) |
+| `from: <adresse>` | Adresse exacte de l'expéditeur (insensible à la casse) |
+| `subject: <mot>` | Le sujet contient `mot` (insensible à la casse) |
+| `account: <nom>` | Email reçu sur le compte `nom` |
+| `default: true` | Chemin fourre-tout si aucune autre règle ne correspond |
 
 La première règle qui correspond l'emporte. Le premier segment du chemin (`Perso` ou `Pro`) détermine la polarité : `Perso` par défaut si aucune règle ne force `Pro`.
+
+> **Migration** : un `destinations.txt` hérité de l'ancien format est converti automatiquement en `destinations.yaml` au premier lancement (le `.txt` est conservé tel quel).
+
+#### Gérer les destinations en ligne de commande — `dest`
+
+```bash
+# Lister les destinations et repérer les anomalies
+email-to-markdown dest list
+
+# Ajouter une destination (chemin nu = option de classement)
+email-to-markdown dest add "Perso/Famille"
+
+# Ajouter avec une ou plusieurs règles + une note
+email-to-markdown dest add "Perso/Banque" --domain mabanque.fr --subject relevé --note "factures"
+
+# Proposer des règles à partir des emails déjà tombés dans le fourre-tout
+email-to-markdown dest suggest
+```
+
+`dest suggest` parcourt le dossier par défaut sous `notes_dir`, regroupe les emails par domaine d'expéditeur et propose interactivement une destination pour chacun (les dossiers commençant par `.` ou `_` et les liens symboliques sont ignorés). Aucun email déjà exporté n'est déplacé — les règles ne s'appliquent qu'aux exports suivants.
 
 ### `.env` — Mots de passe
 
@@ -285,7 +313,7 @@ Le suffixe `_APPLICATION_PASSWORD` est prioritaire sur `_PASSWORD`.
 
 ## Structure des exports
 
-Le répertoire d'export (`export_base_dir`) sert de zone tampon. Après l'export, les fichiers Markdown sont déplacés vers le second cerveau (`notes_dir`) selon les règles de `destinations.txt`.
+Le répertoire d'export (`export_base_dir`) sert de zone tampon. Après l'export, les fichiers Markdown sont déplacés vers le second cerveau (`notes_dir`) selon les règles de `destinations.yaml`.
 
 ```
 export_base_dir/            ← zone tampon (peut être vidée après apply)
@@ -331,13 +359,13 @@ notes_dir/                  ← second cerveau, destination finale
 
 **Dossiers manquants** : Ajustez `ignored_folders` dans `accounts.yaml` ; utilisez `--debug` pour voir les dossiers disponibles.
 
-**Emails dans le fourre-tout** : Vérifiez que `destinations.txt` est correctement configuré (`destinations_file` dans `settings.yaml`) et que les règles correspondent bien à vos expéditeurs.
+**Emails dans le fourre-tout** : Vérifiez que `destinations.yaml` est correctement configuré (`destinations_file` dans `settings.yaml`) et que les règles correspondent bien à vos expéditeurs (`dest list` aide à les inspecter).
 
 ---
 
 ## Note sur l'outillage Python
 
-Les scripts Python d'analyse (`tools/`) qui existaient dans les versions précédentes ont été archivés dans un dépôt séparé et ne font plus partie du périmètre de cette application. Le routage est désormais entièrement déterministe via `destinations.txt`, avec une option IA désactivée par défaut.
+Les scripts Python d'analyse (`tools/`) qui existaient dans les versions précédentes ont été archivés dans un dépôt séparé et ne font plus partie du périmètre de cette application. Le routage est désormais entièrement déterministe via `destinations.yaml`, avec une option IA désactivée par défaut.
 
 ---
 
