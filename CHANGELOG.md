@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-06-26
+
 ### Added
 
 - **`dest` — éditeur interactif guidé** : lancé sans sous-commande, `dest` ouvre un mode interactif pour gérer `destinations.yaml` entièrement depuis le terminal, sans documentation à côté. Un filtre (sous-chaîne du chemin, insensible à la casse) restreint une liste numérotée, puis des actions au clavier la pilotent : `a`jouter (chemin + règle optionnelle + note), `e N` éditer/effacer la note, `s N` supprimer (avec confirmation), `r N` sous-menu de règles (ajout/suppression), `d N` définir le défaut (efface le précédent), `f`iltrer, `q`uitter. Chaque action mutante est sauvegardée immédiatement, puis les indices sont recalculés et la liste renumérotée — indispensable au-delà de quelques dizaines d'entrées, où `dest list` brut n'est pas exploitable. Comble aussi le manque de suppression/édition de la première mouture (qui n'offrait que `list`/`add`/`suggest`). Nouveaux mutateurs purs dans `destinations.rs` (`remove_entry`, `set_default`, `set_note`, `remove_rule`) + `filter_entries` dans `dest_cmd.rs` ; `DestArgs.command` devient optionnel. 8 tests unitaires.
