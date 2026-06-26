@@ -1499,6 +1499,48 @@ mod tests {
     }
 
     #[test]
+    fn test_export_to_markdown_names_attachment_with_date_prefix() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let export_dir = temp.path().join("out");
+        let account = make_account(&export_dir.to_string_lossy());
+
+        // multipart/mixed: a text part + a PDF attachment named "Facture.pdf".
+        let boundary = "BOUND_ATT";
+        let raw = format!(
+            "From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Invoice\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody text\r\n--{boundary}\r\nContent-Type: application/pdf; name=\"Facture.pdf\"\r\nContent-Disposition: attachment; filename=\"Facture.pdf\"\r\n\r\n%PDF-1.4 fake pdf payload\r\n--{boundary}--\r\n"
+        ).into_bytes();
+
+        let mut ctx = ExportContext {
+            export_directory: &export_dir,
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+        };
+        let (md_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
+            .unwrap()
+            .expect("export should produce a file");
+
+        // Inclusive: the attachment is named `<date>_<original-name>`.
+        let att = export_dir.join("2024-01-01_Facture.pdf");
+        assert!(att.exists(), "attachment must be named with date prefix: {:?}", att);
+
+        // Exclusive: no cryptic hash / double-underscore prefix remains.
+        let md = fs::read_to_string(&md_path).unwrap();
+        assert!(
+            md.contains("2024-01-01_Facture.pdf"),
+            "frontmatter/body must reference the dated attachment name"
+        );
+        assert!(
+            !md.contains("__"),
+            "attachment link must not carry the old `__<hash>_` scheme: got {:?}",
+            md
+        );
+    }
+
+    #[test]
     fn test_export_to_markdown_skip_existing_returns_none() {
         use tempfile::TempDir;
 
