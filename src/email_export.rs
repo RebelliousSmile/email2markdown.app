@@ -381,14 +381,14 @@ pub fn export_to_markdown(
         body
     };
 
-    // Handle attachments — written into the same directory as the .md file
+    // Handle attachments — written into the same directory as the .md file,
+    // named `<date>_<original-name>` for readability.
     let mut attachments = Vec::new();
-    let base_filename_for_attachments = base_filename.replace('*', "_");
 
     extract_attachments(
         &mail,
         export_directory,
-        &base_filename_for_attachments,
+        &date_str,
         account.skip_signature_images,
         debug_mode,
         &mut attachments,
@@ -592,7 +592,7 @@ pub(crate) fn extract_body(mail: &ParsedMail) -> String {
 fn extract_attachments(
     mail: &ParsedMail,
     attachments_dir: &Path,
-    base_filename: &str,
+    name_prefix: &str,
     skip_signature_images: bool,
     debug_mode: bool,
     attachments: &mut Vec<String>,
@@ -643,10 +643,11 @@ fn extract_attachments(
 
                 if !payload.is_empty() {
                     let safe_filename = sanitize_filename(&decoded_filename);
-                    let filename_hash = hash_md5_prefix(&decoded_filename, 8);
-                    // Flat naming scheme: <stem>__<hash>_<safe_name>
-                    let base_full_filename =
-                        format!("{}__{}_{}", base_filename, filename_hash, safe_filename);
+                    // Flat naming scheme: <date>_<original-name> — readable, with the
+                    // email date as prefix. Collisions are disambiguated below; a second
+                    // safety pass in `route::move_email` handles cross-email collisions
+                    // when several emails are routed into the same destination folder.
+                    let base_full_filename = format!("{}_{}", name_prefix, safe_filename);
 
                     // Numeric suffix loop on real path collision — suffix inserted before extension
                     // so `invoice.pdf` → `invoice_2.pdf`, not `invoice.pdf_2`.
@@ -680,7 +681,7 @@ fn extract_attachments(
             extract_attachments(
                 part,
                 attachments_dir,
-                base_filename,
+                name_prefix,
                 skip_signature_images,
                 debug_mode,
                 attachments,

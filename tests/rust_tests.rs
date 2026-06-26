@@ -1124,6 +1124,60 @@ mod route_tests {
         }
     }
 
+    // Two emails routed into the same folder with the same attachment file name:
+    // the second attachment is suffixed and the second .md's links are updated.
+    #[test]
+    fn test_move_email_suffixes_colliding_attachment_in_dest() {
+        let temp = TempDir::new().unwrap();
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        let src_a = temp.path().join("stagingA");
+        fs::create_dir_all(&src_a).unwrap();
+        fs::write(src_a.join("2026-06-25_image.png"), b"AAA").unwrap();
+        let md_a = src_a.join("emailA.md");
+        fs::write(
+            &md_a,
+            "---\nsubject: A\nattachments:\n  - 2026-06-25_image.png\n---\nBody [2026-06-25_image.png](2026-06-25_image.png)\n",
+        )
+        .unwrap();
+
+        let src_b = temp.path().join("stagingB");
+        fs::create_dir_all(&src_b).unwrap();
+        fs::write(src_b.join("2026-06-25_image.png"), b"BBB").unwrap();
+        let md_b = src_b.join("emailB.md");
+        fs::write(
+            &md_b,
+            "---\nsubject: B\nattachments:\n  - 2026-06-25_image.png\n---\nBody [2026-06-25_image.png](2026-06-25_image.png)\n",
+        )
+        .unwrap();
+
+        move_email(&md_a, &dst_dir).unwrap();
+        move_email(&md_b, &dst_dir).unwrap();
+
+        // Both attachments survive with distinct content — no overwrite.
+        let first = dst_dir.join("2026-06-25_image.png");
+        let second = dst_dir.join("2026-06-25_image_2.png");
+        assert!(first.exists(), "first attachment must keep its name");
+        assert!(second.exists(), "colliding attachment must be suffixed");
+        assert_eq!(fs::read(&first).unwrap(), b"AAA");
+        assert_eq!(fs::read(&second).unwrap(), b"BBB");
+
+        // emailB's links (frontmatter list + body) now point to the suffixed name.
+        let b_content = fs::read_to_string(dst_dir.join("emailB.md")).unwrap();
+        assert!(
+            b_content.contains("2026-06-25_image_2.png"),
+            "B must reference the suffixed attachment name"
+        );
+        assert!(
+            !b_content.contains("- 2026-06-25_image.png\n"),
+            "B must not still reference the un-suffixed name"
+        );
+        // emailA is untouched.
+        let a_content = fs::read_to_string(dst_dir.join("emailA.md")).unwrap();
+        assert!(a_content.contains("- 2026-06-25_image.png\n"));
+    }
+
     // ── delete_email ─────────────────────────────────────────────────────────
 
     // delete_email removes the .md and relocates attachments into _deleted.

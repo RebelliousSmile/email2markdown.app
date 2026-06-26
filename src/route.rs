@@ -217,6 +217,12 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
     };
 
     // --- Move each referenced attachment that lives in old_parent ---
+    // Attachments are named `<date>_<original-name>`, so two distinct emails routed
+    // into the *same* destination folder can carry the same attachment file name
+    // (e.g. `2026-06-25_image001.png`). To avoid silently overwriting one with the
+    // other, a colliding destination name is suffixed (`…_2.png`) and the rename is
+    // recorded so the moved `.md`'s links can be updated to match.
+    let mut renamed: Vec<(String, String)> = Vec::new();
     for link in &attachments {
         let att_src = old_parent.join(link.replace('/', std::path::MAIN_SEPARATOR_STR));
 
@@ -236,14 +242,16 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
             continue;
         }
 
-        let file_name = match att_src.file_name() {
-            Some(n) => n,
+        let original_name = match att_src.file_name() {
+            Some(n) => n.to_string_lossy().into_owned(),
             None => {
                 eprintln!("warning: attachment {:?} has no file name; skipping", link);
                 continue;
             }
         };
-        let att_dest = dest_dir.join(file_name);
+        // Pick a non-colliding name in the destination folder.
+        let final_name = unique_name_in(dest_dir, &original_name);
+        let att_dest = dest_dir.join(&final_name);
 
         if fs::rename(&att_src, &att_dest).is_err() {
             // Cross-device fallback: copy then remove.
@@ -260,6 +268,10 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
                     att_src.display()
                 )
             })?;
+        }
+
+        if final_name != original_name {
+            renamed.push((link.clone(), final_name));
         }
     }
 
@@ -282,6 +294,33 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
         })?;
     }
 
+    // --- Update links for any attachment renamed on collision ---
+    // Each link (frontmatter list item + body markdown link) is the bare file name,
+    // so a whole-file substring replace is sufficient and safe (names are unique and
+    // the suffixed name is not a substring of the original).
+    if !renamed.is_empty() {
+        match fs::read_to_string(&md_dest) {
+            Ok(content) => {
+                let mut updated = content;
+                for (old, new) in &renamed {
+                    updated = updated.replace(old.as_str(), new.as_str());
+                }
+                if let Err(e) = fs::write(&md_dest, updated) {
+                    eprintln!(
+                        "warning: could not update renamed attachment links in {}: {}",
+                        md_dest.display(),
+                        e
+                    );
+                }
+            }
+            Err(e) => eprintln!(
+                "warning: could not read {} to update renamed attachment links: {}",
+                md_dest.display(),
+                e
+            ),
+        }
+    }
+
     // --- Rewrite attachment paths in the moved .md ---
     // The .md and its attachments are now co-located in dest_dir. Passing dest_dir as
     // both old and new parent means bare links stay unchanged (relative_path_from is
@@ -295,6 +334,32 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Pick a file name inside `dir` that does not collide with an existing entry.
+///
+/// Returns `file_name` unchanged when free; otherwise inserts a numeric suffix
+/// before the extension (`invoice.pdf` → `invoice_2.pdf`, `invoice_3.pdf`, …),
+/// mirroring the staging-time collision loop in `email_export::extract_attachments`.
+fn unique_name_in(dir: &Path, file_name: &str) -> String {
+    if !dir.join(file_name).exists() {
+        return file_name.to_string();
+    }
+    let (stem, ext) = match file_name.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), Some(e.to_string())),
+        None => (file_name.to_string(), None),
+    };
+    let mut suffix = 2u32;
+    loop {
+        let candidate = match &ext {
+            Some(e) => format!("{}_{}.{}", stem, suffix, e),
+            None => format!("{}_{}", stem, suffix),
+        };
+        if !dir.join(&candidate).exists() {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 /// Delete a staged email from the route-review window.
