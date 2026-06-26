@@ -2339,3 +2339,119 @@ mod dest_interactive_tests {
         assert_eq!(filter_entries(&cfg, "  "), vec![0, 1, 2]);
     }
 }
+
+mod dest_gui_tests {
+    use email_to_markdown::destinations::{
+        add_rule, remove_entry, remove_rule, reorder_destinations, set_default, set_note,
+        upsert_entry, DestinationEntry, DestinationRule, DestinationsConfig,
+    };
+
+    fn entry(path: &str) -> DestinationEntry {
+        DestinationEntry { path: path.into(), ..Default::default() }
+    }
+
+    fn sample() -> DestinationsConfig {
+        DestinationsConfig {
+            destinations: vec![entry("Perso/Banque"), entry("Perso/Work"), entry("Pro/Clients")],
+        }
+    }
+
+    /// add_entry: upsert_entry with no rules creates a new destination.
+    #[test]
+    fn test_dest_gui_add_entry() {
+        let mut cfg = sample();
+        upsert_entry(&mut cfg, "Perso/Vacances", &[]);
+        assert_eq!(cfg.destinations.len(), 4);
+        assert!(cfg.destinations.iter().any(|e| e.path == "Perso/Vacances"));
+    }
+
+    /// remove_entry: correct path is removed; others untouched.
+    #[test]
+    fn test_dest_gui_remove_entry() {
+        let mut cfg = sample();
+        remove_entry(&mut cfg, "Perso/Work");
+        assert_eq!(cfg.destinations.len(), 2);
+        assert!(!cfg.destinations.iter().any(|e| e.path == "Perso/Work"));
+    }
+
+    /// set_default: new default is flagged; previous default is cleared.
+    #[test]
+    fn test_dest_gui_set_default() {
+        let mut cfg = sample();
+        cfg.destinations[0].default = true;
+        set_default(&mut cfg, "Pro/Clients");
+        let defaults: Vec<&str> = cfg.destinations.iter().filter(|e| e.default).map(|e| e.path.as_str()).collect();
+        assert_eq!(defaults, vec!["Pro/Clients"]);
+    }
+
+    /// set_note: note is stored on the matching entry.
+    #[test]
+    fn test_dest_gui_set_note() {
+        let mut cfg = sample();
+        set_note(&mut cfg, "Perso/Banque", Some("relevés mensuels".into()));
+        assert_eq!(cfg.destinations[0].note.as_deref(), Some("relevés mensuels"));
+    }
+
+    /// add_rule: rule is pushed onto the matching entry's rules list.
+    #[test]
+    fn test_dest_gui_add_rule() {
+        let mut cfg = sample();
+        let added = add_rule(&mut cfg, "Perso/Banque", DestinationRule::Domain("ubs.ch".into()));
+        assert!(added);
+        assert_eq!(cfg.destinations[0].rules, vec![DestinationRule::Domain("ubs.ch".into())]);
+    }
+
+    /// add_rule: duplicate rule is not inserted a second time.
+    #[test]
+    fn test_dest_gui_add_rule_no_duplicate() {
+        let mut cfg = DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: "Perso/Banque".into(),
+                rules: vec![DestinationRule::Domain("ubs.ch".into())],
+                ..Default::default()
+            }],
+        };
+        let added = add_rule(&mut cfg, "Perso/Banque", DestinationRule::Domain("ubs.ch".into()));
+        assert!(!added);
+        assert_eq!(cfg.destinations[0].rules.len(), 1);
+    }
+
+    /// remove_rule: matching rule variant is removed; others stay.
+    #[test]
+    fn test_dest_gui_remove_rule() {
+        let mut cfg = DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: "Perso/Banque".into(),
+                rules: vec![
+                    DestinationRule::Domain("ubs.ch".into()),
+                    DestinationRule::Subject("facture".into()),
+                ],
+                ..Default::default()
+            }],
+        };
+        remove_rule(&mut cfg, "Perso/Banque", &DestinationRule::Domain("ubs.ch".into()));
+        assert_eq!(cfg.destinations[0].rules, vec![DestinationRule::Subject("facture".into())]);
+    }
+
+    /// reorder_destinations: entries appear in the supplied order.
+    #[test]
+    fn test_dest_gui_reorder() {
+        let mut cfg = sample();
+        reorder_destinations(&mut cfg, &["Pro/Clients", "Perso/Banque", "Perso/Work"]);
+        let paths: Vec<&str> = cfg.destinations.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["Pro/Clients", "Perso/Banque", "Perso/Work"]);
+    }
+
+    /// suggest_confirm: batch upsert_entry adds Domain rules for each pair.
+    #[test]
+    fn test_dest_gui_suggest_confirm() {
+        let mut cfg = DestinationsConfig { destinations: vec![] };
+        let pairs = [("ubs.ch", "Perso/Banque"), ("apple.com", "Perso/Tech")];
+        for (domain, path) in &pairs {
+            upsert_entry(&mut cfg, path, &[DestinationRule::Domain(domain.to_string())]);
+        }
+        assert_eq!(cfg.destinations.len(), 2);
+        assert!(cfg.destinations[0].rules.contains(&DestinationRule::Domain("ubs.ch".into())));
+        assert!(cfg.destinations[1].rules.contains(&DestinationRule::Domain("apple.com".into())));
+    }
+}

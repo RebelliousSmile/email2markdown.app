@@ -59,6 +59,10 @@ pub enum DestCommand {
 
     /// Scan the default folder and interactively suggest domain rules
     Suggest,
+
+    /// Open the destinations management GUI window (requires --features tray)
+    #[cfg(feature = "tray")]
+    Gui,
 }
 
 /// Entry point dispatched from `main`.
@@ -120,6 +124,15 @@ pub fn run(args: DestArgs) -> Result<()> {
         }
 
         DestCommand::Suggest => suggest(&dest_file)?,
+
+        #[cfg(feature = "tray")]
+        DestCommand::Gui => {
+            println!("Ouverture de la fenêtre destinations…");
+            if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenDestGui { dest_file }) {
+                eprintln!("Erreur : impossible d'ouvrir la fenêtre (tray non démarré ?) — {:#}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())
@@ -452,7 +465,7 @@ fn finish_suggest(
 }
 
 /// Resolve the folder to scan: `notes_dir / <default-destination-path>`.
-fn resolve_scan_root(settings: &config::Settings, cfg: &DestinationsConfig) -> Result<PathBuf> {
+pub fn resolve_scan_root(settings: &config::Settings, cfg: &DestinationsConfig) -> Result<PathBuf> {
     let notes_dir = settings
         .notes_dir
         .as_deref()

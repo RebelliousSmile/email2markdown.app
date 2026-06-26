@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Destinations</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    background: #f5f5f5;
+    color: #222;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    background: #1e88e5;
+    color: #fff;
+    padding: 10px 16px;
+    font-size: 15px;
+    font-weight: 600;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header span { flex: 1; }
+  .layout {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+  /* ── Left panel ── */
+  #list-panel {
+    width: 300px;
+    flex-shrink: 0;
+    border-right: 1px solid #ddd;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #list-panel-toolbar {
+    padding: 8px 12px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  #dest-list {
+    flex: 1;
+    overflow-y: auto;
+    list-style: none;
+  }
+  #dest-list li {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #dest-list li:hover { background: #f5f5f5; }
+  #dest-list li.selected { background: #e3f2fd; }
+  #dest-list li .path { flex: 1; font-size: 12px; word-break: break-all; }
+  #dest-list li .badge-default {
+    font-size: 10px;
+    background: #1e88e5;
+    color: #fff;
+    border-radius: 3px;
+    padding: 1px 5px;
+    flex-shrink: 0;
+  }
+  #dest-list li .btn-row {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  /* ── Right panel ── */
+  #detail-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    background: #f5f5f5;
+  }
+  .detail-section {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-bottom: 14px;
+    padding: 14px 18px;
+  }
+  .detail-section h3 {
+    font-size: 11px;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #eee;
+  }
+  .field-row { display: flex; align-items: center; margin-bottom: 8px; gap: 8px; }
+  .field-row label { width: 80px; flex-shrink: 0; color: #555; font-size: 12px; }
+  .field-row input, .field-row textarea, .field-row select {
+    flex: 1;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: inherit;
+    background: #fff;
+  }
+  .field-row textarea { resize: vertical; min-height: 40px; }
+  #rules-list { list-style: none; }
+  #rules-list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid #f5f5f5;
+  }
+  #rules-list li .rule-label { flex: 1; font-size: 12px; font-family: monospace; color: #333; }
+  #empty-detail {
+    color: #999;
+    font-style: italic;
+    padding: 24px 0;
+    text-align: center;
+  }
+  /* ── Footer ── */
+  .footer {
+    padding: 10px 16px;
+    background: #fff;
+    border-top: 1px solid #ddd;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  /* ── Buttons ── */
+  .btn {
+    padding: 5px 14px;
+    border-radius: 3px;
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid #ccc;
+    background: #fff;
+    color: #333;
+  }
+  .btn:hover { background: #f0f0f0; }
+  .btn-primary {
+    background: #1e88e5;
+    border-color: #1e88e5;
+    color: #fff;
+    font-weight: 600;
+  }
+  .btn-primary:hover:not(:disabled) { background: #1565c0; }
+  .btn-primary:disabled { background: #90caf9; border-color: #90caf9; cursor: default; }
+  .btn-danger { color: #c62828; border-color: #e57373; }
+  .btn-danger:hover { background: #ffebee; }
+  .btn-icon {
+    padding: 2px 6px;
+    font-size: 11px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    cursor: pointer;
+    background: #fff;
+    color: #555;
+    line-height: 1.4;
+  }
+  .btn-icon:hover { background: #f0f0f0; }
+  .btn-icon.danger { color: #c62828; border-color: #e57373; }
+  .btn-icon.danger:hover { background: #ffebee; }
+  /* ── Add-rule form ── */
+  #add-rule-form { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+  #add-rule-form select, #add-rule-form input {
+    border: 1px solid #ddd; border-radius: 3px; padding: 4px 8px; font-size: 12px;
+  }
+  /* ── Add-entry form ── */
+  #add-entry-form {
+    background: #fff;
+    border: 1px solid #1e88e5;
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    display: none;
+  }
+  #add-entry-form h3 { font-size: 12px; font-weight: 600; margin-bottom: 10px; color: #1565c0; }
+  /* ── Suggest overlay ── */
+  #suggest-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #suggest-overlay.active { display: flex; }
+  #suggest-dialog {
+    background: #fff;
+    border-radius: 6px;
+    padding: 20px 24px;
+    width: 520px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  }
+  #suggest-dialog h2 { font-size: 14px; font-weight: 600; }
+  #suggest-table { font-size: 12px; width: 100%; border-collapse: collapse; overflow-y: auto; max-height: 300px; display: block; }
+  #suggest-table th, #suggest-table td { padding: 5px 8px; text-align: left; border-bottom: 1px solid #eee; }
+  #suggest-table th { font-weight: 600; background: #f5f5f5; position: sticky; top: 0; }
+  #suggest-table input { width: 100%; border: 1px solid #ddd; border-radius: 3px; padding: 3px 6px; font-size: 12px; }
+  #suggest-status { font-size: 12px; color: #666; font-style: italic; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid #ccc; border-top-color: #1e88e5;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+    vertical-align: middle; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <span>Gérer les destinations</span>
+  <button class="btn" id="btn-add-entry">+ Ajouter</button>
+  <button class="btn" id="btn-suggest">Suggest</button>
+</header>
+
+<div class="layout">
+  <!-- Left panel: destination list -->
+  <aside id="list-panel">
+    <ul id="dest-list"></ul>
+  </aside>
+
+  <!-- Right panel: selected destination detail -->
+  <main id="detail-panel">
+    <div id="empty-detail">Sélectionnez une destination</div>
+
+    <div id="add-entry-form">
+      <h3>Nouvelle destination</h3>
+      <div class="field-row">
+        <label>Chemin</label>
+        <input id="new-path" type="text" placeholder="ex: Perso/Banque">
+      </div>
+      <div class="field-row">
+        <label>Note</label>
+        <input id="new-note" type="text" placeholder="optionnel">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-primary" id="btn-add-entry-confirm">Ajouter</button>
+        <button class="btn" id="btn-add-entry-cancel">Annuler</button>
+      </div>
+    </div>
+
+    <div id="detail-content" style="display:none">
+      <div class="detail-section">
+        <h3>Destination</h3>
+        <div class="field-row">
+          <label>Chemin</label>
+          <span id="detail-path" style="font-family:monospace;font-size:12px"></span>
+        </div>
+        <div class="field-row">
+          <label>Note</label>
+          <textarea id="detail-note" rows="2" placeholder="Description optionnelle"></textarea>
+        </div>
+        <div class="field-row" style="margin-bottom:0">
+          <label></label>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-icon" id="btn-set-default">Définir comme défaut</button>
+            <button class="btn btn-icon danger" id="btn-delete-entry">Supprimer</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <h3>Règles de routage</h3>
+        <ul id="rules-list"></ul>
+        <div id="add-rule-form">
+          <select id="rule-kind">
+            <option value="domain">domain</option>
+            <option value="from">from</option>
+            <option value="subject">subject</option>
+            <option value="account">account</option>
+          </select>
+          <input id="rule-value" type="text" placeholder="valeur" style="flex:1">
+          <button class="btn btn-icon" id="btn-add-rule">+ Ajouter</button>
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <h3>Ordre</h3>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-icon" id="btn-move-up">▲ Monter</button>
+          <button class="btn btn-icon" id="btn-move-down">▼ Descendre</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="footer">
+  <button class="btn" id="btn-cancel">Annuler</button>
+  <button class="btn btn-primary" id="btn-save">Enregistrer</button>
+</div>
+
+<!-- Suggest overlay -->
+<div id="suggest-overlay">
+  <div id="suggest-dialog">
+    <h2>Domaines non couverts</h2>
+    <p id="suggest-status"><span class="spinner"></span> Analyse en cours…</p>
+    <table id="suggest-table" style="display:none">
+      <thead><tr><th>Domaine</th><th>Emails</th><th>Destination</th></tr></thead>
+      <tbody id="suggest-tbody"></tbody>
+    </table>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" id="btn-suggest-cancel">Annuler</button>
+      <button class="btn btn-primary" id="btn-suggest-confirm" style="display:none">Confirmer</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ── State ──────────────────────────────────────────────────────────────────
+  var state = { destinations: [] };
+  var selectedPath = null;
+
+  // ── IPC helpers ────────────────────────────────────────────────────────────
+  function send(action, data) {
+    var payload = JSON.stringify({ action: action, data: data || null });
+    if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      window.ipc.postMessage(payload);
+    }
+  }
+
+  // Called by Rust via evaluate_script("window_msg(<json_string>)")
+  window.window_msg = function (jsonStr) {
+    var data;
+    try { data = JSON.parse(jsonStr); } catch (e) { return; }
+
+    if (data.type === 'state') {
+      state.destinations = data.destinations || [];
+      render();
+      return;
+    }
+    if (data.type === 'suggestions') {
+      renderSuggestions(data.items || []);
+      return;
+    }
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  function render() {
+    renderList();
+    renderDetail();
+  }
+
+  function renderList() {
+    var ul = document.getElementById('dest-list');
+    ul.innerHTML = '';
+    state.destinations.forEach(function (entry, idx) {
+      var li = document.createElement('li');
+      if (entry.path === selectedPath) li.classList.add('selected');
+      li.addEventListener('click', function () { selectEntry(entry.path); });
+
+      var pathSpan = document.createElement('span');
+      pathSpan.className = 'path';
+      pathSpan.textContent = entry.path;
+      li.appendChild(pathSpan);
+
+      if (entry.default) {
+        var badge = document.createElement('span');
+        badge.className = 'badge-default';
+        badge.textContent = 'défaut';
+        li.appendChild(badge);
+      }
+
+      ul.appendChild(li);
+    });
+  }
+
+  function renderDetail() {
+    var entry = state.destinations.find(function (e) { return e.path === selectedPath; });
+    document.getElementById('detail-content').style.display = entry ? '' : 'none';
+    document.getElementById('empty-detail').style.display = entry ? 'none' : '';
+    if (!entry) return;
+
+    document.getElementById('detail-path').textContent = entry.path;
+    var noteEl = document.getElementById('detail-note');
+    noteEl.value = entry.note || '';
+
+    var btnDef = document.getElementById('btn-set-default');
+    btnDef.textContent = entry.default ? '★ Défaut actuel' : 'Définir comme défaut';
+    btnDef.disabled = !!entry.default;
+
+    var ul = document.getElementById('rules-list');
+    ul.innerHTML = '';
+    (entry.rules || []).forEach(function (rule) {
+      var li = document.createElement('li');
+      var label = document.createElement('span');
+      label.className = 'rule-label';
+      label.textContent = ruleLabel(rule);
+      li.appendChild(label);
+      var btn = document.createElement('button');
+      btn.className = 'btn-icon danger';
+      btn.textContent = '×';
+      btn.addEventListener('click', function () {
+        send('remove_rule', { path: entry.path, rule: rule });
+      });
+      li.appendChild(btn);
+      ul.appendChild(li);
+    });
+  }
+
+  function ruleLabel(rule) {
+    if (rule.domain !== undefined) return 'domain: ' + rule.domain;
+    if (rule.from !== undefined)   return 'from: ' + rule.from;
+    if (rule.subject !== undefined) return 'subject: ' + rule.subject;
+    if (rule.account !== undefined) return 'account: ' + rule.account;
+    return JSON.stringify(rule);
+  }
+
+  function selectEntry(path) {
+    selectedPath = path;
+    render();
+    document.getElementById('add-entry-form').style.display = 'none';
+  }
+
+  // ── Action bindings ────────────────────────────────────────────────────────
+  // Note textarea → set_note on blur
+  document.getElementById('detail-note').addEventListener('blur', function () {
+    if (!selectedPath) return;
+    send('set_note', { path: selectedPath, note: this.value || null });
+  });
+
+  // Set default
+  document.getElementById('btn-set-default').addEventListener('click', function () {
+    if (selectedPath) send('set_default', { path: selectedPath });
+  });
+
+  // Delete entry
+  document.getElementById('btn-delete-entry').addEventListener('click', function () {
+    if (!selectedPath) return;
+    if (!confirm('Supprimer « ' + selectedPath + ' » ?')) return;
+    send('remove_entry', { path: selectedPath });
+    selectedPath = null;
+  });
+
+  // Add rule
+  document.getElementById('btn-add-rule').addEventListener('click', function () {
+    if (!selectedPath) return;
+    var kind = document.getElementById('rule-kind').value;
+    var value = document.getElementById('rule-value').value.trim();
+    if (!value) return;
+    send('add_rule', { path: selectedPath, kind: kind, value: value });
+    document.getElementById('rule-value').value = '';
+  });
+
+  // Move up / down
+  document.getElementById('btn-move-up').addEventListener('click', function () {
+    if (!selectedPath) return;
+    var idx = state.destinations.findIndex(function (e) { return e.path === selectedPath; });
+    if (idx <= 0) return;
+    var order = state.destinations.map(function (e) { return e.path; });
+    order.splice(idx - 1, 0, order.splice(idx, 1)[0]);
+    send('reorder', { order: order });
+  });
+
+  document.getElementById('btn-move-down').addEventListener('click', function () {
+    if (!selectedPath) return;
+    var idx = state.destinations.findIndex(function (e) { return e.path === selectedPath; });
+    if (idx < 0 || idx >= state.destinations.length - 1) return;
+    var order = state.destinations.map(function (e) { return e.path; });
+    order.splice(idx + 1, 0, order.splice(idx, 1)[0]);
+    send('reorder', { order: order });
+  });
+
+  // Add entry form
+  document.getElementById('btn-add-entry').addEventListener('click', function () {
+    document.getElementById('add-entry-form').style.display = '';
+    document.getElementById('new-path').focus();
+  });
+  document.getElementById('btn-add-entry-cancel').addEventListener('click', function () {
+    document.getElementById('add-entry-form').style.display = 'none';
+  });
+  document.getElementById('btn-add-entry-confirm').addEventListener('click', function () {
+    var path = document.getElementById('new-path').value.trim();
+    var note = document.getElementById('new-note').value.trim();
+    if (!path) return;
+    send('add_entry', { path: path, note: note || null });
+    document.getElementById('new-path').value = '';
+    document.getElementById('new-note').value = '';
+    document.getElementById('add-entry-form').style.display = 'none';
+    selectedPath = path;
+  });
+
+  // Save / Cancel
+  document.getElementById('btn-save').addEventListener('click', function () { send('save'); });
+  document.getElementById('btn-cancel').addEventListener('click', function () { send('cancel'); });
+
+  // ── Suggest flow ───────────────────────────────────────────────────────────
+  document.getElementById('btn-suggest').addEventListener('click', function () {
+    document.getElementById('suggest-status').innerHTML = '<span class="spinner"></span> Analyse en cours…';
+    document.getElementById('suggest-table').style.display = 'none';
+    document.getElementById('btn-suggest-confirm').style.display = 'none';
+    document.getElementById('suggest-overlay').classList.add('active');
+    send('scan_suggest');
+  });
+
+  document.getElementById('btn-suggest-cancel').addEventListener('click', function () {
+    document.getElementById('suggest-overlay').classList.remove('active');
+  });
+
+  document.getElementById('btn-suggest-confirm').addEventListener('click', function () {
+    var rows = document.querySelectorAll('#suggest-tbody tr');
+    var pairs = [];
+    rows.forEach(function (row) {
+      var domain = row.dataset.domain;
+      var path = row.querySelector('input').value.trim();
+      if (path) pairs.push({ domain: domain, path: path });
+    });
+    if (pairs.length > 0) send('suggest_confirm', pairs);
+    document.getElementById('suggest-overlay').classList.remove('active');
+  });
+
+  function renderSuggestions(items) {
+    var tbody = document.getElementById('suggest-tbody');
+    tbody.innerHTML = '';
+    if (items.length === 0) {
+      document.getElementById('suggest-status').textContent = 'Aucun nouveau domaine détecté.';
+      document.getElementById('suggest-table').style.display = 'none';
+      return;
+    }
+    document.getElementById('suggest-status').textContent = items.length + ' domaine(s) non couverts :';
+    items.forEach(function (item) {
+      var tr = document.createElement('tr');
+      tr.dataset.domain = item.domain;
+      tr.innerHTML = '<td>' + item.domain + '</td><td>' + item.count + '</td><td><input type="text" placeholder="chemin…"></td>';
+      tbody.appendChild(tr);
+    });
+    document.getElementById('suggest-table').style.display = '';
+    document.getElementById('btn-suggest-confirm').style.display = '';
+  }
+
+  // ── Bootstrap: request initial state from Rust ─────────────────────────────
+  send('init');
+})();
+</script>
+</body>
+</html>

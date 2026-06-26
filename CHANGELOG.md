@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dest --gui` — fenêtre modale de gestion des destinations** : accessible depuis le tray (Outils → Gérer les destinations…) ou via `email-to-markdown dest --gui`. Panneau gauche : liste triée avec boutons ↑↓ (réordonner), ✕ (supprimer), ★ (définir défaut). Panneau droit : chemin (lecture seule), note éditable, liste de règles avec suppression individuelle et ajout inline (domain/from/subject/account). Bouton Suggest : scanne le dossier de notes par défaut, détecte les domaines non encore couverts, ouvre un overlay de confirmation par lots. Toutes les mutations sont en mémoire jusqu'au clic sur Enregistrer (discard silencieux à la fermeture). Architecture : `AppCommand::PushDestState` via proxy garantit que `evaluate_script` est toujours appelé depuis la boucle d'événement tray (jamais depuis la closure IPC). Nouveaux mutateurs purs `destinations::add_rule` et `destinations::reorder_destinations` ; 9 tests unitaires.
+
 ## [0.15.1] - 2026-06-26
 
 ### Fixed

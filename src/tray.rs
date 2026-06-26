@@ -6,10 +6,10 @@
 //! this loop and are routed by `WindowId`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use anyhow::{Context, Result};
@@ -77,6 +77,16 @@ pub enum AppCommand {
         attr_kind: String,
         attr_value: String,
     },
+    /// Open the destinations management GUI window.
+    OpenDestGui {
+        dest_file: PathBuf,
+    },
+    /// Push a serialized JSON state update to the destinations GUI webview.
+    /// Dispatched via proxy so evaluate_script runs in the event loop, not the IPC closure.
+    PushDestState {
+        window_id: WindowId,
+        json: String,
+    },
 }
 
 /// Per-progress-window state. Fields declared in drop order:
@@ -114,11 +124,23 @@ struct RouteState {
     window: Window,
 }
 
+/// Per-destinations-gui-window state. Same drop-order discipline as `ProgressState`.
+struct DestGuiState {
+    #[allow(dead_code)]
+    cfg: Arc<Mutex<crate::destinations::DestinationsConfig>>,
+    #[allow(dead_code)]
+    dest_file: PathBuf,
+    webview: WebView,
+    #[allow(dead_code)]
+    window: Window,
+}
+
 enum WState {
     Progress(ProgressState),
     Config(#[allow(dead_code)] ConfigState),
     Update(UpdateState),
     Route(#[allow(dead_code)] RouteState),
+    DestGui(DestGuiState),
 }
 
 /// Prevents duplicate config windows from opening simultaneously.
@@ -129,6 +151,9 @@ static UPDATE_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Prevents duplicate route review windows from opening simultaneously.
 static ROUTE_REVIEW_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// Prevents duplicate destinations GUI windows from opening simultaneously.
+static DEST_GUI_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 
 static APP_PROXY: OnceLock<EventLoopProxy<AppCommand>> = OnceLock::new();
 
@@ -146,6 +171,7 @@ mod menu_ids {
     pub const IMPORT_THUNDERBIRD: &str = "import_thunderbird";
     pub const CHOOSE_EXPORT_DIR: &str = "choose_export_dir";
     pub const CHOOSE_NOTES_DIR: &str = "choose_notes_dir";
+    pub const MANAGE_DESTINATIONS: &str = "manage_destinations";
     pub const OPEN_CONFIG: &str = "open_config";
     pub const OPEN_DOCUMENTATION: &str = "open_documentation";
     pub const UPDATE: &str = "update";
@@ -379,6 +405,35 @@ pub fn run_tray() -> Result<()> {
                     }
                 }
             }
+            Event::UserEvent(AppCommand::OpenDestGui { dest_file }) => {
+                if DEST_GUI_WINDOW_OPEN
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    // Already open — ignore.
+                } else {
+                    match build_dest_gui_window(target, &proxy, &dest_file) {
+                        Ok((window, webview, window_id, cfg)) => {
+                            windows.insert(
+                                window_id,
+                                WState::DestGui(DestGuiState { cfg, dest_file, webview, window }),
+                            );
+                        }
+                        Err(e) => {
+                            DEST_GUI_WINDOW_OPEN.store(false, Ordering::Release);
+                            eprintln!("Fenêtre destinations : {:#}", e);
+                        }
+                    }
+                }
+            }
+            Event::UserEvent(AppCommand::PushDestState { window_id, json }) => {
+                if let Some(WState::DestGui(state)) = windows.get(&window_id) {
+                    if let Ok(js_str) = serde_json::to_string(&json) {
+                        let js = format!("window_msg({})", js_str);
+                        let _ = state.webview.evaluate_script(&js);
+                    }
+                }
+            }
             Event::UserEvent(AppCommand::ActionRequested { window_id }) => {
                 if let Some(WState::Progress(mut state)) = windows.remove(&window_id) {
                     if let Some(f) = state.error_action.take() {
@@ -396,6 +451,9 @@ pub fn run_tray() -> Result<()> {
                     }
                     Some(WState::Route(_)) => {
                         ROUTE_REVIEW_WINDOW_OPEN.store(false, Ordering::Release);
+                    }
+                    Some(WState::DestGui(_)) => {
+                        DEST_GUI_WINDOW_OPEN.store(false, Ordering::Release);
                     }
                     _ => {}
                 }
@@ -418,6 +476,9 @@ pub fn run_tray() -> Result<()> {
                 }
                 Some(WState::Route(_)) => {
                     ROUTE_REVIEW_WINDOW_OPEN.store(false, Ordering::Release);
+                }
+                Some(WState::DestGui(_)) => {
+                    DEST_GUI_WINDOW_OPEN.store(false, Ordering::Release);
                 }
                 None => {}
             },
@@ -672,6 +733,249 @@ fn build_update_window(
     });
 
     Ok((window, webview, window_id))
+}
+
+// ── Destinations GUI IPC ─────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct DestGuiIpcMessage {
+    action: String,
+    data: Option<serde_json::Value>,
+}
+
+enum DestGuiIpcResult {
+    StateChanged,
+    Suggestions(Vec<(String, usize)>),
+    Close,
+    Noop,
+}
+
+fn state_json(cfg: &crate::destinations::DestinationsConfig) -> String {
+    let json = serde_json::json!({ "type": "state", "destinations": cfg.destinations });
+    serde_json::to_string(&json).unwrap_or_default()
+}
+
+fn handle_dest_gui_ipc(
+    body: &str,
+    cfg: &mut crate::destinations::DestinationsConfig,
+    dest_file: &Path,
+) -> DestGuiIpcResult {
+    use crate::destinations::{DestinationEntry, DestinationRule};
+
+    let msg: DestGuiIpcMessage = match serde_json::from_str(body) {
+        Ok(m) => m,
+        Err(_) => return DestGuiIpcResult::Noop,
+    };
+
+    match msg.action.as_str() {
+        "save" => {
+            if let Err(e) = crate::destinations::save_yaml(dest_file, cfg) {
+                eprintln!("dest-gui: save failed: {:#}", e);
+            }
+            DestGuiIpcResult::Close
+        }
+        "cancel" => DestGuiIpcResult::Close,
+        "init" => DestGuiIpcResult::StateChanged,
+        "add_entry" => {
+            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
+            let path = match data["path"].as_str() {
+                Some(p) if !p.trim().is_empty() => p.trim().to_string(),
+                _ => return DestGuiIpcResult::Noop,
+            };
+            if crate::route::join_safe_segments(Path::new(""), &path).is_err() {
+                eprintln!("dest-gui: rejected invalid path {:?}", path);
+                return DestGuiIpcResult::Noop;
+            }
+            if cfg.destinations.iter().any(|e| e.path.eq_ignore_ascii_case(&path)) {
+                return DestGuiIpcResult::StateChanged;
+            }
+            let note = data["note"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.to_string());
+            cfg.destinations.push(DestinationEntry {
+                path,
+                note,
+                rules: Vec::new(),
+                default: false,
+            });
+            DestGuiIpcResult::StateChanged
+        }
+        "remove_entry" => {
+            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
+            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
+            crate::destinations::remove_entry(cfg, path);
+            DestGuiIpcResult::StateChanged
+        }
+        "set_default" => {
+            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
+            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
+            crate::destinations::set_default(cfg, path);
+            DestGuiIpcResult::StateChanged
+        }
+        "set_note" => {
+            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
+            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
+            let note = data["note"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.to_string());
+            crate::destinations::set_note(cfg, path, note);
+            DestGuiIpcResult::StateChanged
+        }
+        "add_rule" => {
+            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
+            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
+            let Some(kind) = data["kind"].as_str() else { return DestGuiIpcResult::Noop };
+            let Some(raw_value) = data["value"].as_str() else { return DestGuiIpcResult::Noop };
+            let value = raw_value.trim();
+            if value.is_empty() {
+                return DestGuiIpcResult::Noop;
+            }
+            let rule = match kind {
+                "domain" => DestinationRule::Domain(value.to_lowercase()),
+                "from" => DestinationRule::From(value.to_string()),
+                "subject" => DestinationRule::Subject(value.to_string()),
+                "account" => DestinationRule::Account(value.to_string()),
+                _ => return DestGuiIpcResult::Noop,
+            };
+            crate::destinations::add_rule(cfg, path, rule);
+            DestGuiIpcResult::StateChanged
+        }
+        "remove_rule" => {
+            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
+            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
+            let Some(rule_val) = data.get("rule") else { return DestGuiIpcResult::Noop };
+            let Ok(rule) = serde_json::from_value::<DestinationRule>(rule_val.clone()) else {
+                return DestGuiIpcResult::Noop;
+            };
+            crate::destinations::remove_rule(cfg, path, &rule);
+            DestGuiIpcResult::StateChanged
+        }
+        "reorder" => {
+            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
+            let Some(order_arr) = data["order"].as_array() else { return DestGuiIpcResult::Noop };
+            let order: Vec<&str> = order_arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect();
+            crate::destinations::reorder_destinations(cfg, &order);
+            DestGuiIpcResult::StateChanged
+        }
+        "scan_suggest" => {
+            let settings =
+                crate::config::Settings::load(&crate::config::settings_path()).unwrap_or_default();
+            let scan_root = match crate::dest_cmd::resolve_scan_root(&settings, cfg) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("dest-gui: scan_suggest root: {:#}", e);
+                    return DestGuiIpcResult::Noop;
+                }
+            };
+            let groups = match crate::dest_cmd::scan_domains(&scan_root) {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("dest-gui: scan_domains: {:#}", e);
+                    return DestGuiIpcResult::Noop;
+                }
+            };
+            let candidates = crate::dest_cmd::uncovered_domains(groups, cfg);
+            DestGuiIpcResult::Suggestions(candidates)
+        }
+        "suggest_confirm" => {
+            let Some(pairs_arr) = msg.data.as_ref().and_then(|v| v.as_array()) else {
+                return DestGuiIpcResult::Noop;
+            };
+            for pair in pairs_arr {
+                let Some(domain) = pair["domain"].as_str() else { continue };
+                let Some(dest_path) = pair["path"].as_str() else { continue };
+                if dest_path.trim().is_empty() {
+                    continue;
+                }
+                if crate::route::join_safe_segments(Path::new(""), dest_path).is_err() {
+                    eprintln!("dest-gui: suggest_confirm: rejected invalid path {:?}", dest_path);
+                    continue;
+                }
+                crate::destinations::upsert_entry(
+                    cfg,
+                    dest_path,
+                    &[DestinationRule::Domain(domain.to_lowercase())],
+                );
+            }
+            DestGuiIpcResult::StateChanged
+        }
+        _ => DestGuiIpcResult::Noop,
+    }
+}
+
+// ── Destinations GUI window ───────────────────────────────────────────────────
+
+/// Build the destinations management webview window.
+fn build_dest_gui_window(
+    target: &EventLoopWindowTarget<AppCommand>,
+    proxy: &EventLoopProxy<AppCommand>,
+    dest_file: &Path,
+) -> Result<(Window, WebView, WindowId, Arc<Mutex<crate::destinations::DestinationsConfig>>)> {
+    let cfg = crate::destinations::load_yaml(dest_file).unwrap_or_default();
+    let cfg_arc = Arc::new(Mutex::new(cfg));
+
+    let html = include_str!("../assets/destinations_window.html");
+
+    let window = WindowBuilder::new()
+        .with_title("Email to Markdown \u{2014} Destinations")
+        .with_inner_size(LogicalSize::new(820.0f64, 560.0f64))
+        .build(target)
+        .context("failed to create destinations window")?;
+    window.set_focus();
+    let window_id = window.id();
+
+    let proxy_ipc = proxy.clone();
+    let cfg_ipc = Arc::clone(&cfg_arc);
+    let dest_file_ipc = dest_file.to_path_buf();
+
+    let webview = WebViewBuilder::new(&window)
+        .with_html(html)
+        .with_ipc_handler(move |req: wry::http::Request<String>| {
+            let body = req.body();
+            let mut cfg_guard = match cfg_ipc.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    eprintln!("dest-gui: mutex poisoned");
+                    return;
+                }
+            };
+            let result = handle_dest_gui_ipc(body, &mut *cfg_guard, &dest_file_ipc);
+            match result {
+                DestGuiIpcResult::StateChanged => {
+                    let json = state_json(&cfg_guard);
+                    drop(cfg_guard);
+                    let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
+                }
+                DestGuiIpcResult::Suggestions(items) => {
+                    drop(cfg_guard);
+                    let items_json = serde_json::json!({
+                        "type": "suggestions",
+                        "items": items.iter()
+                            .map(|(d, c)| serde_json::json!({"domain": d, "count": c}))
+                            .collect::<Vec<_>>()
+                    })
+                    .to_string();
+                    let _ = proxy_ipc.send_event(AppCommand::PushDestState {
+                        window_id,
+                        json: items_json,
+                    });
+                }
+                DestGuiIpcResult::Close => {
+                    drop(cfg_guard);
+                    let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+                }
+                DestGuiIpcResult::Noop => {}
+            }
+        })
+        .build()
+        .context("failed to create destinations webview")?;
+
+    Ok((window, webview, window_id, cfg_arc))
 }
 
 // ── Route review window ───────────────────────────────────────────────────────
@@ -1294,6 +1598,13 @@ fn create_menu() -> Result<Menu> {
     ));
 
     let _ = outils_submenu.append(&MenuItem::with_id(
+        menu_ids::MANAGE_DESTINATIONS,
+        "Gérer les destinations…",
+        true,
+        no_accel.clone(),
+    ));
+
+    let _ = outils_submenu.append(&MenuItem::with_id(
         menu_ids::OPEN_CONFIG,
         "Paramètres…",
         true,
@@ -1341,6 +1652,12 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
         }
         menu_ids::CHOOSE_NOTES_DIR => {
             tray_actions::action_choose_notes_dir(result_sender);
+        }
+        menu_ids::MANAGE_DESTINATIONS => {
+            let dest_file = crate::route::destinations_path();
+            if let Err(e) = send_command(AppCommand::OpenDestGui { dest_file }) {
+                eprintln!("Failed to open destinations window: {:#}", e);
+            }
         }
         menu_ids::OPEN_CONFIG => {
             if let Err(e) = send_command(AppCommand::OpenConfig {
