@@ -1,6 +1,6 @@
 use crate::config::Account;
 use crate::network::{NetworkConfig, ProgressIndicator, with_retry};  // [3][4]
-use crate::route::{parse_destinations, route_email, Destination, EmailMeta, RouteDecision};
+use crate::route::{route_email, Destination, EmailMeta, RouteDecision};
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
     is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename, subject_extract,
@@ -381,14 +381,14 @@ pub fn export_to_markdown(
         body
     };
 
-    // Handle attachments — written into the same directory as the .md file
+    // Handle attachments — written into the same directory as the .md file,
+    // named `<date>_<original-name>` for readability.
     let mut attachments = Vec::new();
-    let base_filename_for_attachments = base_filename.replace('*', "_");
 
     extract_attachments(
         &mail,
         export_directory,
-        &base_filename_for_attachments,
+        &date_str,
         account.skip_signature_images,
         debug_mode,
         &mut attachments,
@@ -592,7 +592,7 @@ pub(crate) fn extract_body(mail: &ParsedMail) -> String {
 fn extract_attachments(
     mail: &ParsedMail,
     attachments_dir: &Path,
-    base_filename: &str,
+    name_prefix: &str,
     skip_signature_images: bool,
     debug_mode: bool,
     attachments: &mut Vec<String>,
@@ -643,10 +643,11 @@ fn extract_attachments(
 
                 if !payload.is_empty() {
                     let safe_filename = sanitize_filename(&decoded_filename);
-                    let filename_hash = hash_md5_prefix(&decoded_filename, 8);
-                    // Flat naming scheme: <stem>__<hash>_<safe_name>
-                    let base_full_filename =
-                        format!("{}__{}_{}", base_filename, filename_hash, safe_filename);
+                    // Flat naming scheme: <date>_<original-name> — readable, with the
+                    // email date as prefix. Collisions are disambiguated below; a second
+                    // safety pass in `route::move_email` handles cross-email collisions
+                    // when several emails are routed into the same destination folder.
+                    let base_full_filename = format!("{}_{}", name_prefix, safe_filename);
 
                     // Numeric suffix loop on real path collision — suffix inserted before extension
                     // so `invoice.pdf` → `invoice_2.pdf`, not `invoice.pdf_2`.
@@ -680,7 +681,7 @@ fn extract_attachments(
             extract_attachments(
                 part,
                 attachments_dir,
-                base_filename,
+                name_prefix,
                 skip_signature_images,
                 debug_mode,
                 attachments,
@@ -1147,39 +1148,8 @@ impl ImapExporter {
         cancel_token: Option<&AtomicBool>,
     ) -> Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> {
         // ── Parse destinations.txt ONCE (before the folder loop) ──────────────
-        let dests: Vec<Destination> = {
-            let settings = crate::config::Settings::load(&crate::config::settings_path())
-                .unwrap_or_default();
-            let dest_path = settings
-                .destinations_file
-                .as_deref()
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| crate::config::app_config_dir().join("destinations.txt"));
-
-            if dest_path.exists() {
-                match std::fs::read_to_string(&dest_path)
-                    .map_err(anyhow::Error::from)
-                    .and_then(|content| parse_destinations(&content))
-                {
-                    Ok(d) => d,
-                    Err(e) => {
-                        eprintln!(
-                            "warning: could not parse destinations.txt ({}): {:#} — \
-                             all emails will fall to the default path",
-                            dest_path.display(), e
-                        );
-                        vec![]
-                    }
-                }
-            } else {
-                eprintln!(
-                    "warning: destinations.txt not found at {} — \
-                     all emails will fall to the default path (Perso/Messy/Emails/<Year>/<Month>)",
-                    dest_path.display()
-                );
-                vec![]
-            }
-        };
+        // Shared with the tray "Reprendre le tri" scan via `route::load_destinations`.
+        let dests: Vec<Destination> = crate::route::load_destinations();
 
         // Run the existing body in an IIFE so cleanup can run on every exit path.
         let run_result: Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> = (|| {
@@ -1481,7 +1451,6 @@ mod tests {
             skip_signature_images: false,
             delete_after_export: false,
             cleanup_empty_dirs: false,
-            organize_by_type: false,
         }
     }
 
@@ -1526,6 +1495,48 @@ mod tests {
         assert!(content.contains("subject_hash:"), "subject_hash key must be present");
         // Body present after closing ---
         assert!(content.contains("Test body"), "body should appear after frontmatter");
+    }
+
+    #[test]
+    fn test_export_to_markdown_names_attachment_with_date_prefix() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let export_dir = temp.path().join("out");
+        let account = make_account(&export_dir.to_string_lossy());
+
+        // multipart/mixed: a text part + a PDF attachment named "Facture.pdf".
+        let boundary = "BOUND_ATT";
+        let raw = format!(
+            "From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Invoice\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody text\r\n--{boundary}\r\nContent-Type: application/pdf; name=\"Facture.pdf\"\r\nContent-Disposition: attachment; filename=\"Facture.pdf\"\r\n\r\n%PDF-1.4 fake pdf payload\r\n--{boundary}--\r\n"
+        ).into_bytes();
+
+        let mut ctx = ExportContext {
+            export_directory: &export_dir,
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+        };
+        let (md_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
+            .unwrap()
+            .expect("export should produce a file");
+
+        // Inclusive: the attachment is named `<date>_<original-name>`.
+        let att = export_dir.join("2024-01-01_Facture.pdf");
+        assert!(att.exists(), "attachment must be named with date prefix: {:?}", att);
+
+        // Exclusive: no cryptic hash / double-underscore prefix remains.
+        let md = fs::read_to_string(&md_path).unwrap();
+        assert!(
+            md.contains("2024-01-01_Facture.pdf"),
+            "frontmatter/body must reference the dated attachment name"
+        );
+        assert!(
+            !md.contains("__"),
+            "attachment link must not carry the old `__<hash>_` scheme: got {:?}",
+            md
+        );
     }
 
     #[test]

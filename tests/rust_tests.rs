@@ -24,17 +24,17 @@ mod utils_tests {
 
     #[test]
     fn test_get_short_name_email() {
-        assert_eq!(get_short_name(Some("sender@example.com")), "SEN");
+        assert_eq!(get_short_name(Some("sender@example.com")), "Sender");
     }
 
     #[test]
     fn test_get_short_name_full_name() {
-        assert_eq!(get_short_name(Some("John Doe <john@example.com>")), "JD");
+        assert_eq!(get_short_name(Some("John Doe <john@example.com>")), "JohnDoe");
     }
 
     #[test]
     fn test_get_short_name_multiple_words() {
-        assert_eq!(get_short_name(Some("John Michael Doe")), "JMD");
+        assert_eq!(get_short_name(Some("John Michael Doe")), "JohnDoe");
     }
 
     #[test]
@@ -352,10 +352,10 @@ mod settings_tests {
         let path = temp.path().join("settings.yaml");
 
         let settings_yaml = r#"defaults:
-  organize_by_type: false
+  skip_signature_images: false
 accounts:
   myaccount:
-    organize_by_type: true
+    skip_signature_images: true
     delete_after_export: false
     quote_depth: 5
 "#;
@@ -365,14 +365,14 @@ accounts:
 
         let behavior = settings.accounts.get("myaccount").expect("myaccount entry missing");
         // Inclusive: fields set in YAML must round-trip correctly.
-        assert_eq!(behavior.organize_by_type, Some(true), "organize_by_type should be Some(true)");
+        assert_eq!(behavior.skip_signature_images, Some(true), "skip_signature_images should be Some(true)");
         assert_eq!(behavior.delete_after_export, Some(false), "delete_after_export should be Some(false)");
         assert_eq!(behavior.quote_depth, Some(5), "quote_depth should be Some(5)");
         // Exclusive: fields absent from YAML must not bleed in from defaults or other sources.
         assert_eq!(behavior.skip_existing, None, "skip_existing must not bleed from YAML");
         assert_eq!(behavior.collect_contacts, None, "collect_contacts must not bleed");
         assert_eq!(behavior.folder_name, None, "folder_name should be None (not set)");
-        assert_eq!(settings.defaults.organize_by_type, Some(false), "defaults.organize_by_type should be Some(false)");
+        assert_eq!(settings.defaults.skip_signature_images, Some(false), "defaults.skip_signature_images should be Some(false)");
     }
 
     #[test]
@@ -382,7 +382,7 @@ accounts:
 
         let mut settings = Settings::default();
         settings.accounts.insert("myaccount".to_string(), AccountBehavior {
-            organize_by_type: Some(true),
+            skip_signature_images: Some(true),
             ..AccountBehavior::default()
         });
         settings.save(&path).expect("save settings");
@@ -556,8 +556,8 @@ mod edge_case_tests {
         let long_local = "a".repeat(100);
         let email = format!("{}@example.com", long_local);
         let result = get_short_name(Some(&email));
-        // Should truncate appropriately
-        assert!(result.len() <= 3);
+        // Single-token local part is truncated to at most 8 letters.
+        assert!(result.chars().count() <= 8);
     }
 
     #[test]
@@ -874,7 +874,7 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 
 mod route_tests {
     use email_to_markdown::route::{
-        apply_decision, ai_route, ensure_year_month, join_safe_segments, move_email,
+        apply_decision, ai_route, delete_email, ensure_year_month, join_safe_segments, move_email,
         parse_destinations, route_email, upsert_rule,
         Destination, EmailMeta, MatchRule,
     };
@@ -1122,6 +1122,124 @@ mod route_tests {
                 "error must mention symlink: {msg}"
             );
         }
+    }
+
+    // Two emails routed into the same folder with the same attachment file name:
+    // the second attachment is suffixed and the second .md's links are updated.
+    #[test]
+    fn test_move_email_suffixes_colliding_attachment_in_dest() {
+        let temp = TempDir::new().unwrap();
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        let src_a = temp.path().join("stagingA");
+        fs::create_dir_all(&src_a).unwrap();
+        fs::write(src_a.join("2026-06-25_image.png"), b"AAA").unwrap();
+        let md_a = src_a.join("emailA.md");
+        fs::write(
+            &md_a,
+            "---\nsubject: A\nattachments:\n  - 2026-06-25_image.png\n---\nBody [2026-06-25_image.png](2026-06-25_image.png)\n",
+        )
+        .unwrap();
+
+        let src_b = temp.path().join("stagingB");
+        fs::create_dir_all(&src_b).unwrap();
+        fs::write(src_b.join("2026-06-25_image.png"), b"BBB").unwrap();
+        let md_b = src_b.join("emailB.md");
+        fs::write(
+            &md_b,
+            "---\nsubject: B\nattachments:\n  - 2026-06-25_image.png\n---\nBody [2026-06-25_image.png](2026-06-25_image.png)\n",
+        )
+        .unwrap();
+
+        move_email(&md_a, &dst_dir).unwrap();
+        move_email(&md_b, &dst_dir).unwrap();
+
+        // Both attachments survive with distinct content — no overwrite.
+        let first = dst_dir.join("2026-06-25_image.png");
+        let second = dst_dir.join("2026-06-25_image_2.png");
+        assert!(first.exists(), "first attachment must keep its name");
+        assert!(second.exists(), "colliding attachment must be suffixed");
+        assert_eq!(fs::read(&first).unwrap(), b"AAA");
+        assert_eq!(fs::read(&second).unwrap(), b"BBB");
+
+        // emailB's links (frontmatter list + body) now point to the suffixed name.
+        let b_content = fs::read_to_string(dst_dir.join("emailB.md")).unwrap();
+        assert!(
+            b_content.contains("2026-06-25_image_2.png"),
+            "B must reference the suffixed attachment name"
+        );
+        assert!(
+            !b_content.contains("- 2026-06-25_image.png\n"),
+            "B must not still reference the un-suffixed name"
+        );
+        // emailA is untouched.
+        let a_content = fs::read_to_string(dst_dir.join("emailA.md")).unwrap();
+        assert!(a_content.contains("- 2026-06-25_image.png\n"));
+    }
+
+    // ── delete_email ─────────────────────────────────────────────────────────
+
+    // delete_email removes the .md and relocates attachments into _deleted.
+    #[test]
+    fn test_delete_email_removes_md_and_moves_attachments() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("staging");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let att_src = src_dir.join("email__file.pdf");
+        fs::write(&att_src, b"PDF content").unwrap();
+
+        let md_src = src_dir.join("email.md");
+        let md_content = "---\nsubject: Test\nattachments:\n  - email__file.pdf\n---\nBody text\n";
+        fs::write(&md_src, md_content).unwrap();
+
+        delete_email(&md_src).unwrap();
+
+        // Exclusive: the .md is gone.
+        assert!(!md_src.exists(), "deleted .md must not remain");
+        // Exclusive: the attachment is no longer at its original path.
+        assert!(!att_src.exists(), "attachment must be moved out of staging");
+        // Inclusive: the attachment is preserved under _deleted.
+        let recovered = src_dir.join("_deleted").join("email__file.pdf");
+        assert!(recovered.exists(), "attachment must be relocated to _deleted");
+        assert_eq!(fs::read(&recovered).unwrap(), b"PDF content");
+    }
+
+    // No attachments → just remove the .md, no _deleted folder created.
+    #[test]
+    fn test_delete_email_without_attachments_creates_no_deleted_dir() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("staging");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let md_src = src_dir.join("plain.md");
+        fs::write(&md_src, "---\nsubject: Plain\n---\nNo attachments\n").unwrap();
+
+        delete_email(&md_src).unwrap();
+
+        assert!(!md_src.exists(), "deleted .md must not remain");
+        assert!(
+            !src_dir.join("_deleted").exists(),
+            "_deleted must not be created when there are no attachments"
+        );
+    }
+
+    // delete_email refuses a symlink source (no FS mutation), mirroring move_email.
+    #[cfg(not(windows))]
+    #[test]
+    fn test_delete_email_rejects_symlink() {
+        let temp = TempDir::new().unwrap();
+        let real_file = temp.path().join("real.md");
+        fs::write(&real_file, "---\nsubject: Real\n---\n").unwrap();
+
+        let symlink_path = temp.path().join("link.md");
+        std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
+
+        let result = delete_email(&symlink_path);
+        assert!(result.is_err(), "delete_email must refuse a symlink source");
+        // Exclusive: the real target is untouched.
+        assert!(real_file.exists(), "symlink target must not be deleted");
     }
 
     // ── parse_destinations ───────────────────────────────────────────────────

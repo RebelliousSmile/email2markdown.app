@@ -67,8 +67,6 @@ pub struct AccountBehavior {
     pub delete_after_export: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cleanup_empty_dirs: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub organize_by_type: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -76,10 +74,6 @@ pub struct Settings {
     /// Root directory where all account sub-folders will be created.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export_base_dir: Option<String>,
-
-    /// Name of the local output folder used by sort-apply (default: `_local`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub local_folder_name: Option<String>,
 
     /// Root of the user's second-brain tree.
     /// Plain base path — joined with `(Perso|Pro)/<Category>/<Sub>/<Year>/<Month>`.
@@ -113,10 +107,6 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Returns the configured local output folder name, defaulting to `"_local"`.
-    pub fn local_folder(&self) -> &str {
-        self.local_folder_name.as_deref().unwrap_or("_local")
-    }
 
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
@@ -209,7 +199,6 @@ fn merge_account(raw: &RawAccount, settings: &Settings) -> Account {
         skip_signature_images: per.and_then(|a| a.skip_signature_images).or(def.skip_signature_images).unwrap_or(false),
         delete_after_export: per.and_then(|a| a.delete_after_export).or(def.delete_after_export).unwrap_or(false),
         cleanup_empty_dirs: per.and_then(|a| a.cleanup_empty_dirs).or(def.cleanup_empty_dirs).unwrap_or(true),
-        organize_by_type: per.and_then(|a| a.organize_by_type).or(def.organize_by_type).unwrap_or(true),
     }
 }
 
@@ -247,7 +236,6 @@ pub struct Account {
     pub skip_signature_images: bool,
     pub delete_after_export: bool,
     pub cleanup_empty_dirs: bool,
-    pub organize_by_type: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

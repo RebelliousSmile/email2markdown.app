@@ -152,6 +152,7 @@ mod menu_ids {
     pub const QUIT: &str = "quit";
     pub const EXPORT_PREFIX: &str = "export_";
     pub const FIXHTML_PREFIX: &str = "fixhtml_";
+    pub const RESUME_SORT_PREFIX: &str = "resume_sort_";
 }
 
 /// Run the system tray application.
@@ -509,7 +510,6 @@ struct DefaultsData {
     skip_signature_images: Option<bool>,
     delete_after_export: Option<bool>,
     cleanup_empty_dirs: Option<bool>,
-    organize_by_type: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -520,8 +520,6 @@ struct AccountData {
     username: String,
     #[serde(default)]
     ignored_folders: Vec<String>,
-    #[serde(default)]
-    organize_by_type: Option<bool>,
     #[serde(default)]
     delete_after_export: Option<bool>,
     #[serde(default)]
@@ -750,6 +748,15 @@ struct RouteDecisionRow {
     dest_path: String,
 }
 
+/// IPC payload for the `delete` action emitted by the route review window.
+/// `files` are absolute staging paths to the `.md` notes the user dropped.
+#[derive(serde::Deserialize)]
+struct DeletePayload {
+    #[allow(dead_code)]
+    action: String,
+    files: Vec<String>,
+}
+
 /// IPC payload sent by the route review HTML on Apply.
 #[derive(serde::Deserialize)]
 struct RouteApplyPayload {
@@ -894,6 +901,36 @@ fn build_route_window(
                     }
                     return;
                 }
+                if kind.action == "delete" {
+                    match serde_json::from_str::<DeletePayload>(&body) {
+                        Ok(p) => {
+                            let (deleted, err) = delete_staged_emails(&p.files);
+                            // Remove the successfully-deleted rows from the table.
+                            if let Ok(js_arr) = serde_json::to_string(&deleted) {
+                                let js = format!(
+                                    "route_review_deleted({})",
+                                    escape_json_for_script(&js_arr)
+                                );
+                                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                            }
+                            // Surface any failure without losing the successful deletions.
+                            if let Some(msg) = err {
+                                if let Ok(js_str) = serde_json::to_string(&msg) {
+                                    let js = format!("route_review_error({})", js_str);
+                                    let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("invalid delete payload: {:#}", e);
+                            if let Ok(js_str) = serde_json::to_string(&msg) {
+                                let js = format!("route_review_error({})", js_str);
+                                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                            }
+                        }
+                    }
+                    return;
+                }
             }
 
             // 3. Existing apply flow — payload `{ decisions: [...] }` (no `action` field).
@@ -974,6 +1011,30 @@ fn apply_route_decisions(
     Ok(())
 }
 
+/// Delete each staged `.md` (and relocate its attachments to `_deleted`).
+///
+/// Returns `(deleted, error)` where `deleted` is the list of staging paths that
+/// were removed successfully (echoed back to the HTML so it can drop those rows)
+/// and `error` is a combined message for any files that failed. Processing
+/// continues past individual failures so one bad file never blocks the rest.
+fn delete_staged_emails(files: &[String]) -> (Vec<String>, Option<String>) {
+    let mut deleted = Vec::new();
+    let mut errors = Vec::new();
+    for file in files {
+        let path = PathBuf::from(file);
+        match crate::route::delete_email(&path) {
+            Ok(()) => deleted.push(file.clone()),
+            Err(e) => errors.push(format!("{}: {:#}", file, e)),
+        }
+    }
+    let err = if errors.is_empty() {
+        None
+    } else {
+        Some(format!("Suppression échouée pour {} fichier(s) :\n{}", errors.len(), errors.join("\n")))
+    };
+    (deleted, err)
+}
+
 /// Extract a single field value from the YAML frontmatter of a `.md` file.
 /// Returns `None` if the file cannot be read or the field is absent.
 fn read_frontmatter_field(path: &std::path::Path, field: &str) -> Option<String> {
@@ -1028,7 +1089,6 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
                     skip_signature_images: data.defaults.skip_signature_images,
                     delete_after_export: data.defaults.delete_after_export,
                     cleanup_empty_dirs: data.defaults.cleanup_empty_dirs,
-                    organize_by_type: data.defaults.organize_by_type,
                 };
                 settings
                     .save(&path)
@@ -1095,7 +1155,6 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
 
                 let mut behavior =
                     settings.accounts.get(&canonical_key).cloned().unwrap_or_default();
-                behavior.organize_by_type = data.organize_by_type;
                 behavior.delete_after_export = data.delete_after_export;
                 behavior.cleanup_empty_dirs = data.cleanup_empty_dirs;
                 behavior.skip_existing = data.skip_existing;
@@ -1202,6 +1261,20 @@ fn create_menu() -> Result<Menu> {
         ));
     }
     menu.append(&export_submenu)?;
+
+    // "Reprendre le tri" — re-open the route review for emails left in staging
+    // (e.g. when a previous review was cancelled). One entry per account.
+    let resume_submenu = Submenu::new("Reprendre le tri", has_accounts);
+    for account in &accounts {
+        let id = format!("{}{}", menu_ids::RESUME_SORT_PREFIX, account);
+        let _ = resume_submenu.append(&MenuItem::with_id(
+            id,
+            account,
+            true,
+            no_accel.clone(),
+        ));
+    }
+    menu.append(&resume_submenu)?;
 
     let outils_submenu = Submenu::new("Outils", true);
 
@@ -1320,6 +1393,11 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
         id if id.starts_with(menu_ids::FIXHTML_PREFIX) => {
             if let Some(account_name) = id.strip_prefix(menu_ids::FIXHTML_PREFIX) {
                 tray_actions::action_fix_html(account_name.to_string(), result_sender);
+            }
+        }
+        id if id.starts_with(menu_ids::RESUME_SORT_PREFIX) => {
+            if let Some(account_name) = id.strip_prefix(menu_ids::RESUME_SORT_PREFIX) {
+                tray_actions::action_resume_sort(account_name.to_string(), result_sender);
             }
         }
         _ => {}

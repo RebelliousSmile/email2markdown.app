@@ -11,12 +11,13 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use rfd;
+use walkdir::WalkDir;
 
 use crate::progress::ProgressUpdate;
 
 use crate::config::{self, Config, Settings};
 use crate::email_export::{self, ImapExporter};
-use crate::route::RouteDecision;
+use crate::route::{self, EmailMeta, RouteDecision};
 use crate::thunderbird;
 
 /// Result of an action, sent back to the main thread for notification.
@@ -169,6 +170,137 @@ fn run_export(
         ),
         decisions,
     ))
+}
+
+/// Resume sorting: re-open the route review window for a single account's emails
+/// that are still sitting in staging (e.g. after a cancelled review).
+///
+/// Scans the account's `export_directory` for `.md` notes, recomputes a routing
+/// proposal for each (same logic as the live export), and hands the list to the
+/// route review window. Runs in a background thread — file IO only, no network.
+pub fn action_resume_sort(account_name: String, result_sender: Sender<ActionResult>) {
+    thread::spawn(move || match scan_staged_decisions(&account_name) {
+        Ok(decisions) if decisions.is_empty() => {
+            let _ = result_sender.send(ActionResult::Success(
+                "Reprendre le tri".to_string(),
+                format!("Aucun email à trier en attente pour {}", account_name),
+            ));
+        }
+        Ok(decisions) => {
+            if let Err(e) = crate::tray::send_command(
+                crate::tray::AppCommand::OpenRouteReview(decisions),
+            ) {
+                let _ = result_sender.send(ActionResult::Error(format!(
+                    "Ouverture de la revue : {:#}",
+                    e
+                )));
+            }
+        }
+        Err(e) => {
+            let _ = result_sender.send(ActionResult::Error(format!(
+                "Reprendre le tri : {:#}",
+                e
+            )));
+        }
+    });
+}
+
+/// Directories created by the export pipeline that must never be treated as
+/// staged emails to re-sort: the delete bin, the failed-dump, and contacts.
+fn is_excluded_staging_dir(name: &std::ffi::OsStr) -> bool {
+    matches!(name.to_str(), Some("_deleted") | Some("_failed") | Some("contacts"))
+}
+
+/// Walk an account's `export_directory` and rebuild `(staging_path, RouteDecision)`
+/// pairs for every `.md` note still there. Excludes `_deleted`/`_failed`/`contacts`.
+fn scan_staged_decisions(account_name: &str) -> Result<Vec<(PathBuf, RouteDecision)>> {
+    dotenvy::from_path(config::env_file_path()).ok();
+
+    let config = Config::load(&config::accounts_yaml_path())
+        .context("Failed to load configuration")?;
+    let account = config
+        .get_account(account_name)
+        .context(format!("Account '{}' not found", account_name))?;
+
+    let base = PathBuf::from(&account.export_directory);
+    if !base.exists() {
+        return Ok(Vec::new());
+    }
+
+    let dests = route::load_destinations();
+    let mut decisions = Vec::new();
+
+    let walker = WalkDir::new(&base)
+        .into_iter()
+        .filter_entry(|e| !(e.file_type().is_dir() && is_excluded_staging_dir(e.file_name())));
+
+    for entry in walker.filter_map(|e| e.ok()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let meta = meta_from_frontmatter(&content, account_name);
+        let decision = route::route_email(&meta, &dests);
+        decisions.push((path.to_path_buf(), decision));
+    }
+
+    Ok(decisions)
+}
+
+/// Read a single scalar field from a `.md` file's YAML frontmatter block.
+/// Matches the field name exactly (so `subject` never matches `subject_hash`).
+fn frontmatter_field(content: &str, field: &str) -> Option<String> {
+    let rest = content.strip_prefix("---\n")?;
+    let end = rest.find("\n---")?;
+    let frontmatter = &rest[..end];
+    let prefix = format!("{}:", field);
+    for line in frontmatter.lines() {
+        if let Some(value) = line.trim().strip_prefix(&prefix) {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Rebuild the `EmailMeta` used for routing from a staged note's frontmatter.
+/// Mirrors the export-time construction in `email_export::export_to_markdown`.
+fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
+    let from_raw = frontmatter_field(content, "from").unwrap_or_default();
+    let subject = frontmatter_field(content, "subject").unwrap_or_default();
+    let date_raw = frontmatter_field(content, "date").unwrap_or_default();
+
+    let addresses = crate::utils::extract_emails(Some(&from_raw));
+    let sender_addr = addresses.first().cloned().unwrap_or_default();
+    let domain = sender_addr
+        .rfind('@')
+        .map(|i| sender_addr[i + 1..].to_string())
+        .unwrap_or_default();
+
+    // Frontmatter dates are written as RFC3339; epoch fallback on parse failure
+    // (same fallback the export path uses for an unparseable Date header).
+    let date = chrono::DateTime::parse_from_rfc3339(date_raw.trim()).unwrap_or_else(|_| {
+        chrono::DateTime::from_timestamp(0, 0)
+            .expect("epoch is valid")
+            .fixed_offset()
+    });
+
+    EmailMeta {
+        from: sender_addr,
+        domain,
+        subject,
+        account: account_name.to_string(),
+        date,
+    }
 }
 
 /// Import accounts from Thunderbird.

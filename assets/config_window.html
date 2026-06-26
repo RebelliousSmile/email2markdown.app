@@ -387,11 +387,6 @@
         <label for="cleanup-empty-dirs">Nettoyer les dossiers vides</label>
         <input type="checkbox" id="cleanup-empty-dirs">
       </div>
-      <div class="behavior-group">Tri</div>
-      <div class="field">
-        <label for="organize-by-type">Organiser par type</label>
-        <input type="checkbox" id="organize-by-type">
-      </div>
     </div>
   </div>
 </div>
@@ -474,15 +469,6 @@
             <label for="acct-quote-depth">Profondeur citations</label>
             <input type="number" id="acct-quote-depth" min="0" placeholder="Hériter (vide)">
           </div>
-          <div class="behavior-group">Tri</div>
-          <div class="acct-field">
-            <label for="acct-organize-by-type">Organiser par type</label>
-            <select id="acct-organize-by-type">
-              <option value="">Hériter</option>
-              <option value="true">Oui</option>
-              <option value="false">Non</option>
-            </select>
-          </div>
         </fieldset>
         <div class="acct-error" id="acct-error"></div>
         <div class="acct-detail-footer">
@@ -529,9 +515,6 @@
   document.getElementById('cleanup-empty-dirs').checked =
     defaults.cleanup_empty_dirs !== undefined ? defaults.cleanup_empty_dirs : false;
 
-  document.getElementById('organize-by-type').checked =
-    defaults.organize_by_type !== undefined ? defaults.organize_by_type : false;
-
   // Save
   document.getElementById('btn-save').addEventListener('click', function () {
     var errorEl = document.getElementById('quote-depth-error');
@@ -559,8 +542,7 @@
           collect_contacts: document.getElementById('collect-contacts').checked,
           skip_signature_images: document.getElementById('skip-signature-images').checked,
           delete_after_export: document.getElementById('delete-after-export').checked,
-          cleanup_empty_dirs: document.getElementById('cleanup-empty-dirs').checked,
-          organize_by_type: document.getElementById('organize-by-type').checked
+          cleanup_empty_dirs: document.getElementById('cleanup-empty-dirs').checked
         }
       }
     };
@@ -613,7 +595,6 @@
   var currentAccountIdx = -1;
 
   var ACCT_BOOL_FIELDS = [
-    ['acct-organize-by-type', 'organize_by_type'],
     ['acct-delete-after-export', 'delete_after_export'],
     ['acct-cleanup-empty-dirs', 'cleanup_empty_dirs'],
     ['acct-skip-existing', 'skip_existing'],
@@ -762,7 +743,6 @@
         port: port,
         username: username,
         ignored_folders: currentFolders,
-        organize_by_type: behaviorData.organize_by_type,
         delete_after_export: behaviorData.delete_after_export,
         cleanup_empty_dirs: behaviorData.cleanup_empty_dirs,
         skip_existing: behaviorData.skip_existing,
