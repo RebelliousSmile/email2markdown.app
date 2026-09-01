@@ -1,4 +1,5 @@
 use email_to_markdown::config::Account;
+use email_to_markdown::contextual_export::ConversionStatus;
 use email_to_markdown::email_export::ImapExporter;
 use email_to_markdown::route::MatchRule;
 
@@ -31,7 +32,8 @@ fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
         return;
     }
     std::env::set_var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST", "1");
-    let mut exporter = ImapExporter::new(account(), true);
+    let fixture_account = account();
+    let mut exporter = ImapExporter::new(fixture_account.clone(), true);
     exporter.connect().unwrap();
     let candidates = exporter
         .search_contextual(&[MatchRule::Correspondent("alice@example.com".into())])
@@ -44,6 +46,24 @@ fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
             .iter()
             .all(|location| location.uid > 0 && location.uid_validity > 0)
     }));
+
+    let target = tempfile::TempDir::new().unwrap();
+    let converted = exporter
+        .convert_contextual_selection(target.path(), &candidates[..1])
+        .unwrap();
+    assert_eq!(converted.len(), 1);
+    assert!(matches!(
+        converted[0].status,
+        Some(ConversionStatus::Written { .. })
+    ));
+    assert_eq!(
+        std::fs::read_dir(target.path())
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().path().extension().and_then(|e| e.to_str()) == Some("md"))
+            .count(),
+        1,
+        "only the selected UID is converted"
+    );
     assert!(candidates.iter().all(|candidate| {
         !candidate
             .from

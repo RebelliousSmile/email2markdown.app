@@ -463,6 +463,7 @@ mod email_export_tests {
             subject_hash: "abcdef".to_string(),
             tags: vec!["inbox".to_string()],
             attachments: vec![],
+            source: None,
             email_type: None,
             social_links: Some(links),
         };
@@ -483,6 +484,7 @@ mod email_export_tests {
             subject_hash: "abcdef".to_string(),
             tags: vec![],
             attachments: vec![],
+            source: None,
             email_type: None,
             social_links: None,
         };
@@ -501,6 +503,7 @@ mod email_export_tests {
             subject_hash: "abc123".to_string(),
             tags: vec!["INBOX".to_string()],
             attachments: vec![],
+            source: None,
             email_type: Some("newsletter".to_string()),
             social_links: None,
         };
@@ -519,6 +522,7 @@ mod email_export_tests {
             subject_hash: "abcdef".to_string(),
             tags: vec![],
             attachments: vec![],
+            source: None,
             email_type: None,
             social_links: None,
         };
@@ -2093,9 +2097,15 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 mod contextual_export_tests {
     use email_to_markdown::contextual_export::{
         build_search_batches, candidate_matches_rules, merge_candidates,
-        parse_header_candidate, parse_uid_fetch_response, validate_uidvalidity, MessageLocation,
+        cleanup_stale_staging, convert_raw_contextual, parse_header_candidate,
+        parse_uid_fetch_response, read_source_proof, validate_uidvalidity, ContextualLock,
+        ConversionStatus, MessageLocation,
     };
+    use email_to_markdown::config::Account;
     use email_to_markdown::route::MatchRule;
+    use std::fs;
+    use std::time::{Duration, SystemTime};
+    use tempfile::TempDir;
 
     fn location(folder: &str, uid: u32) -> MessageLocation {
         MessageLocation {
@@ -2109,6 +2119,31 @@ mod contextual_export_tests {
     fn header(message_id: &str, from: &str, to: &str, subject: &str) -> Vec<u8> {
         format!(
             "Message-ID: <{message_id}>\r\nDate: Tue, 01 Sep 2026 10:00:00 +0200\r\nFrom: {from}\r\nTo: {to}\r\nSubject: {subject}\r\n\r\n"
+        )
+        .into_bytes()
+    }
+
+    fn account(target: &std::path::Path) -> Account {
+        Account {
+            name: "Work".into(),
+            server: "imap.example.com".into(),
+            port: 993,
+            username: "work@example.com".into(),
+            password: Some("unused".into()),
+            ignored_folders: vec![],
+            export_directory: target.to_string_lossy().into_owned(),
+            quote_depth: 1,
+            skip_existing: false,
+            collect_contacts: false,
+            skip_signature_images: false,
+            delete_after_export: false,
+            cleanup_empty_dirs: true,
+        }
+    }
+
+    fn multipart_raw(message_id: &str) -> Vec<u8> {
+        format!(
+            "Message-ID: <{message_id}>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Project report\r\nContent-Type: multipart/mixed; boundary=BOUND\r\n\r\n--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody\r\n--BOUND\r\nContent-Type: application/pdf; name=report.pdf\r\nContent-Disposition: attachment; filename=report.pdf\r\n\r\nPDF DATA\r\n--BOUND--\r\n"
         )
         .into_bytes()
     }
@@ -2233,6 +2268,166 @@ mod contextual_export_tests {
         assert!(validate_uidvalidity(&location, Some(77)).is_ok());
         assert!(validate_uidvalidity(&location, Some(78)).is_err());
         assert!(validate_uidvalidity(&location, None).is_err());
+    }
+
+    #[test]
+    fn contextual_conversion_commits_attachment_then_proved_markdown() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let raw = multipart_raw("convert@example.com");
+        let location = location("INBOX", 42);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+
+        let first = convert_raw_contextual(
+            &target,
+            &account(&target),
+            &candidate,
+            &location,
+            &raw,
+        )
+        .unwrap();
+        let (markdown, proof) = match first {
+            ConversionStatus::Written { markdown, proof } => (markdown, proof),
+            other => panic!("expected write, got {other:?}"),
+        };
+        assert!(markdown.exists());
+        assert!(target.join("2026-09-01_report.pdf").exists());
+        assert_eq!(read_source_proof(&markdown).unwrap(), Some(proof.clone()));
+        assert_eq!(proof.location.uid, 42);
+        assert!(!fs::read_dir(&target).unwrap().any(|entry| {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            name.starts_with(".email-to-markdown-tmp-") || name.ends_with(".lock")
+        }));
+
+        let second = convert_raw_contextual(
+            &target,
+            &account(&target),
+            &candidate,
+            &location,
+            &raw,
+        )
+        .unwrap();
+        assert!(matches!(second, ConversionStatus::AlreadyPresent { .. }));
+        assert_eq!(
+            fs::read_dir(&target)
+                .unwrap()
+                .filter(|entry| entry.as_ref().unwrap().path().extension().and_then(|e| e.to_str()) == Some("md"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn legacy_markdown_without_source_is_not_proof_and_collision_is_not_overwritten() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let raw = multipart_raw("legacy@example.com");
+        let location = location("INBOX", 5);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+        let first = convert_raw_contextual(
+            &target,
+            &account(&target),
+            &candidate,
+            &location,
+            &raw,
+        )
+        .unwrap();
+        let original = match first {
+            ConversionStatus::Written { markdown, .. } => markdown,
+            _ => unreachable!(),
+        };
+        let legacy_content = fs::read_to_string(&original)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("source:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Replacing the full nested YAML safely is unnecessary here: an invalid
+        // source block is deliberately treated like an old unproved Markdown.
+        fs::write(&original, legacy_content.replace("identity:", "legacy_identity:")).unwrap();
+
+        let second = convert_raw_contextual(
+            &target,
+            &account(&target),
+            &candidate,
+            &location,
+            &raw,
+        )
+        .unwrap();
+        let second_path = match second {
+            ConversionStatus::Written { markdown, .. } => markdown,
+            other => panic!("legacy note must be reconverted, got {other:?}"),
+        };
+        assert_ne!(second_path, original);
+        assert!(original.exists() && second_path.exists());
+    }
+
+    #[test]
+    fn contextual_lock_refuses_concurrent_operation() {
+        let temp = TempDir::new().unwrap();
+        let first = ContextualLock::acquire(temp.path(), "Work").unwrap();
+        let second = ContextualLock::acquire(temp.path(), "Work");
+        assert!(second.is_err());
+        drop(first);
+        assert!(ContextualLock::acquire(temp.path(), "Work").is_ok());
+    }
+
+    #[test]
+    fn stale_cleanup_only_removes_reserved_directories() {
+        let temp = TempDir::new().unwrap();
+        let reserved = temp.path().join(".email-to-markdown-tmp-old");
+        let user = temp.path().join("my-important-folder");
+        fs::create_dir(&reserved).unwrap();
+        fs::create_dir(&user).unwrap();
+        fs::write(reserved.join("partial"), b"x").unwrap();
+        fs::write(user.join("keep"), b"x").unwrap();
+        let removed = cleanup_stale_staging(
+            temp.path(),
+            SystemTime::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(removed, 1);
+        assert!(!reserved.exists());
+        assert!(user.join("keep").exists());
+    }
+
+    #[test]
+    fn failed_contextual_conversion_leaves_no_final_markdown_or_residue() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let valid = header(
+            "failure@example.com",
+            "alice@example.com",
+            "bob@example.com",
+            "Failure",
+        );
+        let original_location = location("INBOX", 9);
+        let candidate =
+            parse_header_candidate("Work", original_location.clone(), &valid, None).unwrap();
+        let stale_location = location("INBOX", 10);
+        assert!(convert_raw_contextual(
+            &target,
+            &account(&target),
+            &candidate,
+            &stale_location,
+            &valid,
+        )
+        .is_err());
+        assert_eq!(
+            fs::read_dir(&target)
+                .unwrap()
+                .filter(|entry| entry.as_ref().unwrap().path().extension().and_then(|e| e.to_str()) == Some("md"))
+                .count(),
+            0
+        );
+        assert!(!fs::read_dir(&target).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".email-to-markdown-tmp-")));
     }
 }
 

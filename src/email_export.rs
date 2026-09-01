@@ -28,6 +28,9 @@ pub struct EmailFrontmatter {
     pub subject_hash: String,
     pub tags: Vec<String>,
     pub attachments: Vec<String>,
+    /// Stable proof tying this Markdown to one exact IMAP message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::contextual_export::LocalSourceProof>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -297,6 +300,8 @@ pub struct ExportContext<'a> {
     pub debug_mode: bool,
     /// Routing destinations parsed from `destinations.txt`.
     pub dests: &'a [Destination],
+    /// Optional source proof used by contextual exports.
+    pub source_proof: Option<&'a crate::contextual_export::LocalSourceProof>,
 }
 
 /// Export a single email to Markdown with frontmatter.
@@ -413,6 +418,7 @@ pub fn export_to_markdown(
         subject_hash,
         tags,
         attachments: attachments.clone(),
+        source: ctx.source_proof.cloned(),
         email_type: Some(email_type_str),
         social_links,
     };
@@ -1018,6 +1024,129 @@ impl ImapExporter {
         Ok(merge_candidates(candidates))
     }
 
+    /// Revalidate and convert exactly the selected logical candidates into one
+    /// physical destination. UIDVALIDITY for every involved mailbox is checked
+    /// before the first body is downloaded or local file is written.
+    pub fn convert_contextual_selection(
+        &mut self,
+        target: &Path,
+        selected: &[crate::contextual_export::ContextualCandidate],
+    ) -> Result<Vec<crate::contextual_export::MessageConversionResult>> {
+        use crate::contextual_export::{
+            convert_raw_contextual_unlocked, find_existing_proof, parse_uid_fetch_response,
+            validate_uidvalidity, ContextualLock, ConversionStatus, MessageConversionResult,
+        };
+        use std::collections::{BTreeMap, HashMap};
+
+        let _lock = ContextualLock::acquire(target, &self.account.name)?;
+        let mut results = Vec::new();
+        let mut pending = Vec::new();
+        for candidate in selected {
+            let key = candidate.logical_key();
+            if let Some((markdown, proof)) = find_existing_proof(target, candidate)? {
+                results.push(MessageConversionResult {
+                    candidate_key: key,
+                    status: Some(ConversionStatus::AlreadyPresent { markdown, proof }),
+                    error: None,
+                });
+                continue;
+            }
+            let location = candidate
+                .locations
+                .first()
+                .context("selected candidate has no IMAP location")?
+                .clone();
+            pending.push((candidate.clone(), location));
+        }
+
+        let mut folders: BTreeMap<(String, String, u32), Vec<_>> = BTreeMap::new();
+        for (candidate, location) in pending {
+            folders
+                .entry((
+                    location.folder_raw.clone(),
+                    location.folder_display.clone(),
+                    location.uid_validity,
+                ))
+                .or_default()
+                .push((candidate, location));
+        }
+
+        // Whole-list stale guard: complete this loop before any BODY.PEEK[] or write.
+        for ((raw, display, _), entries) in &folders {
+            let mailbox = self
+                .session
+                .as_mut()
+                .context("Not connected")?
+                .examine(raw)
+                .with_context(|| format!("revalidate mailbox {display}"))?;
+            for (_, location) in entries {
+                validate_uidvalidity(location, mailbox.uid_validity)?;
+            }
+        }
+
+        let account = self.account.clone();
+        for ((raw, display, _), entries) in folders {
+            let session = self.session.as_mut().context("Not connected")?;
+            session.examine(&raw)?;
+            for chunk in entries.chunks(crate::contextual_export::HEADER_UID_BATCH) {
+                let uid_set = chunk
+                    .iter()
+                    .map(|(_, location)| location.uid.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let fetched = session.run_command_and_read_response(format!(
+                    "UID FETCH {uid_set} (UID BODY.PEEK[])"
+                ));
+                let bodies: HashMap<u32, Vec<u8>> = match fetched {
+                    Ok(raw_response) => parse_uid_fetch_response(&raw_response)?
+                        .into_iter()
+                        .map(|(uid, _, body)| (uid, body))
+                        .collect(),
+                    Err(error) => {
+                        for (candidate, _) in chunk {
+                            results.push(MessageConversionResult {
+                                candidate_key: candidate.logical_key(),
+                                status: None,
+                                error: Some(format!("fetch body in {display}: {error:#}")),
+                            });
+                        }
+                        continue;
+                    }
+                };
+                for (candidate, location) in chunk {
+                    let Some(body) = bodies.get(&location.uid) else {
+                        results.push(MessageConversionResult {
+                            candidate_key: candidate.logical_key(),
+                            status: None,
+                            error: Some(format!("UID {} disappeared from {display}", location.uid)),
+                        });
+                        continue;
+                    };
+                    match convert_raw_contextual_unlocked(
+                        target,
+                        &account,
+                        candidate,
+                        location,
+                        body,
+                    ) {
+                        Ok(status) => results.push(MessageConversionResult {
+                            candidate_key: candidate.logical_key(),
+                            status: Some(status),
+                            error: None,
+                        }),
+                        Err(error) => results.push(MessageConversionResult {
+                            candidate_key: candidate.logical_key(),
+                            status: None,
+                            error: Some(format!("{error:#}")),
+                        }),
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Export a single folder.
     ///
     /// Returns `(stats, decisions)` where `decisions` is the list of route proposals
@@ -1131,6 +1260,7 @@ impl ImapExporter {
                             account: &self.account,
                             debug_mode: self.debug_mode,
                             dests,
+                            source_proof: None,
                         };
                         let result = export_to_markdown(
                             body,
@@ -1575,6 +1705,7 @@ mod tests {
             account: &account,
             debug_mode: false,
             dests: &[],
+            source_proof: None,
         };
         let result = export_to_markdown(
             &raw,
@@ -1616,6 +1747,7 @@ mod tests {
             account: &account,
             debug_mode: false,
             dests: &[],
+            source_proof: None,
         };
         let (md_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
@@ -1662,6 +1794,7 @@ mod tests {
             account: &account,
             debug_mode: false,
             dests: &[],
+            source_proof: None,
         };
         let (first_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
