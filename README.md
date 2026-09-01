@@ -18,7 +18,7 @@ cargo build --release --features tray
 **Linux** — dépendances système requises pour la GUI :
 ```bash
 sudo apt-get install build-essential pkg-config libssl-dev libgtk-3-dev \
-  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
 ```
 
 ## Configuration rapide
