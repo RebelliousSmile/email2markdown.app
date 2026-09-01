@@ -1,6 +1,6 @@
 ---
 objective: "Depuis un dossier configuré, l’utilisateur peut choisir un compte IMAP, sélectionner les messages liés à ses correspondants, les convertir directement en Markdown et supprimer du serveur uniquement ceux dont l’écriture a réussi, sur Windows, macOS et Linux."
-status: in-progress
+status: implemented
 ---
 
 # Plan: Export contextuel d’emails vers Markdown
