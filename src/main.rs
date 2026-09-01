@@ -77,6 +77,26 @@ enum Commands {
     /// Manage routing destinations (list, add)
     Dest(dest_cmd::DestArgs),
 
+    /// Repair legacy centralized attachment paths in already-moved .md files.
+    ///
+    /// When emails were exported with the old centralized scheme (attachments stored
+    /// under `<account>/attachments/<folder>/`), moving them to notes left the
+    /// frontmatter paths broken. This command finds those files, moves the attachments
+    /// co-located with their .md, and updates the frontmatter to bare filenames.
+    RepairAttachments {
+        /// Account name (e.g. pro@fxguillois.email) — locates the attachment source dir
+        #[arg(short, long)]
+        account: String,
+
+        /// Preview changes without applying them
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Path to config file (default: platform config dir)
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+
     /// Run as system tray application (requires --features tray)
     #[cfg(feature = "tray")]
     Tray,
@@ -360,6 +380,55 @@ fn main() -> Result<()> {
 
         Commands::Dest(args) => {
             dest_cmd::run(args)?;
+        }
+
+        Commands::RepairAttachments { account, dry_run, config } => {
+            let settings = Settings::load(
+                config.as_deref().unwrap_or(&config::settings_path()),
+            )
+            .unwrap_or_default();
+
+            let export_base = settings
+                .export_base_dir
+                .as_deref()
+                .unwrap_or(".");
+            let notes_dir_str = settings
+                .notes_dir
+                .as_deref()
+                .unwrap_or(".");
+
+            let account_root = PathBuf::from(export_base).join(&account);
+            let notes_dir = PathBuf::from(notes_dir_str);
+            let export_base_dir = PathBuf::from(export_base);
+
+            if !account_root.exists() {
+                anyhow::bail!(
+                    "account root not found: {}",
+                    account_root.display()
+                );
+            }
+
+            println!("Repairing legacy attachments for {}", account);
+            println!("  account root : {}", account_root.display());
+            println!("  notes dir    : {}", notes_dir.display());
+            println!("  excluding    : {} (staging area)", export_base_dir.display());
+            if dry_run {
+                println!("  (dry-run — no files will be changed)");
+            }
+            println!();
+
+            let count = route::repair_legacy_attachments(
+                &notes_dir,
+                &account_root,
+                Some(&export_base_dir),
+                dry_run,
+            )?;
+
+            if dry_run {
+                println!("\n{} attachment(s) would be repaired.", count);
+            } else {
+                println!("\n{} attachment(s) repaired.", count);
+            }
         }
 
         #[cfg(feature = "tray")]

@@ -1193,10 +1193,16 @@ fn build_route_window(
     let known_paths_json =
         serde_json::to_string(&known_paths).context("failed to serialize known paths")?;
 
+    // Inject data via initialization script to avoid NavigateToString's ~2 MB limit.
+    // AddScriptToExecuteOnDocumentCreated (called by with_initialization_script) has no
+    // such size restriction and runs before any page script, so the globals are ready.
+    let init_script = format!(
+        "window.__DECISIONS_DATA__={};window.__KNOWN_PATHS__={};",
+        escape_json_for_script(&decisions_json),
+        escape_json_for_script(&known_paths_json)
+    );
+
     let html_template = include_str!("../assets/route_review.html");
-    let html = html_template
-        .replace("__DECISIONS_JSON__", &escape_json_for_script(&decisions_json))
-        .replace("__KNOWN_PATHS_JSON__", &escape_json_for_script(&known_paths_json));
 
     let window = WindowBuilder::new()
         .with_title("Email to Markdown \u{2014} Revue du routage")
@@ -1208,7 +1214,8 @@ fn build_route_window(
 
     let proxy_ipc = proxy.clone();
     let webview = WebViewBuilder::new(&window)
-        .with_html(html)
+        .with_html(html_template)
+        .with_initialization_script(&init_script)
         .with_ipc_handler(move |req: wry::http::Request<String>| {
             let body = req.body().clone();
 

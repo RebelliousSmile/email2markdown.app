@@ -4,6 +4,7 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use walkdir::WalkDir;
 
 /// Safe path-segment shape — alphanumerics, space, dash, underscore, dot.
 /// Used to validate user-typed notes destinations against path-traversal.
@@ -224,19 +225,45 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
     // recorded so the moved `.md`'s links can be updated to match.
     let mut renamed: Vec<(String, String)> = Vec::new();
     for link in &attachments {
-        let att_src = old_parent.join(link.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let link_native = link.replace('/', std::path::MAIN_SEPARATOR_STR);
+        let att_src_primary = old_parent.join(&link_native);
 
-        // Only move files actually inside the source directory.
-        // Links that resolve outside (legacy centralized exports) are skipped.
-        let in_source = att_src.parent().map_or(false, |p| p == old_parent);
-        if !in_source {
-            eprintln!(
-                "warning: attachment {:?} resolves outside source dir {}; skipping (no migration)",
-                link,
-                old_parent.display()
-            );
-            continue;
-        }
+        // Resolve the actual source file:
+        // 1. Primary: co-located in old_parent (current scheme — bare filename).
+        // 2. Fallback: legacy centralized export — attachment stored relative to the
+        //    account root (parent of old_parent), e.g. "attachments/Sent/email_…".
+        let (att_src, legacy) = {
+            let in_source = att_src_primary.parent().map_or(false, |p| p == old_parent);
+            if in_source {
+                (att_src_primary, false)
+            } else {
+                match old_parent.parent() {
+                    Some(account_root) => {
+                        let fallback = account_root.join(&link_native);
+                        // Security: resolved path must stay within account_root.
+                        let safe = fallback.parent()
+                            .map_or(false, |p| p.starts_with(account_root));
+                        if safe {
+                            (fallback, true)
+                        } else {
+                            eprintln!(
+                                "warning: attachment {:?} resolves outside account dir {}; skipping (no migration)",
+                                link,
+                                account_root.display()
+                            );
+                            continue;
+                        }
+                    }
+                    None => {
+                        eprintln!(
+                            "warning: attachment {:?}: no account root found; skipping (no migration)",
+                            link
+                        );
+                        continue;
+                    }
+                }
+            }
+        };
 
         if !att_src.exists() {
             continue;
@@ -270,7 +297,8 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
             })?;
         }
 
-        if final_name != original_name {
+        // Track renames: includes legacy path changes ("attachments/Sent/foo.pdf" → "foo.pdf").
+        if final_name != original_name || legacy {
             renamed.push((link.clone(), final_name));
         }
     }
@@ -832,6 +860,150 @@ pub fn apply_decision(staging_md: &Path, rel_path: &str, notes_dir: &Path) -> Re
         .with_context(|| format!("failed to create directory {}", dest_dir.display()))?;
     move_email(staging_md, &dest_dir)
         .with_context(|| format!("failed to move {} to {}", staging_md.display(), dest_dir.display()))
+}
+
+// ── Repair legacy attachments ────────────────────────────────────────────────
+
+/// Repair legacy centralized attachment paths in already-moved `.md` files.
+///
+/// Scans all `.md` files under `notes_dir` (skipping `exclude_dir` if provided)
+/// whose frontmatter references attachment paths containing `/` (legacy format,
+/// e.g. `attachments/Sent/email_…`), resolves them against `account_root`, moves
+/// the found files co-located with the `.md`, and rewrites the frontmatter to bare
+/// filenames.
+///
+/// Pass `exclude_dir = Some(export_base_dir)` to prevent repairing staged files
+/// that have not yet been routed into notes.
+///
+/// When `dry_run` is true, prints actions without modifying any file.
+/// Returns the number of attachments successfully repaired (or that would be).
+pub fn repair_legacy_attachments(
+    notes_dir: &Path,
+    account_root: &Path,
+    exclude_dir: Option<&Path>,
+    dry_run: bool,
+) -> Result<usize> {
+    let mut total = 0usize;
+    for entry in WalkDir::new(notes_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        // Never follow symlinks (rule 02-rust-filesystem-safety).
+        if entry.file_type().is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        // Skip the staging/export area so we only repair already-routed notes.
+        if let Some(excl) = exclude_dir {
+            if path.starts_with(excl) {
+                continue;
+            }
+        }
+        if path.extension().map_or(false, |e| e == "md") {
+            total += repair_one_md(path, account_root, dry_run)?;
+        }
+    }
+    Ok(total)
+}
+
+fn repair_one_md(md_path: &Path, account_root: &Path, dry_run: bool) -> Result<usize> {
+    let content = match fs::read_to_string(md_path) {
+        Ok(c) => c,
+        Err(_) => return Ok(0),
+    };
+
+    let attachments = match parse_frontmatter_attachments(&content) {
+        None | Some(Err(_)) => return Ok(0),
+        Some(Ok(list)) => list,
+    };
+
+    let md_dir = match md_path.parent() {
+        Some(d) => d,
+        None => return Ok(0),
+    };
+
+    let mut renamed: Vec<(String, String)> = Vec::new();
+    for link in &attachments {
+        // Only legacy paths (contain '/') need repair; bare filenames are already co-located.
+        if !link.contains('/') {
+            continue;
+        }
+        // Reject traversal attempts before joining onto account_root.
+        if link.contains("..") {
+            eprintln!("warning: repair: {:?} contains '..'; skipping", link);
+            continue;
+        }
+        let link_native = link.replace('/', std::path::MAIN_SEPARATOR_STR);
+        let att_src = account_root.join(&link_native);
+
+        // Security: canonical parent must start with account_root.
+        // We use the pre-join canonical form of account_root to guard against
+        // any residual '..' in the assembled path.
+        let safe = att_src.parent().map_or(false, |p| {
+            // Normalize by stripping the non-'..' suffix components manually —
+            // canonicalize() requires the path to already exist.
+            let canonical_account = account_root.components().collect::<PathBuf>();
+            p.starts_with(&canonical_account)
+        });
+        if !safe {
+            eprintln!("warning: repair: {:?} resolves outside account root; skipping", link);
+            continue;
+        }
+
+        if !att_src.exists() {
+            continue;
+        }
+
+        let original_name = match att_src.file_name() {
+            Some(n) => n.to_string_lossy().into_owned(),
+            None => continue,
+        };
+        let final_name = unique_name_in(md_dir, &original_name);
+        let att_dest = md_dir.join(&final_name);
+
+        if dry_run {
+            println!(
+                "would move: {} -> {}",
+                att_src.display(),
+                att_dest.display()
+            );
+        } else {
+            if fs::rename(&att_src, &att_dest).is_err() {
+                fs::copy(&att_src, &att_dest).with_context(|| {
+                    format!("failed to copy {} to {}", att_src.display(), att_dest.display())
+                })?;
+                fs::remove_file(&att_src).with_context(|| {
+                    format!("failed to remove {} after copy", att_src.display())
+                })?;
+            }
+        }
+        renamed.push((link.clone(), final_name));
+    }
+
+    if renamed.is_empty() {
+        return Ok(0);
+    }
+
+    if dry_run {
+        for (old, new) in &renamed {
+            println!(
+                "would update link: {:?} -> {:?} in {}",
+                old,
+                new,
+                md_path.display()
+            );
+        }
+    } else {
+        let mut updated = content;
+        for (old, new) in &renamed {
+            updated = updated.replace(old.as_str(), new.as_str());
+        }
+        fs::write(md_path, updated)
+            .with_context(|| format!("failed to rewrite {}", md_path.display()))?;
+    }
+
+    Ok(renamed.len())
 }
 
 // ── AI extension point ────────────────────────────────────────────────────────

@@ -875,7 +875,7 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 mod route_tests {
     use email_to_markdown::route::{
         apply_decision, ai_route, delete_email, ensure_year_month, join_safe_segments, move_email,
-        parse_destinations, route_email, upsert_rule,
+        parse_destinations, repair_legacy_attachments, route_email, upsert_rule,
         Destination, EmailMeta, MatchRule,
     };
     use chrono::DateTime;
@@ -1176,6 +1176,129 @@ mod route_tests {
         // emailA is untouched.
         let a_content = fs::read_to_string(dst_dir.join("emailA.md")).unwrap();
         assert!(a_content.contains("- 2026-06-25_image.png\n"));
+    }
+
+    // --- move_email: legacy centralized attachment path resolved from account root ---
+    // Attachment stored at account_root/attachments/Sent/email_…pdf; .md references it as
+    // "attachments/Sent/email_…pdf" (relative to account root, not to md_dir).
+    // move_email must locate the file at old_parent.parent(), move it co-located, and
+    // update the frontmatter to the bare filename.
+    #[test]
+    fn test_move_email_migrates_legacy_centralized_attachment() {
+        let temp = TempDir::new().unwrap();
+        // Simulated account root layout:
+        //   account_root/
+        //     Sent/            ← old_parent (where the .md currently lives)
+        //       email.md
+        //     attachments/
+        //       Sent/
+        //         email_2025-11-18_FG_file.pdf   ← legacy centralized attachment
+        let account_root = temp.path().join("account_root");
+        let src_dir = account_root.join("Sent");
+        let att_dir = account_root.join("attachments").join("Sent");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&att_dir).unwrap();
+
+        let att_name = "email_2025-11-18_FG_file.pdf";
+        let att_src = att_dir.join(att_name);
+        fs::write(&att_src, b"PDF data").unwrap();
+
+        let link = format!("attachments/Sent/{}", att_name);
+        let md_content = format!(
+            "---\nsubject: Test\nattachments:\n  - {}\n---\nBody\n",
+            link
+        );
+        let md_src = src_dir.join("email.md");
+        fs::write(&md_src, &md_content).unwrap();
+
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        move_email(&md_src, &dst_dir).unwrap();
+
+        // Inclusive: attachment moved co-located with the .md.
+        let att_dest = dst_dir.join(att_name);
+        assert!(att_dest.exists(), "legacy attachment must be co-located with moved .md");
+        assert_eq!(fs::read(&att_dest).unwrap(), b"PDF data");
+
+        // Inclusive: .md frontmatter updated to bare filename.
+        let md_dest = dst_dir.join("email.md");
+        let content = fs::read_to_string(&md_dest).unwrap();
+        assert!(
+            content.contains(&format!("- {}\n", att_name)),
+            "frontmatter must reference bare filename, got: {:?}",
+            content
+        );
+        assert!(
+            !content.contains("attachments/Sent/"),
+            "frontmatter must not retain the legacy path prefix"
+        );
+
+        // Exclusive: original legacy file removed.
+        assert!(!att_src.exists(), "legacy source must be removed after move");
+    }
+
+    // --- repair_legacy_attachments ---
+
+    #[test]
+    fn test_repair_legacy_attachments_moves_and_rewrites() {
+        let temp = TempDir::new().unwrap();
+        // Layout:
+        //   notes_dir/
+        //     Messy/2025/11/
+        //       email.md          ← already moved .md with broken legacy path
+        //   account_root/
+        //     attachments/Sent/
+        //       email_2025-11_file.pdf  ← still at legacy location
+        let notes_dir = temp.path().join("notes");
+        let md_dir = notes_dir.join("Messy").join("2025").join("11");
+        fs::create_dir_all(&md_dir).unwrap();
+
+        let account_root = temp.path().join("account");
+        let att_dir = account_root.join("attachments").join("Sent");
+        fs::create_dir_all(&att_dir).unwrap();
+
+        let att_name = "email_2025-11_file.pdf";
+        let att_src = att_dir.join(att_name);
+        fs::write(&att_src, b"Repaired").unwrap();
+
+        let link = format!("attachments/Sent/{}", att_name);
+        let md_path = md_dir.join("email.md");
+        fs::write(
+            &md_path,
+            format!("---\nsubject: X\nattachments:\n  - {}\n---\nBody\n", link),
+        )
+        .unwrap();
+
+        let repaired = repair_legacy_attachments(&notes_dir, &account_root, None, false).unwrap();
+
+        assert_eq!(repaired, 1);
+        assert!(!att_src.exists(), "source must be removed");
+        assert!(md_dir.join(att_name).exists(), "attachment must be co-located");
+        let content = fs::read_to_string(&md_path).unwrap();
+        assert!(content.contains(&format!("- {}\n", att_name)));
+        assert!(!content.contains("attachments/Sent/"));
+    }
+
+    #[test]
+    fn test_repair_legacy_attachments_skips_dotdot_paths() {
+        let temp = TempDir::new().unwrap();
+        let notes_dir = temp.path().join("notes");
+        let md_dir = notes_dir.join("Messy");
+        fs::create_dir_all(&md_dir).unwrap();
+
+        let account_root = temp.path().join("account");
+        fs::create_dir_all(&account_root).unwrap();
+
+        let md_path = md_dir.join("email.md");
+        fs::write(
+            &md_path,
+            "---\nsubject: X\nattachments:\n  - ../../../etc/passwd\n---\nBody\n",
+        )
+        .unwrap();
+
+        let repaired = repair_legacy_attachments(&notes_dir, &account_root, None, false).unwrap();
+        assert_eq!(repaired, 0, "traversal paths must be rejected");
     }
 
     // ── delete_email ─────────────────────────────────────────────────────────
