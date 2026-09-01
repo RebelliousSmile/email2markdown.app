@@ -255,6 +255,7 @@ destinations:
   - path: Perso/Banque
     rules:
       - from: contact@mabanque.fr
+      - correspondent: conseiller@mabanque.fr
       - subject: relevé
 
   # Fourre-tout explicite (au plus une entrée default)
@@ -268,6 +269,7 @@ destinations:
 |----------|-------------|
 | `domain: <d>` | L'expéditeur vient du domaine `d` (insensible à la casse, sous-domaines inclus) |
 | `from: <adresse>` | Adresse exacte de l'expéditeur (insensible à la casse) |
+| `correspondent: <adresse>` | Adresse exacte présente comme expéditeur ou destinataire (From, To, Cc ou Bcc disponible) |
 | `subject: <mot>` | Le sujet contient `mot` (insensible à la casse) |
 | `account: <nom>` | Email reçu sur le compte `nom` |
 | `default: true` | Chemin fourre-tout si aucune autre règle ne correspond |
@@ -290,6 +292,7 @@ email-to-markdown dest add "Perso/Famille"
 
 # Ajouter avec une ou plusieurs règles + une note
 email-to-markdown dest add "Perso/Banque" --domain mabanque.fr --subject relevé --note "factures"
+email-to-markdown dest add "Pro/Clients/Acme" --correspondent contact@acme.example
 
 # Proposer des règles à partir des emails déjà tombés dans le fourre-tout
 email-to-markdown dest suggest

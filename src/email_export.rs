@@ -319,6 +319,8 @@ pub fn export_to_markdown(
 
     let from_field = mail.headers.get_first_value("From").unwrap_or_default();
     let to_field = mail.headers.get_first_value("To").unwrap_or_default();
+    let cc_field = mail.headers.get_first_value("Cc").unwrap_or_default();
+    let bcc_field = mail.headers.get_first_value("Bcc").unwrap_or_default();
     let date_field = mail.headers.get_first_value("Date").unwrap_or_default();
     let subject = mail.headers.get_first_value("Subject").unwrap_or_default();
 
@@ -447,6 +449,9 @@ pub fn export_to_markdown(
 
     let meta = EmailMeta {
         from: sender_addr.to_string(),
+        to: extract_emails(Some(&frontmatter.to)),
+        cc: extract_emails(Some(&cc_field)),
+        bcc: extract_emails(Some(&bcc_field)),
         domain,
         subject: frontmatter.subject.clone(),
         account: account.name.clone(),

@@ -276,6 +276,7 @@ fn frontmatter_field(content: &str, field: &str) -> Option<String> {
 /// Mirrors the export-time construction in `email_export::export_to_markdown`.
 fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
     let from_raw = frontmatter_field(content, "from").unwrap_or_default();
+    let to_raw = frontmatter_field(content, "to").unwrap_or_default();
     let subject = frontmatter_field(content, "subject").unwrap_or_default();
     let date_raw = frontmatter_field(content, "date").unwrap_or_default();
 
@@ -296,6 +297,9 @@ fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
 
     EmailMeta {
         from: sender_addr,
+        to: crate::utils::extract_emails(Some(&to_raw)),
+        cc: Vec::new(),
+        bcc: Vec::new(),
         domain,
         subject,
         account: account_name.to_string(),

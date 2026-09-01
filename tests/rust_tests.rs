@@ -875,7 +875,8 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 mod route_tests {
     use email_to_markdown::route::{
         apply_decision, ai_route, delete_email, ensure_year_month, join_safe_segments, move_email,
-        parse_destinations, repair_legacy_attachments, route_email, upsert_rule,
+        normalize_address, parse_destinations, repair_legacy_attachments,
+        resolve_contextual_destination, route_email, upsert_rule,
         Destination, EmailMeta, MatchRule,
     };
     use chrono::DateTime;
@@ -888,11 +889,164 @@ mod route_tests {
     fn make_meta(from: &str, domain: &str, subject: &str, account: &str, date_str: &str) -> EmailMeta {
         EmailMeta {
             from: from.to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            bcc: Vec::new(),
             domain: domain.to_string(),
             subject: subject.to_string(),
             account: account.to_string(),
             date: DateTime::parse_from_rfc3339(date_str).expect("valid date"),
         }
+    }
+
+    #[test]
+    fn test_correspondent_matches_all_available_address_headers() {
+        let dests = parse_destinations(
+            "Pro/Client | correspondent:contact+project@example.com\n",
+        )
+        .unwrap();
+        let mut meta = make_meta(
+            "sender@elsewhere.example",
+            "elsewhere.example",
+            "Project",
+            "Work",
+            "2026-09-01T12:00:00+00:00",
+        );
+
+        for header in 0..4 {
+            meta.from = "sender@elsewhere.example".into();
+            meta.to.clear();
+            meta.cc.clear();
+            meta.bcc.clear();
+            match header {
+                0 => meta.from = "CONTACT+PROJECT@EXAMPLE.COM".into(),
+                1 => meta.to.push("CONTACT+PROJECT@EXAMPLE.COM".into()),
+                2 => meta.cc.push("contact+project@example.com".into()),
+                _ => meta.bcc.push("contact+project@example.com".into()),
+            }
+            assert!(!route_email(&meta, &dests).is_default);
+        }
+    }
+
+    #[test]
+    fn test_from_rule_remains_limited_to_sender() {
+        let dests = parse_destinations("Pro/Client | from:contact@example.com\n").unwrap();
+        let mut meta = make_meta(
+            "sender@elsewhere.example",
+            "elsewhere.example",
+            "Project",
+            "Work",
+            "2026-09-01T12:00:00+00:00",
+        );
+        meta.to.push("contact@example.com".into());
+        assert!(route_email(&meta, &dests).is_default);
+    }
+
+    #[test]
+    fn test_normalize_address_validates_and_preserves_searchable_forms() {
+        assert_eq!(
+            normalize_address(" Contact+Project@Example.COM ").unwrap(),
+            "contact+project@example.com"
+        );
+        assert!(normalize_address("Contact <contact@example.com>").is_err());
+        assert!(normalize_address("missing-at.example.com").is_err());
+        assert!(normalize_address("a@invalid").is_err());
+    }
+
+    #[test]
+    fn test_correspondent_yaml_round_trip_preserves_display_value() {
+        use email_to_markdown::destinations::{
+            load_yaml, save_yaml, DestinationEntry, DestinationRule, DestinationsConfig,
+        };
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("destinations.yaml");
+        let config = DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: "Pro/Client".into(),
+                rules: vec![DestinationRule::Correspondent(
+                    "Contact@Example.COM".into(),
+                )],
+                ..Default::default()
+            }],
+        };
+        save_yaml(&path, &config).unwrap();
+        let loaded = load_yaml(&path).unwrap();
+        assert_eq!(loaded.destinations[0].rules, config.destinations[0].rules);
+        assert!(fs::read_to_string(path)
+            .unwrap()
+            .contains("correspondent: Contact@Example.COM"));
+    }
+
+    #[test]
+    fn test_resolve_contextual_destination_requires_exact_physical_folder_and_account() {
+        let temp = TempDir::new().unwrap();
+        let notes = temp.path().join("notes");
+        let target = notes.join("Pro").join("Client");
+        let child = target.join("Subfolder");
+        fs::create_dir_all(&child).unwrap();
+        let destinations = vec![Destination {
+            path: "Pro/Client".into(),
+            rules: vec![
+                MatchRule::Correspondent("contact@example.com".into()),
+                MatchRule::Account("Work".into()),
+                MatchRule::Account("Archive".into()),
+                MatchRule::Subject("ignored for contextual search".into()),
+            ],
+            is_default: false,
+        }];
+        let accounts = vec!["Personal".into(), "Work".into()];
+
+        let resolved = resolve_contextual_destination(&notes, &target, &destinations, &accounts)
+            .unwrap();
+        assert_eq!(resolved.relative_path, "Pro/Client");
+        assert_eq!(resolved.allowed_accounts, vec!["Work"]);
+        assert_eq!(resolved.address_rules.len(), 1);
+        assert!(resolve_contextual_destination(&notes, &child, &destinations, &accounts).is_err());
+        assert!(resolve_contextual_destination(
+            &notes,
+            &target,
+            &destinations,
+            &["Personal".into()]
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_contextual_destination_rejects_symlink() {
+        let temp = TempDir::new().unwrap();
+        let notes = temp.path().join("notes");
+        let real = notes.join("Real");
+        let link = notes.join("Alias");
+        fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let destinations = vec![Destination {
+            path: "Alias".into(),
+            rules: vec![MatchRule::From("a@example.com".into())],
+            is_default: false,
+        }];
+        assert!(resolve_contextual_destination(&notes, &link, &destinations, &["Work".into()])
+            .is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_resolve_contextual_destination_rejects_symlink() {
+        let temp = TempDir::new().unwrap();
+        let notes = temp.path().join("notes");
+        let real = notes.join("Real");
+        let link = notes.join("Alias");
+        fs::create_dir_all(&real).unwrap();
+        if std::os::windows::fs::symlink_dir(&real, &link).is_err() {
+            return;
+        }
+        let destinations = vec![Destination {
+            path: "Alias".into(),
+            rules: vec![MatchRule::From("a@example.com".into())],
+            is_default: false,
+        }];
+        assert!(resolve_contextual_destination(&notes, &link, &destinations, &["Work".into()])
+            .is_err());
     }
 
     // --- join_safe_segments: migrated from sort_emails_tests ---

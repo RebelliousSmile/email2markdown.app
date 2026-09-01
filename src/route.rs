@@ -592,6 +592,12 @@ pub fn load_destinations() -> Vec<Destination> {
 pub struct EmailMeta {
     /// Full `From:` address (e.g. `alice@example.com`).
     pub from: String,
+    /// Normalized addresses from `To:`.
+    pub to: Vec<String>,
+    /// Normalized addresses from `Cc:`.
+    pub cc: Vec<String>,
+    /// Normalized addresses from `Bcc:` when the header is available.
+    pub bcc: Vec<String>,
     /// Domain portion of `from` (e.g. `example.com`).
     pub domain: String,
     /// `Subject:` header value.
@@ -621,6 +627,8 @@ pub enum MatchRule {
     Domain(String),
     /// Matches the full `From:` address (case-insensitive exact match).
     From(String),
+    /// Matches an exact address in From, To, Cc or Bcc (case-insensitive).
+    Correspondent(String),
     /// Matches a keyword in the subject (case-insensitive substring).
     Subject(String),
     /// Matches the IMAP account name (exact, case-sensitive).
@@ -643,7 +651,8 @@ pub struct Destination {
 /// Parse the content of a `destinations.txt` file into a list of `Destination`s.
 ///
 /// Syntax: `<path>  [ | <attr>, <attr>... ]`
-/// Attributes: `domain:<d>`, `from:<addr>`, `subject:<kw>`, `account:<name>`, `default`.
+/// Attributes: `domain:<d>`, `from:<addr>`, `correspondent:<addr>`,
+/// `subject:<kw>`, `account:<name>`, `default`.
 /// - Empty lines and lines starting with `#` are silently skipped.
 /// - Malformed attribute tokens are printed as warnings and skipped.
 /// - More than one `default` entry is a **hard error** (returns `Err`).
@@ -693,6 +702,12 @@ pub fn parse_destinations(content: &str) -> Result<Vec<Destination>> {
                         eprintln!("warning: destinations.txt — empty from value in {:?}", raw_line);
                     } else {
                         rules.push(MatchRule::From(a.to_string()));
+                    }
+                } else if let Some(a) = token.strip_prefix("correspondent:") {
+                    if a.is_empty() {
+                        eprintln!("warning: destinations.txt — empty correspondent value in {:?}", raw_line);
+                    } else {
+                        rules.push(MatchRule::Correspondent(a.to_string()));
                     }
                 } else if let Some(k) = token.strip_prefix("subject:") {
                     if k.is_empty() {
@@ -772,6 +787,7 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
                         || meta_domain.ends_with(&format!(".{}", rule_domain))
                 }
                 MatchRule::From(a) => meta.from.eq_ignore_ascii_case(a),
+                MatchRule::Correspondent(a) => email_has_correspondent(meta, a),
                 // No Regex::new here — k is dynamic; str::contains is correct.
                 MatchRule::Subject(k) => {
                     meta.subject.to_lowercase().contains(&k.to_lowercase())
@@ -807,6 +823,165 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
         matched_rule: None,
         is_default: true,
     }
+}
+
+/// Return the normalized form used for exact address comparisons.
+///
+/// This deliberately accepts one mailbox only (not a display-name or a comma-separated
+/// list), because destination rules are persisted as deterministic search keys.
+pub fn normalize_address(value: &str) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().any(|c| c.is_whitespace() || c.is_control())
+        || value.contains(['<', '>', ',', ';'])
+    {
+        anyhow::bail!("invalid email address: {value:?}");
+    }
+    let mut parts = value.split('@');
+    let local = parts.next().unwrap_or_default();
+    let domain = parts.next().unwrap_or_default();
+    if parts.next().is_some()
+        || local.is_empty()
+        || domain.is_empty()
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
+        || domain.starts_with(['.', '-'])
+        || domain.ends_with(['.', '-'])
+        || domain.contains("..")
+        || !domain.contains('.')
+    {
+        anyhow::bail!("invalid email address: {value:?}");
+    }
+    if !local.chars().all(|c| {
+        c.is_alphanumeric() || "!#$%&'*+-/=?^_`{|}~.".contains(c)
+    }) || !domain
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '.')
+    {
+        anyhow::bail!("invalid email address: {value:?}");
+    }
+    Ok(format!("{}@{}", local.to_lowercase(), domain.to_lowercase()))
+}
+
+/// Exact, case-insensitive correspondent match across all available address headers.
+pub fn email_has_correspondent(meta: &EmailMeta, address: &str) -> bool {
+    let Ok(wanted) = normalize_address(address) else {
+        return false;
+    };
+    std::iter::once(&meta.from)
+        .chain(meta.to.iter())
+        .chain(meta.cc.iter())
+        .chain(meta.bcc.iter())
+        .filter_map(|candidate| normalize_address(candidate).ok())
+        .any(|candidate| candidate == wanted)
+}
+
+/// A configured destination resolved to its exact physical folder and usable
+/// contextual-search rules.
+#[derive(Debug, Clone)]
+pub struct ContextualDestination {
+    pub target: PathBuf,
+    pub relative_path: String,
+    pub address_rules: Vec<MatchRule>,
+    pub allowed_accounts: Vec<String>,
+}
+
+/// Resolve an existing local directory to the one configured destination that owns it.
+/// The comparison uses canonical filesystem identity, never a case-folded path string.
+pub fn resolve_contextual_destination(
+    notes_dir: &Path,
+    target: &Path,
+    destinations: &[Destination],
+    configured_accounts: &[String],
+) -> Result<ContextualDestination> {
+    reject_symlink_path(notes_dir, target)?;
+    let notes_real = notes_dir
+        .canonicalize()
+        .with_context(|| format!("notes_dir does not exist: {}", notes_dir.display()))?;
+    let target_real = target
+        .canonicalize()
+        .with_context(|| format!("target directory does not exist: {}", target.display()))?;
+    if !target_real.is_dir() || !target_real.starts_with(&notes_real) {
+        anyhow::bail!("target is not a local directory under notes_dir: {}", target.display());
+    }
+
+    for destination in destinations {
+        let configured = join_safe_segments(notes_dir, &destination.path)?;
+        if !configured.exists() {
+            continue;
+        }
+        reject_symlink_path(notes_dir, &configured)?;
+        if configured.canonicalize()? != target_real {
+            continue;
+        }
+
+        let address_rules: Vec<MatchRule> = destination
+            .rules
+            .iter()
+            .filter_map(|rule| match rule {
+                MatchRule::Correspondent(a) if normalize_address(a).is_ok() => {
+                    Some(MatchRule::Correspondent(a.clone()))
+                }
+                MatchRule::From(a) if normalize_address(a).is_ok() => {
+                    Some(MatchRule::From(a.clone()))
+                }
+                MatchRule::Domain(d) if !d.trim().is_empty() => {
+                    Some(MatchRule::Domain(d.trim().to_lowercase()))
+                }
+                _ => None,
+            })
+            .collect();
+        if address_rules.is_empty() {
+            anyhow::bail!("destination has no usable address search rule: {}", destination.path);
+        }
+
+        let account_rules: Vec<&str> = destination
+            .rules
+            .iter()
+            .filter_map(|rule| match rule {
+                MatchRule::Account(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let allowed_accounts: Vec<String> = configured_accounts
+            .iter()
+            .filter(|name| account_rules.is_empty() || account_rules.iter().any(|rule| *rule == name.as_str()))
+            .cloned()
+            .collect();
+        if allowed_accounts.is_empty() {
+            anyhow::bail!("no configured mailbox is allowed for destination: {}", destination.path);
+        }
+
+        return Ok(ContextualDestination {
+            target: target_real,
+            relative_path: destination.path.clone(),
+            address_rules,
+            allowed_accounts,
+        });
+    }
+
+    anyhow::bail!("directory is not an exact configured destination: {}", target.display())
+}
+
+fn reject_symlink_path(notes_dir: &Path, target: &Path) -> Result<()> {
+    let root_meta = fs::symlink_metadata(notes_dir)
+        .with_context(|| format!("failed to inspect {}", notes_dir.display()))?;
+    if root_meta.file_type().is_symlink() {
+        anyhow::bail!("notes_dir must not be a symlink: {}", notes_dir.display());
+    }
+    let relative = target.strip_prefix(notes_dir)
+        .with_context(|| format!("target is outside notes_dir: {}", target.display()))?;
+    let mut current = notes_dir.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        let metadata = fs::symlink_metadata(&current)
+            .with_context(|| format!("failed to inspect {}", current.display()))?;
+        if metadata.file_type().is_symlink() {
+            anyhow::bail!("contextual destination must not contain a symlink: {}", current.display());
+        }
+    }
+    Ok(())
 }
 
 /// Whether `rel_path` already ends with a `<Year>/<Month>` dated suffix

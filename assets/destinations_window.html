@@ -328,6 +328,7 @@
           <select id="rule-kind">
             <option value="domain">domain</option>
             <option value="from">from</option>
+            <option value="correspondent">correspondent</option>
             <option value="subject">subject</option>
             <option value="account">account</option>
           </select>
@@ -417,6 +418,10 @@
     }
     if (data.type === 'folder_suggestions') {
       renderFolderScan(data.paths || []);
+      return;
+    }
+    if (data.type === 'error') {
+      alert(data.message || 'Règle invalide');
       return;
     }
   };
@@ -513,6 +518,7 @@
   function ruleLabel(rule) {
     if (rule.domain !== undefined) return 'domain: ' + rule.domain;
     if (rule.from !== undefined)   return 'from: ' + rule.from;
+    if (rule.correspondent !== undefined) return 'correspondent: ' + rule.correspondent;
     if (rule.subject !== undefined) return 'subject: ' + rule.subject;
     if (rule.account !== undefined) return 'account: ' + rule.account;
     return JSON.stringify(rule);

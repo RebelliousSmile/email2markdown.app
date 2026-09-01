@@ -40,6 +40,10 @@ pub enum DestCommand {
         #[arg(long)]
         from: Option<String>,
 
+        /// Route emails where this address appears in From, To, Cc or Bcc
+        #[arg(long)]
+        correspondent: Option<String>,
+
         /// Route emails whose subject contains this keyword here
         #[arg(long)]
         subject: Option<String>,
@@ -93,6 +97,7 @@ pub fn run(args: DestArgs) -> Result<()> {
             path,
             domain,
             from,
+            correspondent,
             subject,
             account,
             note,
@@ -105,7 +110,12 @@ pub fn run(args: DestArgs) -> Result<()> {
                 rules.push(DestinationRule::Domain(d.to_lowercase()));
             }
             if let Some(a) = from {
-                rules.push(DestinationRule::From(a));
+                route::normalize_address(&a)?;
+                rules.push(DestinationRule::From(a.trim().to_string()));
+            }
+            if let Some(a) = correspondent {
+                route::normalize_address(&a)?;
+                rules.push(DestinationRule::Correspondent(a.trim().to_string()));
             }
             if let Some(s) = subject {
                 rules.push(DestinationRule::Subject(s));
@@ -189,7 +199,14 @@ fn prompt_rule(kinds: &str) -> Result<Option<DestinationRule>> {
     }
     let rule = match kind.as_str() {
         "domain" => DestinationRule::Domain(value.to_lowercase()),
-        "from" => DestinationRule::From(value),
+        "from" => {
+            route::normalize_address(&value)?;
+            DestinationRule::From(value)
+        }
+        "correspondent" => {
+            route::normalize_address(&value)?;
+            DestinationRule::Correspondent(value)
+        }
         "subject" => DestinationRule::Subject(value),
         "account" => DestinationRule::Account(value),
         _ => {
@@ -323,7 +340,7 @@ fn action_add(cfg: &mut DestinationsConfig) -> Result<bool> {
         return Ok(false);
     }
 
-    let rules: Vec<DestinationRule> = match prompt_rule("domain/from/subject/account/none")? {
+    let rules: Vec<DestinationRule> = match prompt_rule("domain/from/correspondent/subject/account/none")? {
         Some(rule) => vec![rule],
         None => vec![],
     };
@@ -362,7 +379,7 @@ fn action_rules(cfg: &mut DestinationsConfig, i: usize) -> Result<bool> {
         match verb {
             "q" | "" => return Ok(false),
             "a" => {
-                if let Some(rule) = prompt_rule("domain/from/subject/account")? {
+                if let Some(rule) = prompt_rule("domain/from/correspondent/subject/account")? {
                     destinations::upsert_entry(cfg, &path, &[rule]);
                     return Ok(true);
                 }
@@ -385,6 +402,7 @@ fn rule_label(rule: &DestinationRule) -> String {
     match rule {
         DestinationRule::Domain(d) => format!("domain:{d}"),
         DestinationRule::From(a) => format!("from:{a}"),
+        DestinationRule::Correspondent(a) => format!("correspondent:{a}"),
         DestinationRule::Subject(k) => format!("subject:{k}"),
         DestinationRule::Account(n) => format!("account:{n}"),
     }

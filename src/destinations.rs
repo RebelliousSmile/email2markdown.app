@@ -31,6 +31,7 @@ use std::path::Path;
 pub enum DestinationRule {
     Domain(String),
     From(String),
+    Correspondent(String),
     Subject(String),
     Account(String),
 }
@@ -81,6 +82,7 @@ impl From<crate::route::MatchRule> for DestinationRule {
             // and `route_email` compares domains case-insensitively anyway.
             MatchRule::Domain(d) => DestinationRule::Domain(d.to_lowercase()),
             MatchRule::From(a) => DestinationRule::From(a),
+            MatchRule::Correspondent(a) => DestinationRule::Correspondent(a),
             MatchRule::Subject(k) => DestinationRule::Subject(k),
             MatchRule::Account(n) => DestinationRule::Account(n),
         }
@@ -93,6 +95,7 @@ impl From<&DestinationRule> for crate::route::MatchRule {
         match d {
             DestinationRule::Domain(d) => MatchRule::Domain(d.clone()),
             DestinationRule::From(a) => MatchRule::From(a.clone()),
+            DestinationRule::Correspondent(a) => MatchRule::Correspondent(a.clone()),
             DestinationRule::Subject(k) => MatchRule::Subject(k.clone()),
             DestinationRule::Account(n) => MatchRule::Account(n.clone()),
         }

@@ -745,6 +745,7 @@ struct DestGuiIpcMessage {
 
 enum DestGuiIpcResult {
     StateChanged,
+    Error(String),
     Suggestions(Vec<(String, usize)>),
     FolderSuggestions(Vec<String>),
     Close,
@@ -836,7 +837,14 @@ fn handle_dest_gui_ipc(
             }
             let rule = match kind {
                 "domain" => DestinationRule::Domain(value.to_lowercase()),
-                "from" => DestinationRule::From(value.to_string()),
+                "from" => match crate::route::normalize_address(value) {
+                    Ok(_) => DestinationRule::From(value.to_string()),
+                    Err(e) => return DestGuiIpcResult::Error(e.to_string()),
+                },
+                "correspondent" => match crate::route::normalize_address(value) {
+                    Ok(_) => DestinationRule::Correspondent(value.to_string()),
+                    Err(e) => return DestGuiIpcResult::Error(e.to_string()),
+                },
                 "subject" => DestinationRule::Subject(value.to_string()),
                 "account" => DestinationRule::Account(value.to_string()),
                 _ => return DestGuiIpcResult::Noop,
@@ -998,6 +1006,11 @@ fn build_dest_gui_window(
                 DestGuiIpcResult::StateChanged => {
                     let json = state_json(&cfg_guard);
                     drop(cfg_guard);
+                    let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
+                }
+                DestGuiIpcResult::Error(message) => {
+                    drop(cfg_guard);
+                    let json = serde_json::json!({"type": "error", "message": message}).to_string();
                     let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
                 }
                 DestGuiIpcResult::Suggestions(items) => {
