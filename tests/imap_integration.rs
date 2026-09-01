@@ -1,0 +1,67 @@
+use email_to_markdown::config::Account;
+use email_to_markdown::email_export::ImapExporter;
+use email_to_markdown::route::MatchRule;
+
+fn enabled() -> bool {
+    std::env::var("EMAIL_TO_MARKDOWN_IMAP_TEST").as_deref() == Ok("1")
+}
+
+fn account() -> Account {
+    Account {
+        name: "Dovecot fixture".into(),
+        server: "127.0.0.1".into(),
+        port: 1993,
+        username: "test".into(),
+        password: Some("password".into()),
+        ignored_folders: vec![],
+        export_directory: String::new(),
+        quote_depth: 1,
+        skip_existing: false,
+        collect_contacts: false,
+        skip_signature_images: false,
+        delete_after_export: false,
+        cleanup_empty_dirs: true,
+    }
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
+    if !enabled() {
+        return;
+    }
+    std::env::set_var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST", "1");
+    let mut exporter = ImapExporter::new(account(), true);
+    exporter.connect().unwrap();
+    let candidates = exporter
+        .search_contextual(&[MatchRule::Correspondent("alice@example.com".into())])
+        .unwrap();
+
+    assert_eq!(candidates.len(), 2, "sender and recipient matches expected");
+    assert!(candidates.iter().all(|candidate| {
+        candidate
+            .locations
+            .iter()
+            .all(|location| location.uid > 0 && location.uid_validity > 0)
+    }));
+    assert!(candidates.iter().all(|candidate| {
+        !candidate
+            .from
+            .iter()
+            .any(|address| address.ends_with("@notalice.example.com"))
+    }));
+
+    let client = imap::ClientBuilder::new("127.0.0.1", 1993)
+        .mode(imap::ConnectionMode::Tls)
+        .danger_skip_tls_verify(true)
+        .connect()
+        .unwrap();
+    let mut session = client.login("test", "password").map_err(|(e, _)| e).unwrap();
+    session.examine("INBOX").unwrap();
+    let fetched = session.uid_fetch("1:*", "(UID FLAGS)").unwrap();
+    assert!(fetched.iter().all(|item| {
+        item.flags()
+            .iter()
+            .all(|flag| !matches!(flag, imap::types::Flag::Seen))
+    }));
+}

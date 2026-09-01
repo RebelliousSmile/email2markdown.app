@@ -1,4 +1,5 @@
 pub mod email_export;
+pub mod contextual_export;
 pub mod route;
 pub mod destinations;  // YAML storage for routing destinations
 pub mod dest_cmd;      // `dest` CLI subcommand (list, add, suggest)

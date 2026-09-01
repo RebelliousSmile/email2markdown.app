@@ -1,6 +1,6 @@
 use crate::config::Account;
 use crate::network::{NetworkConfig, ProgressIndicator, with_retry};  // [3][4]
-use crate::route::{route_email, Destination, EmailMeta, RouteDecision};
+use crate::route::{route_email, Destination, EmailMeta, MatchRule, RouteDecision};
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
     is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename, subject_extract,
@@ -789,9 +789,16 @@ impl ImapExporter {
             );
         }
 
-        let client = imap::ClientBuilder::new(&self.account.server, self.account.port)
-            .connect()
-            .context("connect to imap server")?;
+        let local_test_tls = std::env::var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST").as_deref()
+            == Ok("1")
+            && matches!(self.account.server.as_str(), "localhost" | "127.0.0.1" | "::1");
+        let mut builder = imap::ClientBuilder::new(&self.account.server, self.account.port);
+        if local_test_tls {
+            builder = builder
+                .mode(imap::ConnectionMode::Tls)
+                .danger_skip_tls_verify(true);
+        }
+        let client = builder.connect().context("connect to imap server")?;
 
         self.is_gmail = is_gmail_server(&self.account.server);
 
@@ -922,6 +929,93 @@ impl ImapExporter {
         }
 
         Ok(folder_names)
+    }
+
+    /// Search every eligible mailbox for the address rules of one contextual
+    /// destination. Only selected headers are downloaded and `EXAMINE` plus
+    /// `BODY.PEEK` ensure the operation does not mark messages as read.
+    pub fn search_contextual(
+        &mut self,
+        rules: &[MatchRule],
+    ) -> Result<Vec<crate::contextual_export::ContextualCandidate>> {
+        use crate::contextual_export::{
+            build_search_batches, candidate_matches_rules, merge_candidates,
+            parse_header_candidate, parse_uid_fetch_response, MessageLocation,
+            HEADER_FETCH_FIELDS, HEADER_UID_BATCH,
+        };
+        use std::collections::BTreeSet;
+
+        let search_batches = build_search_batches(rules)?;
+        let gmail_extension = self
+            .session
+            .as_mut()
+            .context("Not connected")?
+            .capabilities()
+            .context("read IMAP capabilities")?
+            .has_str("X-GM-EXT-1");
+        let folders = self.list_folders()?;
+        let account_name = self.account.name.clone();
+        let ignored_folders = self.account.ignored_folders.clone();
+        let mut candidates = Vec::new();
+
+        for folder in folders {
+            if ignored_folders.iter().any(|ignored| ignored == &folder.display) {
+                continue;
+            }
+            let session = self.session.as_mut().context("Not connected")?;
+            let mailbox = session
+                .examine(&folder.raw)
+                .with_context(|| format!("examine {}", folder.display))?;
+            let uid_validity = mailbox.uid_validity.with_context(|| {
+                format!("mailbox {} did not provide UIDVALIDITY", folder.display)
+            })?;
+
+            let mut uids = BTreeSet::new();
+            for query in &search_batches {
+                uids.extend(
+                    session
+                        .uid_search(query)
+                        .with_context(|| format!("UID SEARCH in {}", folder.display))?,
+                );
+            }
+
+            let uid_values: Vec<u32> = uids.into_iter().collect();
+            for chunk in uid_values.chunks(HEADER_UID_BATCH) {
+                let uid_set = chunk
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let attributes = if gmail_extension {
+                    format!("(UID X-GM-MSGID {HEADER_FETCH_FIELDS})")
+                } else {
+                    format!("(UID {HEADER_FETCH_FIELDS})")
+                };
+                let raw = session
+                    .run_command_and_read_response(format!("UID FETCH {uid_set} {attributes}"))
+                    .with_context(|| format!("UID FETCH headers in {}", folder.display))?;
+                for (uid, provider_id, header) in parse_uid_fetch_response(&raw)? {
+                    let location = MessageLocation {
+                        folder_raw: folder.raw.clone(),
+                        folder_display: folder.display.clone(),
+                        uid_validity,
+                        uid,
+                    };
+                    let candidate = parse_header_candidate(
+                        &account_name,
+                        location,
+                        &header,
+                        provider_id,
+                    )?;
+                    // SEARCH is substring-based and therefore only a prefilter.
+                    if candidate_matches_rules(&candidate, rules) {
+                        candidates.push(candidate);
+                    }
+                }
+            }
+        }
+
+        Ok(merge_candidates(candidates))
     }
 
     /// Export a single folder.

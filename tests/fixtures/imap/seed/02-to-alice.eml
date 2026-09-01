@@ -1,0 +1,7 @@
+Message-ID: <fixture-to-alice@example.com>
+Date: Tue, 01 Sep 2026 09:00:00 +0000
+From: Test <test@example.com>
+To: Alice <alice@example.com>
+Subject: To Alice
+
+Second fixture body.

@@ -1,0 +1,7 @@
+Message-ID: <fixture-false-positive@example.com>
+Date: Tue, 01 Sep 2026 10:00:00 +0000
+From: Similar <alice@notalice.example.com>
+To: Test <test@example.com>
+Subject: Must not match exact correspondent
+
+False-positive fixture body.

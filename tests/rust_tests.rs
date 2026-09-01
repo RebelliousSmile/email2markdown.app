@@ -2090,6 +2090,152 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     }
 }
 
+mod contextual_export_tests {
+    use email_to_markdown::contextual_export::{
+        build_search_batches, candidate_matches_rules, merge_candidates,
+        parse_header_candidate, parse_uid_fetch_response, validate_uidvalidity, MessageLocation,
+    };
+    use email_to_markdown::route::MatchRule;
+
+    fn location(folder: &str, uid: u32) -> MessageLocation {
+        MessageLocation {
+            folder_raw: folder.into(),
+            folder_display: folder.into(),
+            uid_validity: 77,
+            uid,
+        }
+    }
+
+    fn header(message_id: &str, from: &str, to: &str, subject: &str) -> Vec<u8> {
+        format!(
+            "Message-ID: <{message_id}>\r\nDate: Tue, 01 Sep 2026 10:00:00 +0200\r\nFrom: {from}\r\nTo: {to}\r\nSubject: {subject}\r\n\r\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn search_batches_are_safe_deduplicated_and_bounded() {
+        let rules: Vec<_> = (0..250)
+            .map(|index| MatchRule::Correspondent(format!("person{index}@example.com")))
+            .collect();
+        let batches = build_search_batches(&rules).unwrap();
+        assert_eq!(batches.len(), 5);
+        assert!(batches.iter().all(|query| query.starts_with("UNDELETED ")));
+        assert!(batches.iter().all(|query| !query.contains('\r') && !query.contains('\n')));
+
+        let deduped = build_search_batches(&[
+            MatchRule::From("Same@Example.com".into()),
+            MatchRule::From("same@example.com".into()),
+        ])
+        .unwrap();
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].matches("FROM").count(), 1);
+        assert!(build_search_batches(&[MatchRule::From(
+            "victim@example.com\r\nALL".into()
+        )])
+        .is_err());
+    }
+
+    #[test]
+    fn header_parser_and_local_match_reject_substring_false_positive() {
+        let candidate = parse_header_candidate(
+            "Work",
+            location("INBOX", 12),
+            &header(
+                "one@example.com",
+                "Sender <alice@notacme.com>",
+                "Bob <bob@example.com>",
+                "Hello",
+            ),
+            None,
+        )
+        .unwrap();
+        assert!(!candidate_matches_rules(
+            &candidate,
+            &[MatchRule::Domain("acme.com".into())]
+        ));
+        assert!(candidate_matches_rules(
+            &candidate,
+            &[MatchRule::Correspondent("bob@example.com".into())]
+        ));
+        assert_eq!(candidate.locations[0].uid, 12);
+        assert_eq!(candidate.source.message_id.as_deref(), Some("one@example.com"));
+    }
+
+    #[test]
+    fn logical_merge_uses_provider_then_message_id_plus_fingerprint() {
+        let raw = header(
+            "same@example.com",
+            "alice@example.com",
+            "bob@example.com",
+            "Same",
+        );
+        let a = parse_header_candidate(
+            "Work",
+            location("INBOX", 1),
+            &raw,
+            Some("999".into()),
+        )
+        .unwrap();
+        let b = parse_header_candidate(
+            "Work",
+            location("Archive", 2),
+            &raw,
+            Some("999".into()),
+        )
+        .unwrap();
+        let merged = merge_candidates(vec![a, b]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].locations.len(), 2);
+
+        let reused = parse_header_candidate(
+            "Work",
+            location("Other", 3),
+            &header(
+                "same@example.com",
+                "mallory@example.com",
+                "bob@example.com",
+                "Different",
+            ),
+            None,
+        )
+        .unwrap();
+        let original = parse_header_candidate(
+            "Work",
+            location("INBOX", 1),
+            &raw,
+            None,
+        )
+        .unwrap();
+        assert_eq!(merge_candidates(vec![original, reused]).len(), 2);
+    }
+
+    #[test]
+    fn low_level_fetch_parser_reads_uid_gmail_id_and_header() {
+        let header = b"Message-ID: <gmail@example.com>\r\n\r\n";
+        let mut response = format!(
+            "* 7 FETCH (UID 42 X-GM-MSGID 1278455344230334865 BODY[HEADER] {{{}}}\r\n",
+            header.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(header);
+        response.extend_from_slice(b")\r\n");
+        let parsed = parse_uid_fetch_response(&response).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].0, 42);
+        assert_eq!(parsed[0].1.as_deref(), Some("1278455344230334865"));
+        assert_eq!(parsed[0].2, header);
+    }
+
+    #[test]
+    fn changed_uidvalidity_invalidates_a_search_result() {
+        let location = location("INBOX", 42);
+        assert!(validate_uidvalidity(&location, Some(77)).is_ok());
+        assert!(validate_uidvalidity(&location, Some(78)).is_err());
+        assert!(validate_uidvalidity(&location, None).is_err());
+    }
+}
+
 mod destinations_tests {
     use email_to_markdown::destinations::{
         load_yaml, save_yaml, upsert_entry, DestinationEntry, DestinationRule, DestinationsConfig,
