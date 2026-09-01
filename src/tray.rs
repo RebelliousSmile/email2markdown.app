@@ -34,6 +34,31 @@ type ActionCb = Box<dyn FnOnce() + Send>;
 
 /// Commands routed through the main event loop's user-event channel.
 pub enum AppCommand {
+    ContextualSearchRequested {
+        window_id: WindowId,
+        account: String,
+    },
+    ContextualSearchFinished {
+        window_id: WindowId,
+        account: String,
+        result: std::result::Result<tray_actions::ContextualSearchWork, String>,
+    },
+    ContextualConvertRequested {
+        window_id: WindowId,
+        keys: Vec<String>,
+    },
+    ContextualConvertFinished {
+        window_id: WindowId,
+        result: std::result::Result<tray_actions::ContextualBatchSummary, String>,
+    },
+    ContextualRetryDeletionRequested {
+        window_id: WindowId,
+    },
+    ContextualRetryDeletionFinished {
+        window_id: WindowId,
+        result: std::result::Result<tray_actions::ContextualBatchSummary, String>,
+    },
+    ContextualOpenConfig,
     OpenProgress {
         action_name: String,
         warning: Option<String>,
@@ -130,6 +155,17 @@ struct DestGuiState {
     cfg: Arc<Mutex<crate::destinations::DestinationsConfig>>,
     #[allow(dead_code)]
     dest_file: PathBuf,
+    webview: WebView,
+    #[allow(dead_code)]
+    window: Window,
+}
+
+struct ContextualState {
+    launch: tray_actions::ContextualLaunch,
+    account: Option<String>,
+    candidates: Vec<crate::contextual_export::ContextualCandidate>,
+    retry_deletion: Vec<crate::contextual_export::DeletionRequest>,
+    busy: bool,
     webview: WebView,
     #[allow(dead_code)]
     window: Window,
@@ -487,6 +523,250 @@ pub fn run_tray() -> Result<()> {
 
         let _ = &tray_icon;
     });
+}
+
+/// Run one contextual export window as a standalone process. This is the entry
+/// point used by file-manager actions; closing the window exits the process.
+pub fn run_contextual(target_path: PathBuf) -> Result<()> {
+    let launch = tray_actions::prepare_contextual_launch(&target_path)?;
+    let event_loop = EventLoopBuilder::<AppCommand>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    APP_PROXY
+        .set(proxy.clone())
+        .map_err(|_| anyhow::anyhow!("APP_PROXY already initialised"))?;
+    let mut state: Option<ContextualState> = None;
+
+    event_loop.run(move |event, target, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        match event {
+            Event::NewEvents(StartCause::Init) => {
+                match build_contextual_window(target, &proxy, &launch) {
+                    Ok((window, webview, window_id)) => {
+                        state = Some(ContextualState {
+                            launch: launch.clone(),
+                            account: None,
+                            candidates: Vec::new(),
+                            retry_deletion: Vec::new(),
+                            busy: false,
+                            webview,
+                            window,
+                        });
+                        let _ = window_id;
+                    }
+                    Err(error) => {
+                        eprintln!("Fenêtre contextuelle : {error:#}");
+                        *control_flow = ControlFlow::Exit;
+                    }
+                }
+            }
+            Event::UserEvent(AppCommand::ContextualSearchRequested { window_id, account }) => {
+                let Some(current) = state.as_mut() else { return; };
+                if current.window.id() != window_id || current.busy {
+                    return;
+                }
+                current.busy = true;
+                current.account = Some(account.clone());
+                current.candidates.clear();
+                current.retry_deletion.clear();
+                let launch = current.launch.clone();
+                let worker_proxy = proxy.clone();
+                thread::spawn(move || {
+                    let result = tray_actions::run_contextual_search(&launch, &account)
+                        .map_err(|error| format!("{error:#}"));
+                    let _ = worker_proxy.send_event(AppCommand::ContextualSearchFinished {
+                        window_id,
+                        account,
+                        result,
+                    });
+                });
+            }
+            Event::UserEvent(AppCommand::ContextualSearchFinished { window_id, account, result }) => {
+                let Some(current) = state.as_mut() else { return; };
+                if current.window.id() != window_id || current.account.as_deref() != Some(&account) {
+                    return;
+                }
+                current.busy = false;
+                match result {
+                    Ok(work) => {
+                        current.candidates = work.candidates;
+                        let payload = serde_json::json!({
+                            "rows": work.rows,
+                            "preflight": work.preflight,
+                        });
+                        if let Ok(json) = serde_json::to_string(&payload) {
+                            let _ = current.webview.evaluate_script(&format!(
+                                "contextual_search_done({})",
+                                escape_json_for_script(&json)
+                            ));
+                        }
+                    }
+                    Err(error) => contextual_eval_error(&current.webview, "search", &error),
+                }
+            }
+            Event::UserEvent(AppCommand::ContextualConvertRequested { window_id, keys }) => {
+                let Some(current) = state.as_mut() else { return; };
+                if current.window.id() != window_id || current.busy || keys.is_empty() {
+                    return;
+                }
+                let Some(account) = current.account.clone() else {
+                    contextual_eval_error(&current.webview, "conversion", "Choisissez une boîte aux lettres");
+                    return;
+                };
+                let selected: Vec<_> = current
+                    .candidates
+                    .iter()
+                    .filter(|candidate| keys.contains(&candidate.logical_key()))
+                    .cloned()
+                    .collect();
+                if selected.is_empty() {
+                    contextual_eval_error(&current.webview, "conversion", "La sélection est vide ou périmée");
+                    return;
+                }
+                current.busy = true;
+                let target_path = current.launch.target.clone();
+                let worker_proxy = proxy.clone();
+                thread::spawn(move || {
+                    let result = tray_actions::run_contextual_batch(&target_path, &account, &selected)
+                        .map_err(|error| format!("{error:#}"));
+                    let _ = worker_proxy.send_event(AppCommand::ContextualConvertFinished {
+                        window_id,
+                        result,
+                    });
+                });
+            }
+            Event::UserEvent(AppCommand::ContextualConvertFinished { window_id, result }) => {
+                let Some(current) = state.as_mut() else { return; };
+                if current.window.id() != window_id { return; }
+                current.busy = false;
+                match result {
+                    Ok(summary) if summary.complete() => *control_flow = ControlFlow::Exit,
+                    Ok(summary) => {
+                        current.retry_deletion = summary.retry_deletion.clone();
+                        if let Ok(json) = serde_json::to_string(&summary) {
+                            let _ = current.webview.evaluate_script(&format!(
+                                "contextual_batch_partial({})",
+                                escape_json_for_script(&json)
+                            ));
+                        }
+                    }
+                    Err(error) => contextual_eval_error(&current.webview, "conversion", &error),
+                }
+            }
+            Event::UserEvent(AppCommand::ContextualRetryDeletionRequested { window_id }) => {
+                let Some(current) = state.as_mut() else { return; };
+                if current.window.id() != window_id || current.busy || current.retry_deletion.is_empty() {
+                    return;
+                }
+                let Some(account) = current.account.clone() else { return; };
+                current.busy = true;
+                let requests = current.retry_deletion.clone();
+                let worker_proxy = proxy.clone();
+                thread::spawn(move || {
+                    let result = tray_actions::retry_contextual_deletions(&account, &requests)
+                        .map_err(|error| format!("{error:#}"));
+                    let _ = worker_proxy.send_event(AppCommand::ContextualRetryDeletionFinished {
+                        window_id,
+                        result,
+                    });
+                });
+            }
+            Event::UserEvent(AppCommand::ContextualRetryDeletionFinished { window_id, result }) => {
+                let Some(current) = state.as_mut() else { return; };
+                if current.window.id() != window_id { return; }
+                current.busy = false;
+                match result {
+                    Ok(summary) if summary.complete() => *control_flow = ControlFlow::Exit,
+                    Ok(summary) => {
+                        current.retry_deletion = summary.retry_deletion.clone();
+                        if let Ok(json) = serde_json::to_string(&summary) {
+                            let _ = current.webview.evaluate_script(&format!(
+                                "contextual_batch_partial({})",
+                                escape_json_for_script(&json)
+                            ));
+                        }
+                    }
+                    Err(error) => contextual_eval_error(&current.webview, "deletion", &error),
+                }
+            }
+            Event::UserEvent(AppCommand::ContextualOpenConfig) => {
+                let _ = open::that(config::accounts_yaml_path());
+            }
+            Event::UserEvent(AppCommand::CloseWindow { window_id }) => {
+                if state.as_ref().map(|current| current.window.id()) == Some(window_id) {
+                    state = None;
+                    *control_flow = ControlFlow::Exit;
+                }
+            }
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } => {
+                if state.as_ref().map(|current| current.window.id()) == Some(window_id) {
+                    state = None;
+                    *control_flow = ControlFlow::Exit;
+                }
+            }
+            _ => {}
+        }
+    });
+}
+
+fn contextual_eval_error(webview: &WebView, kind: &str, message: &str) {
+    if let (Ok(kind), Ok(message)) = (serde_json::to_string(kind), serde_json::to_string(message)) {
+        let _ = webview.evaluate_script(&format!("contextual_error({kind},{message})"));
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ContextualIpcMessage {
+    action: String,
+    account: Option<String>,
+    #[serde(default)]
+    keys: Vec<String>,
+}
+
+fn build_contextual_window(
+    target: &EventLoopWindowTarget<AppCommand>,
+    proxy: &EventLoopProxy<AppCommand>,
+    launch: &tray_actions::ContextualLaunch,
+) -> Result<(Window, WebView, WindowId)> {
+    let json = serde_json::to_string(launch).context("serialize contextual launch")?;
+    let init_script = format!(
+        "window.__CONTEXTUAL_LAUNCH__={};",
+        escape_json_for_script(&json)
+    );
+    let window = WindowBuilder::new()
+        .with_title("Email to Markdown — Export contextuel")
+        .with_inner_size(LogicalSize::new(980.0f64, 700.0f64))
+        .build(target)
+        .context("failed to create contextual window")?;
+    window.set_focus();
+    let window_id = window.id();
+    let proxy_ipc = proxy.clone();
+    let webview = WebViewBuilder::new(&window)
+        .with_html(include_str!("../assets/contextual_export.html"))
+        .with_initialization_script(&init_script)
+        .with_ipc_handler(move |request: wry::http::Request<String>| {
+            let Ok(message) = serde_json::from_str::<ContextualIpcMessage>(request.body()) else {
+                return;
+            };
+            match message.action.as_str() {
+                "search" => {
+                    if let Some(account) = message.account {
+                        let _ = proxy_ipc.send_event(AppCommand::ContextualSearchRequested { window_id, account });
+                    }
+                }
+                "convert" => {
+                    let _ = proxy_ipc.send_event(AppCommand::ContextualConvertRequested { window_id, keys: message.keys });
+                }
+                "retry_deletion" => {
+                    let _ = proxy_ipc.send_event(AppCommand::ContextualRetryDeletionRequested { window_id });
+                }
+                "open_config" => { let _ = proxy_ipc.send_event(AppCommand::ContextualOpenConfig); }
+                "cancel" => { let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id }); }
+                _ => {}
+            }
+        })
+        .build()
+        .context("failed to create contextual webview")?;
+    Ok((window, webview, window_id))
 }
 
 /// Build a progress window inline on the main event loop thread.
@@ -1863,6 +2143,7 @@ fn show_notification(result: &ActionResult) {
 #[cfg(test)]
 mod tests {
     use super::escape_json_for_script;
+    use std::time::Instant;
 
     #[test]
     fn test_escape_json_for_script_script_tag_breakout() {
@@ -1903,6 +2184,43 @@ mod tests {
         assert_eq!(
             escaped, payload,
             "plain ASCII JSON must be unchanged by escaping"
+        );
+    }
+
+    #[test]
+    fn contextual_asset_keeps_large_lists_bounded_and_accessible() {
+        let html = include_str!("../assets/contextual_export.html");
+        for required in [
+            "aria-live=\"polite\"",
+            "aria-live=\"assertive\"",
+            ":focus-visible",
+            "slice(0,state.shown)",
+            "state.shown=200",
+            "Tout sélectionner",
+            "Tout effacer",
+            "already_present",
+            "retry_deletion",
+            "retry-conversion",
+        ] {
+            assert!(html.contains(required), "missing contextual UI contract: {required}");
+        }
+    }
+
+    #[test]
+    fn contextual_filter_reference_handles_ten_thousand_rows_under_500ms() {
+        let rows: Vec<String> = (0..10_000)
+            .map(|index| format!("2026-09-01 alice{index}@example.com projet {index} inbox"))
+            .collect();
+        let started = Instant::now();
+        let filtered: Vec<_> = rows
+            .iter()
+            .filter(|row| row.to_lowercase().contains("projet 9999"))
+            .collect();
+        assert_eq!(filtered.len(), 1);
+        assert!(
+            started.elapsed().as_millis() < 500,
+            "10,000-row reference filter exceeded 500 ms: {:?}",
+            started.elapsed()
         );
     }
 }

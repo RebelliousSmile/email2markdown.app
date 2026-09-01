@@ -321,14 +321,14 @@ pub struct MessageConversionResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeletionProvider {
     None,
     GenericUidPlus,
     Gmail { trash_folder: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeletionPreflight {
     pub required: bool,
     pub supported: bool,
@@ -395,7 +395,7 @@ pub fn evaluate_deletion_preflight(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeletionRequest {
     pub markdown: PathBuf,
     pub proof: LocalSourceProof,
@@ -429,7 +429,7 @@ fn proof_is_complete(proof: &LocalSourceProof) -> bool {
         && (proof.identity.provider_id.is_some() || proof.identity.message_id.is_some())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeletionOutcome {
     Deleted,
     AlreadyAbsent,
@@ -437,7 +437,7 @@ pub enum DeletionOutcome {
     StaleUidValidity { expected: u32, actual: Option<u32> },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageDeletionResult {
     pub proof: LocalSourceProof,
     pub outcome: DeletionOutcome,

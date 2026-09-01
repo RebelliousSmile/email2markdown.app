@@ -16,9 +16,282 @@ use walkdir::WalkDir;
 use crate::progress::ProgressUpdate;
 
 use crate::config::{self, Config, Settings};
+use crate::contextual_export::{
+    build_deletion_batch, find_existing_proof, ContextualCandidate, DeletionOutcome,
+    DeletionPreflight, DeletionRequest,
+};
 use crate::email_export::{self, ImapExporter};
 use crate::route::{self, EmailMeta, RouteDecision};
 use crate::thunderbird;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextualAccountChoice {
+    pub name: String,
+    pub password_missing: bool,
+    pub delete_after_export: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextualLaunch {
+    pub target: PathBuf,
+    pub relative_path: String,
+    #[serde(skip)]
+    pub rules: Vec<crate::route::MatchRule>,
+    pub rule_labels: Vec<String>,
+    pub accounts: Vec<ContextualAccountChoice>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextualCandidateRow {
+    pub key: String,
+    pub date: Option<chrono::DateTime<chrono::FixedOffset>>,
+    pub correspondent: String,
+    pub subject: String,
+    pub folder: String,
+    pub already_present: bool,
+}
+
+#[derive(Debug)]
+pub struct ContextualSearchWork {
+    pub candidates: Vec<ContextualCandidate>,
+    pub rows: Vec<ContextualCandidateRow>,
+    pub preflight: DeletionPreflight,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextualBatchSummary {
+    pub converted: usize,
+    pub already_present: usize,
+    pub deleted: usize,
+    pub retry_conversion: Vec<String>,
+    pub retry_deletion_count: usize,
+    pub stale_search: bool,
+    pub message: String,
+    #[serde(skip)]
+    pub retry_deletion: Vec<DeletionRequest>,
+}
+
+impl ContextualBatchSummary {
+    pub fn complete(&self) -> bool {
+        self.retry_conversion.is_empty() && self.retry_deletion.is_empty() && !self.stale_search
+    }
+}
+
+/// Validate the local target before any network connection and prepare the
+/// serializable state injected into the standalone contextual window.
+pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualLaunch> {
+    dotenvy::from_path(config::env_file_path()).ok();
+    let cfg = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let settings = Settings::load(&config::settings_path()).context("Failed to load settings")?;
+    let notes_dir = settings
+        .notes_dir
+        .as_deref()
+        .map(std::path::Path::new)
+        .context("notes_dir is not configured")?;
+    let destinations = route::load_destinations();
+    let configured_names: Vec<String> = cfg.accounts.iter().map(|account| account.name.clone()).collect();
+    // With no configured account, still validate the exact local destination so
+    // the window can offer its explicit configuration action.
+    let validation_names = if configured_names.is_empty() {
+        let mut names: Vec<String> = destinations
+            .iter()
+            .flat_map(|destination| destination.rules.iter())
+            .filter_map(|rule| match rule {
+                crate::route::MatchRule::Account(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        names.push("__unconfigured__".into());
+        names
+    } else {
+        configured_names.clone()
+    };
+    let resolved = route::resolve_contextual_destination(
+        notes_dir,
+        target,
+        &destinations,
+        &validation_names,
+    )?;
+    let accounts = cfg
+        .accounts
+        .iter()
+        .filter(|account| resolved.allowed_accounts.contains(&account.name))
+        .map(|account| ContextualAccountChoice {
+            name: account.name.clone(),
+            password_missing: account.password.is_none(),
+            delete_after_export: account.delete_after_export,
+        })
+        .collect();
+    let rule_labels = resolved
+        .address_rules
+        .iter()
+        .map(|rule| match rule {
+            crate::route::MatchRule::Correspondent(value) => format!("correspondant : {value}"),
+            crate::route::MatchRule::From(value) => format!("expéditeur : {value}"),
+            crate::route::MatchRule::Domain(value) => format!("domaine : {value}"),
+            crate::route::MatchRule::Subject(value) => format!("objet : {value}"),
+            crate::route::MatchRule::Account(value) => format!("compte : {value}"),
+        })
+        .collect();
+    Ok(ContextualLaunch {
+        target: resolved.target,
+        relative_path: resolved.relative_path,
+        rules: resolved.address_rules,
+        rule_labels,
+        accounts,
+    })
+}
+
+pub fn run_contextual_search(launch: &ContextualLaunch, account_name: &str) -> Result<ContextualSearchWork> {
+    dotenvy::from_path(config::env_file_path()).ok();
+    let cfg = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let account = cfg
+        .get_account(account_name)
+        .with_context(|| format!("Account '{}' not found", account_name))?
+        .clone();
+    if !launch.accounts.iter().any(|choice| choice.name == account.name) {
+        anyhow::bail!("account is not allowed for this destination");
+    }
+    if account.password.is_none() {
+        anyhow::bail!("No password found for {}", account.name);
+    }
+    let mut exporter = ImapExporter::new(account, false);
+    exporter.connect().context("Failed to connect to IMAP server")?;
+    let preflight = exporter.contextual_deletion_preflight()?;
+    let candidates = exporter.search_contextual(&launch.rules)?;
+    let rows = candidates
+        .iter()
+        .map(|candidate| -> Result<ContextualCandidateRow> {
+            let correspondent = candidate
+                .from
+                .first()
+                .or_else(|| candidate.to.first())
+                .cloned()
+                .unwrap_or_default();
+            Ok(ContextualCandidateRow {
+                key: candidate.logical_key(),
+                date: candidate.date,
+                correspondent,
+                subject: candidate.subject.clone(),
+                folder: candidate
+                    .locations
+                    .first()
+                    .map(|location| location.folder_display.clone())
+                    .unwrap_or_default(),
+                already_present: find_existing_proof(&launch.target, candidate)?.is_some(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    exporter.disconnect().ok();
+    Ok(ContextualSearchWork { candidates, rows, preflight })
+}
+
+pub fn run_contextual_batch(
+    target: &std::path::Path,
+    account_name: &str,
+    selected: &[ContextualCandidate],
+) -> Result<ContextualBatchSummary> {
+    dotenvy::from_path(config::env_file_path()).ok();
+    let cfg = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let account = cfg
+        .get_account(account_name)
+        .with_context(|| format!("Account '{}' not found", account_name))?
+        .clone();
+    let delete_after_export = account.delete_after_export;
+    let mut exporter = ImapExporter::new(account, false);
+    exporter.connect().context("Failed to connect to IMAP server")?;
+    let conversions = exporter.convert_contextual_selection(target, selected)?;
+    let converted = conversions
+        .iter()
+        .filter(|result| matches!(result.status, Some(crate::contextual_export::ConversionStatus::Written { .. })))
+        .count();
+    let already_present = conversions
+        .iter()
+        .filter(|result| matches!(result.status, Some(crate::contextual_export::ConversionStatus::AlreadyPresent { .. })))
+        .count();
+    let retry_conversion: Vec<String> = conversions
+        .iter()
+        .filter(|result| result.status.is_none())
+        .map(|result| result.candidate_key.clone())
+        .collect();
+    let mut deleted = 0;
+    let mut stale_search = false;
+    let mut retry_deletion = Vec::new();
+    if delete_after_export {
+        let batch = build_deletion_batch(&conversions);
+        let deletion_results = exporter.delete_proved_messages(&batch)?;
+        for (request, result) in batch.into_iter().zip(deletion_results) {
+            match result.outcome {
+                DeletionOutcome::Deleted | DeletionOutcome::AlreadyAbsent => deleted += 1,
+                DeletionOutcome::StaleUidValidity { .. } => {
+                    stale_search = true;
+                    retry_deletion.push(request);
+                }
+                DeletionOutcome::RetryRequired(_) => retry_deletion.push(request),
+            }
+        }
+    }
+    exporter.disconnect().ok();
+    let retry_deletion_count = retry_deletion.len();
+    Ok(ContextualBatchSummary {
+        converted,
+        already_present,
+        deleted,
+        retry_conversion,
+        retry_deletion_count,
+        stale_search,
+        message: if retry_deletion_count == 0 {
+            "Traitement terminé".into()
+        } else {
+            "Conversion locale terminée, suppression serveur à réessayer".into()
+        },
+        retry_deletion,
+    })
+}
+
+pub fn retry_contextual_deletions(
+    account_name: &str,
+    requests: &[DeletionRequest],
+) -> Result<ContextualBatchSummary> {
+    dotenvy::from_path(config::env_file_path()).ok();
+    let cfg = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let account = cfg
+        .get_account(account_name)
+        .with_context(|| format!("Account '{}' not found", account_name))?
+        .clone();
+    let mut exporter = ImapExporter::new(account, false);
+    exporter.connect().context("Failed to connect to IMAP server")?;
+    let outcomes = exporter.delete_proved_messages(requests)?;
+    let mut deleted = 0;
+    let mut stale_search = false;
+    let mut retry_deletion = Vec::new();
+    for (request, result) in requests.iter().cloned().zip(outcomes) {
+        match result.outcome {
+            DeletionOutcome::Deleted | DeletionOutcome::AlreadyAbsent => deleted += 1,
+            DeletionOutcome::StaleUidValidity { .. } => {
+                stale_search = true;
+                retry_deletion.push(request);
+            }
+            DeletionOutcome::RetryRequired(_) => retry_deletion.push(request),
+        }
+    }
+    exporter.disconnect().ok();
+    let retry_deletion_count = retry_deletion.len();
+    Ok(ContextualBatchSummary {
+        converted: 0,
+        already_present: 0,
+        deleted,
+        retry_conversion: Vec::new(),
+        retry_deletion_count,
+        stale_search,
+        message: if retry_deletion_count == 0 {
+            "Suppression serveur terminée".into()
+        } else {
+            "Certaines suppressions restent à réessayer".into()
+        },
+        retry_deletion,
+    })
+}
 
 /// Result of an action, sent back to the main thread for notification.
 #[derive(Debug, Clone)]

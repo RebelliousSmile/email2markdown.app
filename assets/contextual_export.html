@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Export contextuel</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; --accent:#2869d8; --danger:#a33131; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f5f6f8; color:#20242a; }
+    main { height:100vh; display:grid; grid-template-rows:auto auto 1fr auto; gap:12px; padding:18px; }
+    .panel { background:white; border:1px solid #d9dde3; border-radius:8px; padding:12px 14px; }
+    .target { font-family:ui-monospace,monospace; overflow-wrap:anywhere; margin-top:5px; }
+    .controls { display:grid; grid-template-columns:minmax(220px,1fr) 2fr auto; gap:14px; align-items:end; }
+    label { display:grid; gap:5px; font-weight:600; }
+    select,input,button { font:inherit; }
+    select,input { min-height:38px; border:1px solid #aeb5bf; border-radius:5px; padding:7px 9px; background:white; color:inherit; }
+    button { min-height:38px; border:1px solid #aeb5bf; border-radius:5px; padding:7px 14px; background:#f7f8fa; color:inherit; cursor:pointer; }
+    button.primary { background:var(--accent); border-color:var(--accent); color:white; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    :focus-visible { outline:3px solid #f2a900; outline-offset:2px; }
+    .rules { min-height:38px; padding:8px; border:1px solid #d9dde3; border-radius:5px; font-size:.9rem; }
+    .list-panel { min-height:0; display:grid; grid-template-rows:auto 1fr auto; gap:9px; }
+    .toolbar { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
+    .toolbar label { margin-left:auto; min-width:260px; }
+    .table-wrap { overflow:auto; border:1px solid #d9dde3; border-radius:5px; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; }
+    th,td { padding:8px; border-bottom:1px solid #e7e9ed; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    th { position:sticky; top:0; background:#eef1f5; z-index:1; }
+    th:first-child,td:first-child { width:45px; text-align:center; }
+    th:nth-child(2) { width:155px; } th:nth-child(3) { width:210px; } th:nth-child(5) { width:160px; }
+    .badge { display:inline-block; margin-left:6px; padding:2px 6px; border-radius:10px; background:#dbe8ff; font-size:.75rem; }
+    .status { min-height:24px; } .error { color:var(--danger); font-weight:600; }
+    .warning { color:#7a4c00; background:#fff1cc; padding:8px; border-radius:5px; }
+    .footer { display:flex; align-items:center; gap:10px; }
+    .summary { flex:1; }
+    #load-more { justify-self:center; }
+    @media (prefers-color-scheme:dark) {
+      body { background:#181a1e; color:#eceff4; } .panel,select,input { background:#25282e; border-color:#4b515b; }
+      th { background:#30343c; } th,td { border-color:#414650; } button { background:#30343c; border-color:#606875; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="panel" aria-labelledby="target-title">
+    <strong id="target-title">Répertoire cible</strong>
+    <div id="target" class="target"></div>
+  </section>
+  <section class="panel controls" aria-label="Paramètres de recherche">
+    <label>Boîte aux lettres
+      <select id="account" required aria-required="true"><option value="">Choisir…</option></select>
+    </label>
+    <div><strong>Règles associées</strong><div id="rules" class="rules"></div></div>
+    <button id="search" class="primary" disabled>Rechercher</button>
+  </section>
+  <section class="panel list-panel" aria-labelledby="results-title">
+    <div class="toolbar">
+      <strong id="results-title">Messages</strong>
+      <button id="select-visible" disabled>Tout sélectionner</button>
+      <button id="clear" disabled>Tout effacer</button>
+      <label>Filtrer la liste
+        <input id="filter" type="search" autocomplete="off" disabled>
+      </label>
+    </div>
+    <div class="table-wrap" tabindex="0" aria-label="Résultats de la recherche">
+      <table>
+        <thead><tr><th>Sél.</th><th>Date</th><th>Correspondant</th><th>Objet</th><th>Dossier</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5">Choisissez une boîte puis lancez la recherche.</td></tr></tbody>
+      </table>
+    </div>
+    <button id="load-more" hidden>Afficher 200 résultats supplémentaires</button>
+  </section>
+  <section class="panel footer">
+    <div class="summary">
+      <div id="summary" class="status" aria-live="polite">Aucun message sélectionné.</div>
+      <div id="warning" aria-live="assertive"></div>
+      <div id="partial" hidden></div>
+    </div>
+    <button id="config" hidden>Ouvrir la configuration</button>
+    <button id="cancel">Annuler</button>
+    <button id="convert" class="primary" disabled>Convertir</button>
+  </section>
+</main>
+<script>
+(() => {
+  'use strict';
+  const launch = window.__CONTEXTUAL_LAUNCH__ || {target:'',accounts:[],rule_labels:[]};
+  const $ = id => document.getElementById(id);
+  const state = { rows:[], filtered:[], selected:new Set(), shown:200, busy:false, preflight:null, retryConversion:[] };
+  const ipc = payload => window.ipc.postMessage(JSON.stringify(payload));
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  $('target').textContent = launch.target;
+  $('rules').textContent = (launch.rule_labels || []).join(' · ');
+  for (const account of launch.accounts) {
+    const option = document.createElement('option'); option.value=account.name;
+    option.textContent = account.name + (account.password_missing ? ' — mot de passe manquant' : '');
+    option.dataset.delete = String(account.delete_after_export); option.dataset.missing=String(account.password_missing);
+    $('account').append(option);
+  }
+  if (!launch.accounts.length) {
+    $('rows').innerHTML='<tr><td colspan="5">Aucune boîte configurée.</td></tr>';
+    $('config').hidden=false;
+  }
+  const accountOption = () => $('account').selectedOptions[0];
+  function setBusy(value, message='') {
+    state.busy=value; $('search').disabled=value || !$('account').value || accountOption()?.dataset.missing==='true';
+    $('convert').disabled=value || state.selected.size===0 || (state.preflight && !state.preflight.supported);
+    if (message) $('summary').textContent=message;
+  }
+  function updateSummary() {
+    const n=state.selected.size; const destructive=accountOption()?.dataset.delete==='true';
+    $('summary').textContent=n ? `${n} message${n>1?'s':''} sélectionné${n>1?'s':''}${destructive?' — suppression ciblée du serveur après conversion':''}.` : 'Aucun message sélectionné.';
+    $('convert').textContent = n && [...state.selected].some(key => state.rows.find(r=>r.key===key)?.already_present) ? 'Convertir / supprimer' : 'Convertir';
+    $('convert').disabled=state.busy || n===0 || (state.preflight && !state.preflight.supported);
+    $('clear').disabled=n===0;
+  }
+  function applyFilter() {
+    const q=$('filter').value.trim().toLocaleLowerCase();
+    state.filtered=state.rows.filter(row => !q || `${row.date||''} ${row.correspondent} ${row.subject} ${row.folder}`.toLocaleLowerCase().includes(q));
+    state.shown=200; render();
+  }
+  function render() {
+    const visible=state.filtered.slice(0,state.shown);
+    $('rows').innerHTML=visible.length ? visible.map(row => `<tr>
+      <td><input type="checkbox" aria-label="Sélectionner ${esc(row.subject)}" data-key="${esc(row.key)}" ${state.selected.has(row.key)?'checked':''}></td>
+      <td>${esc(row.date ? new Date(row.date).toLocaleString() : '')}</td><td title="${esc(row.correspondent)}">${esc(row.correspondent)}</td>
+      <td title="${esc(row.subject)}">${esc(row.subject)}${row.already_present?'<span class="badge">déjà converti</span>':''}</td><td title="${esc(row.folder)}">${esc(row.folder)}</td></tr>`).join('')
+      : '<tr><td colspan="5">Aucun message correspondant.</td></tr>';
+    $('rows').querySelectorAll('input[data-key]').forEach(box => box.addEventListener('change', () => { box.checked ? state.selected.add(box.dataset.key) : state.selected.delete(box.dataset.key); updateSummary(); }));
+    $('load-more').hidden=state.shown>=state.filtered.length;
+    $('select-visible').disabled=!state.filtered.length || state.busy;
+    updateSummary();
+  }
+  $('account').addEventListener('change', () => {
+    const missing=accountOption()?.dataset.missing==='true'; $('config').hidden=!missing;
+    $('search').disabled=!$('account').value || missing || state.busy;
+    $('warning').innerHTML=accountOption()?.dataset.delete==='true' ? '<div class="warning">Les messages sélectionnés seront supprimés du serveur uniquement après preuve de leur écriture locale.</div>' : '';
+  });
+  $('search').addEventListener('click', () => { state.selected.clear(); state.preflight=null; setBusy(true,'Recherche en cours…'); ipc({action:'search',account:$('account').value}); });
+  $('filter').addEventListener('input', applyFilter);
+  $('select-visible').addEventListener('click', () => { state.filtered.forEach(row=>state.selected.add(row.key)); render(); });
+  $('clear').addEventListener('click', () => { state.selected.clear(); render(); });
+  $('load-more').addEventListener('click', () => { state.shown+=200; render(); });
+  $('cancel').addEventListener('click', () => ipc({action:'cancel'}));
+  $('config').addEventListener('click', () => ipc({action:'open_config'}));
+  $('convert').addEventListener('click', () => {
+    const keys=[...state.selected]; const destructive=accountOption()?.dataset.delete==='true';
+    if (!keys.length || !confirm(`${keys.length} message(s) seront convertis${destructive?' puis supprimés du serveur':''}. Continuer ?`)) return;
+    setBusy(true,'Conversion en cours…'); ipc({action:'convert',keys});
+  });
+  window.contextual_search_done = payload => {
+    state.rows=payload.rows||[]; state.filtered=state.rows.slice(); state.selected.clear(); state.shown=200; state.preflight=payload.preflight; setBusy(false);
+    $('filter').disabled=false; $('select-visible').disabled=!state.rows.length;
+    if (!state.rows.length) $('summary').textContent='Aucun message trouvé.';
+    if (payload.preflight.required && !payload.preflight.supported) $('warning').innerHTML=`<div class="warning">Suppression bloquée : ${esc(payload.preflight.reason||'serveur incompatible')}</div>`;
+    render();
+  };
+  window.contextual_batch_partial = summary => {
+    setBusy(false); state.retryConversion=summary.retry_conversion||[]; $('partial').hidden=false;
+    $('partial').innerHTML=`<p class="error">${esc(summary.message)}</p>${summary.stale_search?'<button id="refresh-now">Relancer toute la recherche</button>':''}${state.retryConversion.length?'<button id="retry-conversion">Réessayer les conversions</button>':''}${summary.retry_deletion_count?'<button id="retry-deletion">Réessayer les suppressions</button>':''}`;
+    $('refresh-now')?.addEventListener('click',()=> $('search').click());
+    $('retry-conversion')?.addEventListener('click',()=>{ setBusy(true,'Nouvelle tentative de conversion…'); ipc({action:'convert',keys:state.retryConversion}); });
+    $('retry-deletion')?.addEventListener('click',()=>{ setBusy(true,'Nouvelle tentative de suppression…'); ipc({action:'retry_deletion'}); });
+  };
+  window.contextual_error = (kind,message) => { setBusy(false); $('summary').innerHTML=`<span class="error">${esc(message)}</span>`; if (/password|configuration/i.test(message)) $('config').hidden=false; };
+})();
+</script>
+</body>
+</html>

@@ -97,6 +97,12 @@ enum Commands {
         config: Option<PathBuf>,
     },
 
+    /// Search and convert related emails into one configured local directory.
+    Contextual {
+        /// Exact configured destination directory selected in the file manager.
+        directory: PathBuf,
+    },
+
     /// Run as system tray application (requires --features tray)
     #[cfg(feature = "tray")]
     Tray,
@@ -431,6 +437,21 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::Contextual { directory } => {
+            #[cfg(feature = "tray")]
+            {
+                tray::run_contextual(directory)
+                    .context("Failed to run contextual email export")?;
+            }
+            #[cfg(not(feature = "tray"))]
+            {
+                let _ = directory;
+                anyhow::bail!(
+                    "the contextual window requires a build with the 'tray' GUI feature"
+                );
+            }
+        }
+
         #[cfg(feature = "tray")]
         Commands::Tray => {
             println!("Starting system tray application...");
@@ -439,4 +460,24 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Commands};
+    use clap::Parser;
+    use std::path::PathBuf;
+
+    #[test]
+    fn contextual_command_accepts_one_native_path_argument() {
+        for raw in [r"C:\Notes\Pro\Client", "/Users/alice/Notes/Client", "/home/alice/Notes/Client"] {
+            let cli = Cli::try_parse_from(["email-to-markdown", "contextual", raw]).unwrap();
+            match cli.command {
+                Commands::Contextual { directory } => assert_eq!(directory, PathBuf::from(raw)),
+                _ => panic!("contextual command expected"),
+            }
+        }
+        assert!(Cli::try_parse_from(["email-to-markdown", "contextual"]).is_err());
+        assert!(Cli::try_parse_from(["email-to-markdown", "contextual", "one", "two"]).is_err());
+    }
 }
