@@ -28,8 +28,24 @@ pub struct ArtifactStatus {
 
 pub fn current_binary() -> Result<PathBuf> {
     let path = std::env::current_exe().context("cannot resolve current executable")?;
-    path.canonicalize().or(Ok(path))
+    let canonical = path.canonicalize().unwrap_or(path);
+    Ok(shell_compatible_path(canonical))
 }
+
+#[cfg(target_os = "windows")]
+fn shell_compatible_path(path: PathBuf) -> PathBuf {
+    let value = path.to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_compatible_path(path: PathBuf) -> PathBuf { path }
 
 pub fn install() -> Result<Vec<ArtifactStatus>> {
     if !cfg!(feature = "tray") {
@@ -128,5 +144,23 @@ mod tests {
         assert!(path.to_string_lossy().contains("Client Été"));
         assert!(local_path_from_uri("smb://server/share/client").is_err());
         assert!(local_path_from_uri("file://server/share/client").is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn explorer_binary_path_removes_windows_verbatim_prefixes() {
+        use super::shell_compatible_path;
+        assert_eq!(
+            shell_compatible_path(std::path::PathBuf::from(
+                r"\\?\C:\Program Files\Email Été\email-to-markdown.exe"
+            )),
+            std::path::PathBuf::from(r"C:\Program Files\Email Été\email-to-markdown.exe")
+        );
+        assert_eq!(
+            shell_compatible_path(std::path::PathBuf::from(
+                r"\\?\UNC\server\share\email-to-markdown.exe"
+            )),
+            std::path::PathBuf::from(r"\\server\share\email-to-markdown.exe")
+        );
     }
 }
