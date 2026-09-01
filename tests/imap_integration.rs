@@ -64,7 +64,13 @@ fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
     assert_eq!(
         std::fs::read_dir(target.path())
             .unwrap()
-            .filter(|entry| entry.as_ref().unwrap().path().extension().and_then(|e| e.to_str()) == Some("md"))
+            .filter(|entry| entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .and_then(|e| e.to_str())
+                == Some("md"))
             .count(),
         1,
         "only the selected UID is converted"
@@ -97,7 +103,10 @@ fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
         .danger_skip_tls_verify(true)
         .connect()
         .unwrap();
-    let mut session = client.login("test", "password").map_err(|(e, _)| e).unwrap();
+    let mut session = client
+        .login("test", "password")
+        .map_err(|(e, _)| e)
+        .unwrap();
     session.examine("INBOX").unwrap();
     let fetched = session.uid_fetch("1:*", "(UID FLAGS)").unwrap();
     assert_eq!(fetched.len(), 2, "only the selected UID must be deleted");
@@ -145,7 +154,11 @@ fn gmail_targeted_deletion_fixture() {
         .into_iter()
         .filter(|candidate| candidate.subject == "[email-to-markdown destructive fixture]")
         .collect();
-    assert_eq!(selected.len(), 1, "the dedicated account must contain exactly one marked fixture");
+    assert_eq!(
+        selected.len(),
+        1,
+        "the dedicated account must contain exactly one marked fixture"
+    );
     assert!(selected[0].source.provider_id.is_some());
     let target = tempfile::TempDir::new().unwrap();
     let conversions = exporter

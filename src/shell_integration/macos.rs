@@ -6,13 +6,22 @@ use std::path::{Path, PathBuf};
 const WORKFLOW_NAME: &str = "Email to Markdown.workflow";
 
 fn workflow_root() -> Result<PathBuf> {
-    Ok(workflow_root_at(&dirs::home_dir().context("cannot locate user home directory")?))
+    Ok(workflow_root_at(
+        &dirs::home_dir().context("cannot locate user home directory")?,
+    ))
 }
-fn workflow_root_at(home: &Path) -> PathBuf { home.join("Library/Services").join(WORKFLOW_NAME) }
+fn workflow_root_at(home: &Path) -> PathBuf {
+    home.join("Library/Services").join(WORKFLOW_NAME)
+}
 
-fn shell_quote(value: &str) -> String { format!("'{}'", value.replace('\'', "'\\''")) }
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
 fn xml_escape(value: &str) -> String {
-    value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn render(binary: &Path) -> String {
@@ -42,12 +51,21 @@ pub fn status(binary: &Path) -> Result<Vec<ArtifactStatus>> {
     let state = match fs::read_to_string(&path) {
         Ok(content) if content == render(binary) => ArtifactState::Installed,
         Ok(content) => ArtifactState::Stale {
-            configured_binary: content.lines().find(|line| line.contains("contextual")).unwrap_or("workflow différent").trim().into(),
+            configured_binary: content
+                .lines()
+                .find(|line| line.contains("contextual"))
+                .unwrap_or("workflow différent")
+                .trim()
+                .into(),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => ArtifactState::Missing,
         Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
     };
-    Ok(vec![ArtifactStatus { name: "Finder — Action rapide".into(), location: path.display().to_string(), state }])
+    Ok(vec![ArtifactStatus {
+        name: "Finder — Action rapide".into(),
+        location: path.display().to_string(),
+        state,
+    }])
 }
 
 fn uninstall_at(home: &Path) -> Result<()> {
@@ -55,7 +73,9 @@ fn uninstall_at(home: &Path) -> Result<()> {
     match fs::remove_dir_all(&root) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("remove managed workflow {}", root.display())),
+        Err(error) => {
+            Err(error).with_context(|| format!("remove managed workflow {}", root.display()))
+        }
     }
 }
 
@@ -81,7 +101,9 @@ mod tests {
         std::fs::create_dir_all(&third_party).unwrap();
         install_at(temp.path(), binary).unwrap();
         install_at(temp.path(), binary).unwrap();
-        assert!(workflow_root_at(temp.path()).join("Contents/document.wflow").exists());
+        assert!(workflow_root_at(temp.path())
+            .join("Contents/document.wflow")
+            .exists());
         uninstall_at(temp.path()).unwrap();
         uninstall_at(temp.path()).unwrap();
         assert!(!workflow_root_at(temp.path()).exists());

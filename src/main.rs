@@ -6,7 +6,7 @@ use email_to_markdown::config::{self, Config, Settings};
 use email_to_markdown::dest_cmd;
 use email_to_markdown::email_export::ImapExporter;
 use email_to_markdown::route;
-use email_to_markdown::thunderbird;  // [1] Import Thunderbird
+use email_to_markdown::thunderbird; // [1] Import Thunderbird
 
 #[cfg(feature = "tray")]
 use email_to_markdown::tray;
@@ -111,9 +111,7 @@ enum Commands {
 
     /// Open from a local file:// URI supplied by a file manager.
     #[command(hide = true)]
-    ContextualUri {
-        uri: String,
-    },
+    ContextualUri { uri: String },
 
     /// Run as system tray application (requires --features tray)
     #[cfg(feature = "tray")]
@@ -177,11 +175,12 @@ fn main() -> Result<()> {
                 }
             } else {
                 // Auto-detect default profile
-                let profiles = thunderbird::list_profiles()
-                    .context("Could not find Thunderbird profiles")?;
+                let profiles =
+                    thunderbird::list_profiles().context("Could not find Thunderbird profiles")?;
 
                 // Prefer the marked default, but only if it has prefs.js (it may be an empty placeholder)
-                let has_prefs = |p: &thunderbird::ThunderbirdProfile| p.path.join("prefs.js").exists();
+                let has_prefs =
+                    |p: &thunderbird::ThunderbirdProfile| p.path.join("prefs.js").exists();
 
                 profiles
                     .iter()
@@ -191,7 +190,11 @@ fn main() -> Result<()> {
                     .context("No usable Thunderbird profiles found (no prefs.js)")?
             };
 
-            println!("Using Thunderbird profile: {} ({})", tb_profile.name, tb_profile.path.display());
+            println!(
+                "Using Thunderbird profile: {} ({})",
+                tb_profile.name,
+                tb_profile.path.display()
+            );
 
             // Extract accounts
             let accounts = thunderbird::extract_accounts(&tb_profile)
@@ -221,15 +224,24 @@ fn main() -> Result<()> {
 
             // Generate .env template if requested
             if generate_env {
-                let env_template_path = output.parent().unwrap_or(Path::new(".")).join(".env.template");
+                let env_template_path = output
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join(".env.template");
                 let env_content = thunderbird::generate_env_template(&accounts);
                 std::fs::write(&env_template_path, &env_content)?;
                 println!("Generated: {}", env_template_path.display());
                 println!("\nRemember to:");
                 println!("  1. Review and adjust accounts.yaml");
-                println!("  2. Copy .env.template to {} and add passwords", config::env_file_path().display());
+                println!(
+                    "  2. Copy .env.template to {} and add passwords",
+                    config::env_file_path().display()
+                );
             } else if !extract_passwords {
-                println!("\nRemember to add passwords to {}", config::env_file_path().display());
+                println!(
+                    "\nRemember to add passwords to {}",
+                    config::env_file_path().display()
+                );
             }
 
             // Extract and write passwords from Thunderbird keystore
@@ -251,8 +263,12 @@ fn main() -> Result<()> {
                             if let Some(parent) = env_path.parent() {
                                 std::fs::create_dir_all(parent)?;
                             }
-                            match thunderbird::write_passwords_to_env(&accounts, &passwords, &env_path) {
-                                Ok(n) => println!("Written {} password(s) to {}", n, env_path.display()),
+                            match thunderbird::write_passwords_to_env(
+                                &accounts, &passwords, &env_path,
+                            ) {
+                                Ok(n) => {
+                                    println!("Written {} password(s) to {}", n, env_path.display())
+                                }
                                 Err(e) => println!("Warning: Could not write .env: {}", e),
                             }
                         }
@@ -275,18 +291,12 @@ fn main() -> Result<()> {
             debug,
         } => {
             let config_path = config.unwrap_or_else(config::accounts_yaml_path);
-            let config = Config::load(&config_path)
-                .context("Failed to load configuration")?;
+            let config = Config::load(&config_path).context("Failed to load configuration")?;
 
             if list_accounts {
                 println!("Available accounts from accounts.yaml:");
                 for (i, acc) in config.accounts.iter().enumerate() {
-                    println!(
-                        "   {}. {} -> {}",
-                        i + 1,
-                        acc.name,
-                        acc.export_directory
-                    );
+                    println!("   {}. {} -> {}", i + 1, acc.name, acc.export_directory);
                 }
                 return Ok(());
             }
@@ -310,7 +320,10 @@ fn main() -> Result<()> {
 
             if config.accounts.is_empty() {
                 println!("No accounts configured.");
-                println!("Add your IMAP accounts to {}", config::accounts_yaml_path().display());
+                println!(
+                    "Add your IMAP accounts to {}",
+                    config::accounts_yaml_path().display()
+                );
                 println!("Or import from Thunderbird: cargo run -- import");
                 return Ok(());
             }
@@ -327,7 +340,10 @@ fn main() -> Result<()> {
             println!("Exporting {} account(s)", accounts_to_export.len());
 
             for mut account in accounts_to_export {
-                println!("\nProcessing account: {} -> {}", account.name, account.export_directory);
+                println!(
+                    "\nProcessing account: {} -> {}",
+                    account.name, account.export_directory
+                );
 
                 if account.password.is_none() {
                     println!(
@@ -345,8 +361,10 @@ fn main() -> Result<()> {
                     Ok(_) => {
                         match exporter.export_account(None, None, None) {
                             Ok((results, decisions)) => {
-                                let total_exported: usize = results.values().map(|s| s.exported).sum();
-                                let total_skipped: usize = results.values().map(|s| s.skipped).sum();
+                                let total_exported: usize =
+                                    results.values().map(|s| s.exported).sum();
+                                let total_skipped: usize =
+                                    results.values().map(|s| s.skipped).sum();
                                 let total_errors: usize = results.values().map(|s| s.errors).sum();
 
                                 println!(
@@ -358,20 +376,25 @@ fn main() -> Result<()> {
                                 // Pipeline order: Export → route decisions accumulated above → apply now.
                                 // IMAP deletion flags were set during Export; local .md files remain
                                 // in staging until this apply step moves them into notes_dir.
-                                let settings = Settings::load(&config::settings_path())
-                                    .unwrap_or_default();
+                                let settings =
+                                    Settings::load(&config::settings_path()).unwrap_or_default();
                                 if let Some(notes_dir_str) = &settings.notes_dir {
                                     let notes_dir = PathBuf::from(notes_dir_str);
                                     let mut moved = 0usize;
                                     let mut apply_errors = 0usize;
                                     for (staging_path, decision) in &decisions {
-                                        match route::apply_decision(staging_path, &decision.rel_path, &notes_dir) {
+                                        match route::apply_decision(
+                                            staging_path,
+                                            &decision.rel_path,
+                                            &notes_dir,
+                                        ) {
                                             Ok(()) => moved += 1,
                                             Err(e) => {
                                                 apply_errors += 1;
                                                 eprintln!(
                                                     "Warning: could not route {}: {:#}",
-                                                    staging_path.display(), e
+                                                    staging_path.display(),
+                                                    e
                                                 );
                                             }
                                         }
@@ -410,36 +433,32 @@ fn main() -> Result<()> {
             dest_cmd::run(args)?;
         }
 
-        Commands::RepairAttachments { account, dry_run, config } => {
-            let settings = Settings::load(
-                config.as_deref().unwrap_or(&config::settings_path()),
-            )
-            .unwrap_or_default();
+        Commands::RepairAttachments {
+            account,
+            dry_run,
+            config,
+        } => {
+            let settings = Settings::load(config.as_deref().unwrap_or(&config::settings_path()))
+                .unwrap_or_default();
 
-            let export_base = settings
-                .export_base_dir
-                .as_deref()
-                .unwrap_or(".");
-            let notes_dir_str = settings
-                .notes_dir
-                .as_deref()
-                .unwrap_or(".");
+            let export_base = settings.export_base_dir.as_deref().unwrap_or(".");
+            let notes_dir_str = settings.notes_dir.as_deref().unwrap_or(".");
 
             let account_root = PathBuf::from(export_base).join(&account);
             let notes_dir = PathBuf::from(notes_dir_str);
             let export_base_dir = PathBuf::from(export_base);
 
             if !account_root.exists() {
-                anyhow::bail!(
-                    "account root not found: {}",
-                    account_root.display()
-                );
+                anyhow::bail!("account root not found: {}", account_root.display());
             }
 
             println!("Repairing legacy attachments for {}", account);
             println!("  account root : {}", account_root.display());
             println!("  notes dir    : {}", notes_dir.display());
-            println!("  excluding    : {} (staging area)", export_base_dir.display());
+            println!(
+                "  excluding    : {} (staging area)",
+                export_base_dir.display()
+            );
             if dry_run {
                 println!("  (dry-run — no files will be changed)");
             }
@@ -462,15 +481,12 @@ fn main() -> Result<()> {
         Commands::Contextual { directory } => {
             #[cfg(feature = "tray")]
             {
-                tray::run_contextual(directory)
-                    .context("Failed to run contextual email export")?;
+                tray::run_contextual(directory).context("Failed to run contextual email export")?;
             }
             #[cfg(not(feature = "tray"))]
             {
                 let _ = directory;
-                anyhow::bail!(
-                    "the contextual window requires a build with the 'tray' GUI feature"
-                );
+                anyhow::bail!("the contextual window requires a build with the 'tray' GUI feature");
             }
         }
 
@@ -478,15 +494,12 @@ fn main() -> Result<()> {
             let directory = email_to_markdown::shell_integration::local_path_from_uri(&uri)?;
             #[cfg(feature = "tray")]
             {
-                tray::run_contextual(directory)
-                    .context("Failed to run contextual email export")?;
+                tray::run_contextual(directory).context("Failed to run contextual email export")?;
             }
             #[cfg(not(feature = "tray"))]
             {
                 let _ = directory;
-                anyhow::bail!(
-                    "the contextual window requires a build with the 'tray' GUI feature"
-                );
+                anyhow::bail!("the contextual window requires a build with the 'tray' GUI feature");
             }
         }
 
@@ -518,7 +531,11 @@ mod tests {
 
     #[test]
     fn contextual_command_accepts_one_native_path_argument() {
-        for raw in [r"C:\Notes\Pro\Client", "/Users/alice/Notes/Client", "/home/alice/Notes/Client"] {
+        for raw in [
+            r"C:\Notes\Pro\Client",
+            "/Users/alice/Notes/Client",
+            "/home/alice/Notes/Client",
+        ] {
             let cli = Cli::try_parse_from(["email-to-markdown", "contextual", raw]).unwrap();
             match cli.command {
                 Commands::Contextual { directory } => assert_eq!(directory, PathBuf::from(raw)),

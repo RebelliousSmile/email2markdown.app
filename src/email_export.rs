@@ -1,9 +1,10 @@
 use crate::config::Account;
-use crate::network::{NetworkConfig, ProgressIndicator, with_retry};  // [3][4]
+use crate::network::{with_retry, NetworkConfig, ProgressIndicator}; // [3][4]
 use crate::route::{route_email, Destination, EmailMeta, MatchRule, RouteDecision};
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
-    is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename, subject_extract,
+    is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename,
+    subject_extract,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
@@ -190,7 +191,11 @@ pub fn analyze_email_type(mail: &ParsedMail) -> EmailAnalysis {
 
     // Collect all unique contacts
     let mut contacts: HashSet<String> = HashSet::new();
-    for email in from_emails.iter().chain(to_emails.iter()).chain(cc_emails.iter()) {
+    for email in from_emails
+        .iter()
+        .chain(to_emails.iter())
+        .chain(cc_emails.iter())
+    {
         if !email.is_empty() {
             contacts.insert(email.clone());
         }
@@ -218,7 +223,10 @@ pub fn email_already_exported(
         return false;
     }
 
-    let search_pattern = format!("email_{}_{}*to_{}*.md", date_str, sender_short, recipient_short);
+    let search_pattern = format!(
+        "email_{}_{}*to_{}*.md",
+        date_str, sender_short, recipient_short
+    );
 
     for entry in WalkDir::new(export_directory)
         .follow_links(false)
@@ -272,7 +280,13 @@ fn should_skip_from_headers(
         "no-subject".to_string()
     };
 
-    let skip = email_already_exported(&date_str, &sender_short, &recipient_short, &subject_hash, export_dir);
+    let skip = email_already_exported(
+        &date_str,
+        &sender_short,
+        &recipient_short,
+        &subject_hash,
+        export_dir,
+    );
     let analysis = analyze_email_type(&mail);
     (skip, Some(analysis))
 }
@@ -319,8 +333,7 @@ pub fn export_to_markdown(
     let account = ctx.account;
     let debug_mode = ctx.debug_mode;
     let dests = ctx.dests;
-    let mail = mailparse::parse_mail(raw_email)
-        .context("Failed to parse email")?;
+    let mail = mailparse::parse_mail(raw_email).context("Failed to parse email")?;
 
     let from_field = mail.headers.get_first_value("From").unwrap_or_default();
     let to_field = mail.headers.get_first_value("To").unwrap_or_default();
@@ -347,7 +360,13 @@ pub fn export_to_markdown(
 
     // Check if email already exported
     if account.skip_existing
-        && email_already_exported(&date_str, &sender_short, &recipient_short, &subject_hash, export_directory)
+        && email_already_exported(
+            &date_str,
+            &sender_short,
+            &recipient_short,
+            &subject_hash,
+            export_directory,
+        )
     {
         return Ok(None); // skipped — no (PathBuf, RouteDecision) to return
     }
@@ -369,7 +388,10 @@ pub fn export_to_markdown(
     let base_filename = if extract.is_empty() {
         format!("email_{}_{}*to_{}", date_str, sender_short, recipient_short)
     } else {
-        format!("email_{}_{}_{}*to_{}", date_str, sender_short, extract, recipient_short)
+        format!(
+            "email_{}_{}_{}*to_{}",
+            date_str, sender_short, extract, recipient_short
+        )
     };
     let mut counter = 1;
     let mut filename = format!("{}.md", base_filename.replace('*', "_"));
@@ -495,7 +517,11 @@ pub fn fix_html_bodies(
     dry_run: bool,
     on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
 ) -> anyhow::Result<FixHtmlStats> {
-    let mut stats = FixHtmlStats { fixed: 0, skipped: 0, errors: 0 };
+    let mut stats = FixHtmlStats {
+        fixed: 0,
+        skipped: 0,
+        errors: 0,
+    };
 
     let files: Vec<std::path::PathBuf> = WalkDir::new(directory)
         .follow_links(false)
@@ -513,13 +539,19 @@ pub fn fix_html_bodies(
         }
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
-            Err(_) => { stats.errors += 1; continue; }
+            Err(_) => {
+                stats.errors += 1;
+                continue;
+            }
         };
 
         // Find body: content after the second "---" separator line
         let body = extract_md_body(&content);
         let trimmed = body.trim_start();
-        if !trimmed.starts_with("<!DOCTYPE html") && !trimmed.starts_with("<html") && !trimmed.starts_with("<HTML") {
+        if !trimmed.starts_with("<!DOCTYPE html")
+            && !trimmed.starts_with("<html")
+            && !trimmed.starts_with("<HTML")
+        {
             stats.skipped += 1;
             continue;
         }
@@ -548,7 +580,10 @@ pub fn fix_html_bodies(
 /// Extract the body portion of a `.md` file (content after the closing `---`).
 pub(crate) fn extract_md_body(content: &str) -> &str {
     // Skip the opening ---
-    let after_open = content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n")).unwrap_or(content);
+    let after_open = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))
+        .unwrap_or(content);
     // Find the closing ---
     if let Some(idx) = after_open.find("\n---\n") {
         &after_open[idx + 5..]
@@ -759,7 +794,7 @@ pub struct ImapExporter {
     session: Option<Session<Box<dyn ImapConnection>>>,
     account: Account,
     debug_mode: bool,
-    network_config: NetworkConfig,  // [4][5]
+    network_config: NetworkConfig, // [4][5]
     is_gmail: bool,
 }
 
@@ -769,7 +804,7 @@ impl ImapExporter {
             session: None,
             account,
             debug_mode,
-            network_config: NetworkConfig::default(),  // [4][5]
+            network_config: NetworkConfig::default(), // [4][5]
             is_gmail: false,
         }
     }
@@ -797,7 +832,10 @@ impl ImapExporter {
 
         let local_test_tls = std::env::var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST").as_deref()
             == Ok("1")
-            && matches!(self.account.server.as_str(), "localhost" | "127.0.0.1" | "::1");
+            && matches!(
+                self.account.server.as_str(),
+                "localhost" | "127.0.0.1" | "::1"
+            );
         let mut builder = imap::ClientBuilder::new(&self.account.server, self.account.port);
         if local_test_tls {
             builder = builder
@@ -903,8 +941,8 @@ impl ImapExporter {
     ) -> Result<Vec<crate::contextual_export::ContextualCandidate>> {
         use crate::contextual_export::{
             build_search_batches, candidate_matches_rules, merge_candidates,
-            parse_header_candidate, parse_uid_fetch_response, MessageLocation,
-            HEADER_FETCH_FIELDS, HEADER_UID_BATCH,
+            parse_header_candidate, parse_uid_fetch_response, MessageLocation, HEADER_FETCH_FIELDS,
+            HEADER_UID_BATCH,
         };
         use std::collections::BTreeSet;
 
@@ -922,7 +960,10 @@ impl ImapExporter {
         let mut candidates = Vec::new();
 
         for folder in folders {
-            if ignored_folders.iter().any(|ignored| ignored == &folder.display) {
+            if ignored_folders
+                .iter()
+                .any(|ignored| ignored == &folder.display)
+            {
                 continue;
             }
             let session = self.session.as_mut().context("Not connected")?;
@@ -964,12 +1005,8 @@ impl ImapExporter {
                         uid_validity,
                         uid,
                     };
-                    let candidate = parse_header_candidate(
-                        &account_name,
-                        location,
-                        &header,
-                        provider_id,
-                    )?;
+                    let candidate =
+                        parse_header_candidate(&account_name, location, &header, provider_id)?;
                     // SEARCH is substring-based and therefore only a prefilter.
                     if candidate_matches_rules(&candidate, rules) {
                         candidates.push(candidate);
@@ -1037,7 +1074,9 @@ impl ImapExporter {
         if !deletion_preflight.supported {
             anyhow::bail!(
                 "configured server deletion is not safe: {}",
-                deletion_preflight.reason.unwrap_or_else(|| "unknown reason".into())
+                deletion_preflight
+                    .reason
+                    .unwrap_or_else(|| "unknown reason".into())
             );
         }
         let _lock = ContextualLock::acquire(target, &self.account.name)?;
@@ -1125,11 +1164,7 @@ impl ImapExporter {
                         continue;
                     };
                     match convert_raw_contextual_unlocked(
-                        target,
-                        &account,
-                        candidate,
-                        location,
-                        body,
+                        target, &account, candidate, location, body,
                     ) {
                         Ok(status) => results.push(MessageConversionResult {
                             candidate_key: candidate.logical_key(),
@@ -1167,7 +1202,9 @@ impl ImapExporter {
         if !preflight.supported {
             anyhow::bail!(
                 "targeted deletion blocked: {}",
-                preflight.reason.unwrap_or_else(|| "unsupported server".into())
+                preflight
+                    .reason
+                    .unwrap_or_else(|| "unsupported server".into())
             );
         }
 
@@ -1200,9 +1237,11 @@ impl ImapExporter {
                     let mailbox = match session.select(&raw) {
                         Ok(mailbox) => mailbox,
                         Err(error) => {
-                            results.extend(group.into_iter().map(|request| MessageDeletionResult {
-                                proof: request.proof,
-                                outcome: DeletionOutcome::RetryRequired(format!("{error:#}")),
+                            results.extend(group.into_iter().map(|request| {
+                                MessageDeletionResult {
+                                    proof: request.proof,
+                                    outcome: DeletionOutcome::RetryRequired(format!("{error:#}")),
+                                }
                             }));
                             continue;
                         }
@@ -1221,10 +1260,9 @@ impl ImapExporter {
                         let uid = request.proof.location.uid;
                         let outcome = match session.uid_search(format!("UID {uid}")) {
                             Ok(found) if found.is_empty() => DeletionOutcome::AlreadyAbsent,
-                            Ok(_) => match session.uid_store(
-                                uid.to_string(),
-                                "+FLAGS.SILENT (\\Deleted)",
-                            ) {
+                            Ok(_) => match session
+                                .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
+                            {
                                 Ok(_) => match session.uid_expunge(uid.to_string()) {
                                     Ok(_) => DeletionOutcome::Deleted,
                                     Err(error) => {
@@ -1258,7 +1296,8 @@ impl ImapExporter {
                     let session = self.session.as_mut().context("Not connected")?;
                     let outcome = (|| -> Result<DeletionOutcome> {
                         session.select(&request.proof.location.folder_raw)?;
-                        let source_uids = session.uid_search(format!("X-GM-MSGID {provider_id}"))?;
+                        let source_uids =
+                            session.uid_search(format!("X-GM-MSGID {provider_id}"))?;
                         if !source_uids.is_empty() {
                             let uid_set = source_uids
                                 .iter()
@@ -1325,48 +1364,58 @@ impl ImapExporter {
             let uids_vec: Vec<_> = uids.into_iter().collect();
 
             // Pre-filter: batch fetch headers, skip already-exported without downloading body
-            let (filtered_uids, pre_skipped, _already_exported_uids) = if self.account.skip_existing && !uids_vec.is_empty() {
-                let seq_set = uids_vec.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
-                match session.fetch(&seq_set, "RFC822.HEADER") {
-                    Ok(headers) => {
-                        let mut skip_set = HashSet::new();
-                        for message in headers.iter() {
-                            if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
-                                break;
-                            }
-                            let (skip, analysis) = should_skip_from_headers(
-                                message.header().unwrap_or(&[]),
-                                &export_directory,
-                            );
-                            if skip {
-                                skip_set.insert(message.message);
-                                // Collect contacts from skipped emails too
-                                if let (Some(collector), Some(a)) = (contacts_collector.as_deref_mut(), analysis) {
-                                    for contact in a.contacts {
-                                        collector.add(&a.email_type, contact);
+            let (filtered_uids, pre_skipped, _already_exported_uids) =
+                if self.account.skip_existing && !uids_vec.is_empty() {
+                    let seq_set = uids_vec
+                        .iter()
+                        .map(|u| u.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    match session.fetch(&seq_set, "RFC822.HEADER") {
+                        Ok(headers) => {
+                            let mut skip_set = HashSet::new();
+                            for message in headers.iter() {
+                                if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
+                                    break;
+                                }
+                                let (skip, analysis) = should_skip_from_headers(
+                                    message.header().unwrap_or(&[]),
+                                    &export_directory,
+                                );
+                                if skip {
+                                    skip_set.insert(message.message);
+                                    // Collect contacts from skipped emails too
+                                    if let (Some(collector), Some(a)) =
+                                        (contacts_collector.as_deref_mut(), analysis)
+                                    {
+                                        for contact in a.contacts {
+                                            collector.add(&a.email_type, contact);
+                                        }
                                     }
                                 }
                             }
+                            let skipped = skip_set.len();
+                            let already_exported: Vec<u32> = skip_set.iter().copied().collect();
+                            let filtered = uids_vec
+                                .iter()
+                                .filter(|u| !skip_set.contains(u))
+                                .copied()
+                                .collect::<Vec<_>>();
+                            (filtered, skipped, already_exported)
                         }
-                        let skipped = skip_set.len();
-                        let already_exported: Vec<u32> = skip_set.iter().copied().collect();
-                        let filtered = uids_vec
-                            .iter()
-                            .filter(|u| !skip_set.contains(u))
-                            .copied()
-                            .collect::<Vec<_>>();
-                        (filtered, skipped, already_exported)
-                    }
-                    Err(e) => {
-                        if self.debug_mode {
-                            eprintln!("  Header pre-fetch failed, falling back to full fetch: {:#}", e);
+                        Err(e) => {
+                            if self.debug_mode {
+                                eprintln!(
+                                    "  Header pre-fetch failed, falling back to full fetch: {:#}",
+                                    e
+                                );
+                            }
+                            (uids_vec, 0, vec![])
                         }
-                        (uids_vec, 0, vec![])
                     }
-                }
-            } else {
-                (uids_vec, 0, vec![])
-            };
+                } else {
+                    (uids_vec, 0, vec![])
+                };
 
             // [3] Progress indicator
             let total_to_process = filtered_uids.len();
@@ -1502,73 +1551,73 @@ impl ImapExporter {
         let dests: Vec<Destination> = crate::route::load_destinations();
 
         // Run the existing body in an IIFE so cleanup can run on every exit path.
-        let run_result: Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> = (|| {
-            let mut results = HashMap::new();
-            let mut all_decisions: Vec<(PathBuf, RouteDecision)> = Vec::new();
-            let mut contacts_collector = if self.account.collect_contacts {
-                Some(ContactsCollector::new())
-            } else {
-                None
-            };
+        let run_result: Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> =
+            (|| {
+                let mut results = HashMap::new();
+                let mut all_decisions: Vec<(PathBuf, RouteDecision)> = Vec::new();
+                let mut contacts_collector = if self.account.collect_contacts {
+                    Some(ContactsCollector::new())
+                } else {
+                    None
+                };
 
-            let folders = self.list_folders()?;
-            let total_folders = folders.len();
-            let mut folder_index = 0usize;
+                let folders = self.list_folders()?;
+                let total_folders = folders.len();
+                let mut folder_index = 0usize;
 
-            for folder in folders {
-                // Skip ignored folders (matched against the decoded display name)
-                if self.account.ignored_folders.contains(&folder.display) {
-                    println!("Ignored folder: {}", folder.display);
-                    continue;
+                for folder in folders {
+                    // Skip ignored folders (matched against the decoded display name)
+                    if self.account.ignored_folders.contains(&folder.display) {
+                        println!("Ignored folder: {}", folder.display);
+                        continue;
+                    }
+
+                    folder_index += 1;
+                    if let Some(cb) = on_progress {
+                        cb(folder_index, total_folders, &folder.display);
+                    }
+
+                    println!("Exporting {} ...", folder.display);
+
+                    let (stats, folder_decisions) = self.export_folder(
+                        &folder,
+                        contacts_collector.as_mut(),
+                        cancel_token,
+                        &dests,
+                    )?;
+                    if let Some(s) = on_status {
+                        s(&format!(
+                            "{} — {} exportés, {} ignorés, {} erreurs",
+                            folder.display, stats.exported, stats.skipped, stats.errors
+                        ));
+                    }
+                    all_decisions.extend(folder_decisions);
+                    results.insert(folder.display, stats);
+
+                    if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
+                        break;
+                    }
                 }
 
-                folder_index += 1;
-                if let Some(cb) = on_progress {
-                    cb(folder_index, total_folders, &folder.display);
+                // Generate contacts file if enabled — centralized in _local/contacts/
+                if let Some(collector) = contacts_collector {
+                    let export_dir = PathBuf::from(&self.account.export_directory);
+                    let contacts_dir = export_dir
+                        .parent()
+                        .unwrap_or(&export_dir)
+                        .join("_local")
+                        .join("contacts");
+                    fs::create_dir_all(&contacts_dir)?;
+                    let filepath = collector.generate_csv(&contacts_dir, &self.account.name)?;
+                    println!("Generated contacts file: {}", filepath.display());
                 }
 
-                println!("Exporting {} ...", folder.display);
-
-                let (stats, folder_decisions) = self.export_folder(
-                    &folder,
-                    contacts_collector.as_mut(),
-                    cancel_token,
-                    &dests,
-                )?;
-                if let Some(s) = on_status {
-                    s(&format!(
-                        "{} — {} exportés, {} ignorés, {} erreurs",
-                        folder.display, stats.exported, stats.skipped, stats.errors
-                    ));
-                }
-                all_decisions.extend(folder_decisions);
-                results.insert(folder.display, stats);
-
-                if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
-                    break;
-                }
-            }
-
-            // Generate contacts file if enabled — centralized in _local/contacts/
-            if let Some(collector) = contacts_collector {
-                let export_dir = PathBuf::from(&self.account.export_directory);
-                let contacts_dir = export_dir
-                    .parent()
-                    .unwrap_or(&export_dir)
-                    .join("_local")
-                    .join("contacts");
-                fs::create_dir_all(&contacts_dir)?;
-                let filepath = collector.generate_csv(&contacts_dir, &self.account.name)?;
-                println!("Generated contacts file: {}", filepath.display());
-            }
-
-            Ok((results, all_decisions))
-        })();
+                Ok((results, all_decisions))
+            })();
 
         if self.account.cleanup_empty_dirs {
-            let _ = crate::utils::cleanup_empty_dirs(
-                &PathBuf::from(&self.account.export_directory),
-            );
+            let _ =
+                crate::utils::cleanup_empty_dirs(&PathBuf::from(&self.account.export_directory));
         }
 
         run_result
@@ -1633,7 +1682,8 @@ mod tests {
     #[test]
     fn test_analyze_email_type() {
         // Basic test with raw email bytes
-        let raw_email = b"From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nBody";
+        let raw_email =
+            b"From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nBody";
         let mail = mailparse::parse_mail(raw_email).unwrap();
         let analysis = analyze_email_type(&mail);
 
@@ -1668,7 +1718,11 @@ mod tests {
         fs::create_dir_all(&subfolder).unwrap();
 
         let md_content = "---\nsubject_hash: abc123\ndate: 2024-01-15\n---\nBody";
-        fs::write(subfolder.join("email_2024-01-15_alice_to_bob_abc123.md"), md_content).unwrap();
+        fs::write(
+            subfolder.join("email_2024-01-15_alice_to_bob_abc123.md"),
+            md_content,
+        )
+        .unwrap();
 
         assert!(email_already_exported(
             "2024-01-15",
@@ -1712,7 +1766,13 @@ mod tests {
     // ── Helper ──────────────────────────────────────────────────────────────────
 
     /// Build a minimal valid RFC 2822 raw email.
-    fn make_raw_email(from: &str, to: &str, subject: &str, content_type: &str, body: &str) -> Vec<u8> {
+    fn make_raw_email(
+        from: &str,
+        to: &str,
+        subject: &str,
+        content_type: &str,
+        body: &str,
+    ) -> Vec<u8> {
         format!(
             "From: {from}\r\nTo: {to}\r\nSubject: {subject}\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: {content_type}\r\n\r\n{body}"
         )
@@ -1737,9 +1797,17 @@ mod tests {
         let body = extract_body(&mail);
 
         // Inclusive: must contain the plain-text content
-        assert!(body.contains("Hello plain text"), "body should contain plain text: got {:?}", body);
+        assert!(
+            body.contains("Hello plain text"),
+            "body should contain plain text: got {:?}",
+            body
+        );
         // Exclusive: must NOT contain the HTML tag (plain preferred, not HTML-converted)
-        assert!(!body.contains("<p>"), "body should not contain raw HTML tags: got {:?}", body);
+        assert!(
+            !body.contains("<p>"),
+            "body should not contain raw HTML tags: got {:?}",
+            body
+        );
     }
 
     #[test]
@@ -1752,21 +1820,41 @@ mod tests {
         let body = extract_body(&mail);
 
         // Inclusive: HTML was converted — the text content should be present
-        assert!(body.contains("Only HTML body"), "body should contain converted HTML text: got {:?}", body);
+        assert!(
+            body.contains("Only HTML body"),
+            "body should contain converted HTML text: got {:?}",
+            body
+        );
         // Exclusive: conversion means no raw HTML tags remain
-        assert!(!body.contains("<p>"), "body should not contain raw HTML tags after conversion: got {:?}", body);
+        assert!(
+            !body.contains("<p>"),
+            "body should not contain raw HTML tags after conversion: got {:?}",
+            body
+        );
     }
 
     #[test]
     fn test_extract_body_simple_non_multipart() {
         let raw = make_raw_email(
-            "a@b.com", "c@d.com", "Simple", "text/plain; charset=utf-8", "Simple body content",
+            "a@b.com",
+            "c@d.com",
+            "Simple",
+            "text/plain; charset=utf-8",
+            "Simple body content",
         );
         let mail = mailparse::parse_mail(&raw).unwrap();
         let body = extract_body(&mail);
 
-        assert!(body.contains("Simple body content"), "body should contain text: got {:?}", body);
-        assert!(!body.contains("Content-Type"), "body should not contain header lines: got {:?}", body);
+        assert!(
+            body.contains("Simple body content"),
+            "body should contain text: got {:?}",
+            body
+        );
+        assert!(
+            !body.contains("Content-Type"),
+            "body should not contain header lines: got {:?}",
+            body
+        );
     }
 
     #[test]
@@ -1780,8 +1868,16 @@ mod tests {
         let mail = mailparse::parse_mail(&raw).unwrap();
         let body = extract_body(&mail);
 
-        assert!(body.contains("Nested plain text body"), "nested body should be extracted: got {:?}", body);
-        assert!(!body.contains("<p>"), "should not contain raw HTML in nested case: got {:?}", body);
+        assert!(
+            body.contains("Nested plain text body"),
+            "nested body should be extracted: got {:?}",
+            body
+        );
+        assert!(
+            !body.contains("<p>"),
+            "should not contain raw HTML in nested case: got {:?}",
+            body
+        );
     }
 
     // ── Phase 2 — export_to_markdown E2E ────────────────────────────────────────
@@ -1828,24 +1924,36 @@ mod tests {
             dests: &[],
             source_proof: None,
         };
-        let result = export_to_markdown(
-            &raw,
-            vec!["INBOX".to_string()],
-            None,
-            &mut ctx,
-        );
+        let result = export_to_markdown(&raw, vec!["INBOX".to_string()], None, &mut ctx);
 
         let (path, _decision) = result.unwrap().expect("should return a path");
         let content = fs::read_to_string(&path).unwrap();
 
         // Inclusive: YAML frontmatter markers
-        assert!(content.starts_with("---\n"), "file should start with ---: got {:?}", &content[..50.min(content.len())]);
-        assert!(content.contains("subject: Hello World"), "frontmatter should contain subject: got {:?}", &content[..200.min(content.len())]);
-        assert!(content.contains("from: Alice <alice@example.com>"), "frontmatter should contain from");
+        assert!(
+            content.starts_with("---\n"),
+            "file should start with ---: got {:?}",
+            &content[..50.min(content.len())]
+        );
+        assert!(
+            content.contains("subject: Hello World"),
+            "frontmatter should contain subject: got {:?}",
+            &content[..200.min(content.len())]
+        );
+        assert!(
+            content.contains("from: Alice <alice@example.com>"),
+            "frontmatter should contain from"
+        );
         // Inclusive: subject_hash key must be present in frontmatter
-        assert!(content.contains("subject_hash:"), "subject_hash key must be present");
+        assert!(
+            content.contains("subject_hash:"),
+            "subject_hash key must be present"
+        );
         // Body present after closing ---
-        assert!(content.contains("Test body"), "body should appear after frontmatter");
+        assert!(
+            content.contains("Test body"),
+            "body should appear after frontmatter"
+        );
     }
 
     #[test]
@@ -1876,7 +1984,11 @@ mod tests {
 
         // Inclusive: the attachment is named `<date>_<original-name>`.
         let att = export_dir.join("2024-01-01_Facture.pdf");
-        assert!(att.exists(), "attachment must be named with date prefix: {:?}", att);
+        assert!(
+            att.exists(),
+            "attachment must be named with date prefix: {:?}",
+            att
+        );
 
         // Exclusive: no cryptic hash / double-underscore prefix remains.
         let md = fs::read_to_string(&md_path).unwrap();
@@ -1923,11 +2035,17 @@ mod tests {
 
         // Verify the file exists and contains the subject_hash
         let content = fs::read_to_string(&first_path).unwrap();
-        assert!(content.contains("subject_hash:"), "first export must have subject_hash");
+        assert!(
+            content.contains("subject_hash:"),
+            "first export must have subject_hash"
+        );
 
         // Second export — should be skipped
         let second = export_to_markdown(&raw, vec![], None, &mut ctx).unwrap();
-        assert!(second.is_none(), "second export should return None when skip_existing is true");
+        assert!(
+            second.is_none(),
+            "second export should return None when skip_existing is true"
+        );
     }
 
     // ── Phase 3 — fix_html_bodies / extract_md_body ─────────────────────────────
@@ -1937,9 +2055,21 @@ mod tests {
         let content = "---\nfrom: a@b.com\nsubject: Test\n---\n\nHello body here";
         let body = extract_md_body(content);
 
-        assert!(body.contains("Hello body here"), "body should be extracted: got {:?}", body);
-        assert!(!body.contains("from:"), "body should not contain frontmatter fields: got {:?}", body);
-        assert!(!body.contains("---"), "body should not contain separators: got {:?}", body);
+        assert!(
+            body.contains("Hello body here"),
+            "body should be extracted: got {:?}",
+            body
+        );
+        assert!(
+            !body.contains("from:"),
+            "body should not contain frontmatter fields: got {:?}",
+            body
+        );
+        assert!(
+            !body.contains("---"),
+            "body should not contain separators: got {:?}",
+            body
+        );
     }
 
     #[test]
@@ -1947,8 +2077,16 @@ mod tests {
         let content = "---\r\nfrom: a@b.com\r\nsubject: Test\r\n---\r\n\r\nCRLF body";
         let body = extract_md_body(content);
 
-        assert!(body.contains("CRLF body"), "CRLF body should be extracted: got {:?}", body);
-        assert!(!body.contains("from:"), "should not contain frontmatter: got {:?}", body);
+        assert!(
+            body.contains("CRLF body"),
+            "CRLF body should be extracted: got {:?}",
+            body
+        );
+        assert!(
+            !body.contains("from:"),
+            "should not contain frontmatter: got {:?}",
+            body
+        );
     }
 
     #[test]
@@ -1957,8 +2095,16 @@ mod tests {
         let body = extract_md_body(content);
 
         // When there is no frontmatter, the full content is returned
-        assert!(body.contains("No frontmatter here"), "full content should be returned: got {:?}", body);
-        assert!(body.contains("Just plain content"), "full content should be returned: got {:?}", body);
+        assert!(
+            body.contains("No frontmatter here"),
+            "full content should be returned: got {:?}",
+            body
+        );
+        assert!(
+            body.contains("Just plain content"),
+            "full content should be returned: got {:?}",
+            body
+        );
     }
 
     #[test]
@@ -1977,10 +2123,22 @@ mod tests {
 
         let after = fs::read_to_string(&md_file).unwrap();
         // Inclusive: HTML was converted
-        assert!(after.contains("Converted paragraph"), "converted text should be present: got {:?}", &after);
+        assert!(
+            after.contains("Converted paragraph"),
+            "converted text should be present: got {:?}",
+            &after
+        );
         // Exclusive: raw HTML tags removed
-        assert!(!after.contains("<p>"), "raw <p> tags should be gone: got {:?}", &after);
-        assert!(!after.contains("<!DOCTYPE"), "DOCTYPE declaration should be gone: got {:?}", &after);
+        assert!(
+            !after.contains("<p>"),
+            "raw <p> tags should be gone: got {:?}",
+            &after
+        );
+        assert!(
+            !after.contains("<!DOCTYPE"),
+            "DOCTYPE declaration should be gone: got {:?}",
+            &after
+        );
     }
 
     #[test]
@@ -2007,7 +2165,11 @@ mod tests {
         let header = r#"attachment; filename="report.pdf""#;
         let result = extract_filename_from_header(header);
 
-        assert_eq!(result.as_deref(), Some("report.pdf"), "quoted filename should be extracted");
+        assert_eq!(
+            result.as_deref(),
+            Some("report.pdf"),
+            "quoted filename should be extracted"
+        );
     }
 
     #[test]
@@ -2019,7 +2181,11 @@ mod tests {
         // The regex matches `filename*=` capturing the unquoted value
         assert!(result.is_some(), "star-form filename should be extracted");
         let val = result.unwrap();
-        assert!(val.contains("document.pdf"), "extracted value should contain filename: got {:?}", val);
+        assert!(
+            val.contains("document.pdf"),
+            "extracted value should contain filename: got {:?}",
+            val
+        );
     }
 
     #[test]
@@ -2027,7 +2193,11 @@ mod tests {
         let header = r#"application/pdf; name="invoice.pdf""#;
         let result = extract_filename_from_header(header);
 
-        assert_eq!(result.as_deref(), Some("invoice.pdf"), "name= parameter should be extracted from Content-Type");
+        assert_eq!(
+            result.as_deref(),
+            Some("invoice.pdf"),
+            "name= parameter should be extracted from Content-Type"
+        );
     }
 
     #[test]
@@ -2035,6 +2205,10 @@ mod tests {
         let header = "attachment; size=12345";
         let result = extract_filename_from_header(header);
 
-        assert!(result.is_none(), "should return None when no filename parameter: got {:?}", result);
+        assert!(
+            result.is_none(),
+            "should return None when no filename parameter: got {:?}",
+            result
+        );
     }
 }

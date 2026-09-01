@@ -108,7 +108,6 @@ pub struct Settings {
 }
 
 impl Settings {
-
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
             return Ok(Settings::default());
@@ -183,7 +182,12 @@ fn merge_account(raw: &RawAccount, settings: &Settings) -> Account {
     let export_directory = settings
         .export_base_dir
         .as_ref()
-        .map(|base| PathBuf::from(base).join(folder).to_string_lossy().replace('\\', "/"))
+        .map(|base| {
+            PathBuf::from(base)
+                .join(folder)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
         .unwrap_or_default();
 
     Account {
@@ -194,12 +198,30 @@ fn merge_account(raw: &RawAccount, settings: &Settings) -> Account {
         password: None,
         ignored_folders: raw.ignored_folders.clone(),
         export_directory,
-        quote_depth: per.and_then(|a| a.quote_depth).or(def.quote_depth).unwrap_or(1),
-        skip_existing: per.and_then(|a| a.skip_existing).or(def.skip_existing).unwrap_or(true),
-        collect_contacts: per.and_then(|a| a.collect_contacts).or(def.collect_contacts).unwrap_or(false),
-        skip_signature_images: per.and_then(|a| a.skip_signature_images).or(def.skip_signature_images).unwrap_or(false),
-        delete_after_export: per.and_then(|a| a.delete_after_export).or(def.delete_after_export).unwrap_or(false),
-        cleanup_empty_dirs: per.and_then(|a| a.cleanup_empty_dirs).or(def.cleanup_empty_dirs).unwrap_or(true),
+        quote_depth: per
+            .and_then(|a| a.quote_depth)
+            .or(def.quote_depth)
+            .unwrap_or(1),
+        skip_existing: per
+            .and_then(|a| a.skip_existing)
+            .or(def.skip_existing)
+            .unwrap_or(true),
+        collect_contacts: per
+            .and_then(|a| a.collect_contacts)
+            .or(def.collect_contacts)
+            .unwrap_or(false),
+        skip_signature_images: per
+            .and_then(|a| a.skip_signature_images)
+            .or(def.skip_signature_images)
+            .unwrap_or(false),
+        delete_after_export: per
+            .and_then(|a| a.delete_after_export)
+            .or(def.delete_after_export)
+            .unwrap_or(false),
+        cleanup_empty_dirs: per
+            .and_then(|a| a.cleanup_empty_dirs)
+            .or(def.cleanup_empty_dirs)
+            .unwrap_or(true),
     }
 }
 
@@ -213,7 +235,7 @@ pub enum ConfigError {
     AccountNotFound(String),
     #[error("No password found for account: {0}")]
     NoPassword(String),
-    #[error("Configuration validation error: {0}")]  // [6]
+    #[error("Configuration validation error: {0}")] // [6]
     ValidationError(String),
 }
 
@@ -384,11 +406,7 @@ mod tests {
             "accounts:\n  - name: Test\n    server: imap.example.com\n    port: 993\n    username: test@example.com\n",
         )
         .unwrap();
-        std::fs::write(
-            &settings_path,
-            "export_base_dir: /tmp/exports\n",
-        )
-        .unwrap();
+        std::fs::write(&settings_path, "export_base_dir: /tmp/exports\n").unwrap();
 
         let config = Config::load_with_settings(&accounts_path, &settings_path).unwrap();
         assert!(config.accounts[0].cleanup_empty_dirs);
@@ -433,5 +451,4 @@ mod tests {
         let config = Config::load_with_settings(&accounts_path, &settings_path).unwrap();
         assert!(config.accounts[0].cleanup_empty_dirs);
     }
-
 }

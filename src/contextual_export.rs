@@ -204,7 +204,11 @@ fn normalize_message_id(value: &str) -> Option<String> {
 }
 
 fn normalize_header(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn extract_addresses(value: &str) -> Vec<String> {
@@ -219,15 +223,17 @@ fn extract_addresses(value: &str) -> Vec<String> {
 
 pub fn candidate_matches_rules(candidate: &ContextualCandidate, rules: &[MatchRule]) -> bool {
     rules.iter().any(|rule| match rule {
-        MatchRule::Correspondent(address) => normalize_address(address).ok().map_or(false, |wanted| {
-            candidate
-                .from
-                .iter()
-                .chain(candidate.to.iter())
-                .chain(candidate.cc.iter())
-                .chain(candidate.bcc.iter())
-                .any(|actual| actual == &wanted)
-        }),
+        MatchRule::Correspondent(address) => {
+            normalize_address(address).ok().map_or(false, |wanted| {
+                candidate
+                    .from
+                    .iter()
+                    .chain(candidate.to.iter())
+                    .chain(candidate.cc.iter())
+                    .chain(candidate.bcc.iter())
+                    .any(|actual| actual == &wanted)
+            })
+        }
         MatchRule::From(address) => normalize_address(address).ok().map_or(false, |wanted| {
             candidate.from.iter().any(|actual| actual == &wanted)
         }),
@@ -272,7 +278,11 @@ pub fn merge_candidates(candidates: Vec<ContextualCandidate>) -> Vec<ContextualC
         }
     }
     let mut result: Vec<_> = merged.into_values().collect();
-    result.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.logical_key().cmp(&b.logical_key())));
+    result.sort_by(|a, b| {
+        b.date
+            .cmp(&a.date)
+            .then_with(|| a.logical_key().cmp(&b.logical_key()))
+    });
     result
 }
 
@@ -294,9 +304,9 @@ pub fn parse_uid_fetch_response(raw: &[u8]) -> Result<Vec<(u32, Option<String>, 
             match attribute {
                 AttributeValue::Uid(value) => uid = Some(value),
                 AttributeValue::GmailMsgId(value) => provider = Some(value.to_string()),
-                AttributeValue::BodySection { data: Some(value), .. } => {
-                    header = Some(value.into_owned())
-                }
+                AttributeValue::BodySection {
+                    data: Some(value), ..
+                } => header = Some(value.into_owned()),
                 AttributeValue::Rfc822Header(Some(value)) => header = Some(value.into_owned()),
                 _ => {}
             }
@@ -310,8 +320,14 @@ pub fn parse_uid_fetch_response(raw: &[u8]) -> Result<Vec<(u32, Option<String>, 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConversionStatus {
-    Written { markdown: PathBuf, proof: LocalSourceProof },
-    AlreadyPresent { markdown: PathBuf, proof: LocalSourceProof },
+    Written {
+        markdown: PathBuf,
+        proof: LocalSourceProof,
+    },
+    AlreadyPresent {
+        markdown: PathBuf,
+        proof: LocalSourceProof,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -350,7 +366,11 @@ pub fn evaluate_deletion_preflight(
             reason: None,
         };
     }
-    let has = |value: &str| capabilities.iter().any(|cap| cap.eq_ignore_ascii_case(value));
+    let has = |value: &str| {
+        capabilities
+            .iter()
+            .any(|cap| cap.eq_ignore_ascii_case(value))
+    };
     if gmail {
         let missing: Vec<&str> = ["X-GM-EXT-1", "UIDPLUS", "MOVE"]
             .into_iter()
@@ -361,7 +381,10 @@ pub fn evaluate_deletion_preflight(
                 required: true,
                 supported: false,
                 provider: DeletionProvider::None,
-                reason: Some(format!("missing Gmail capabilities: {}", missing.join(", "))),
+                reason: Some(format!(
+                    "missing Gmail capabilities: {}",
+                    missing.join(", ")
+                )),
             };
         }
         let Some(trash_folder) = trash_folder else {
@@ -475,7 +498,10 @@ impl ContextualLock {
             file,
             "pid={}\nstarted_unix={}",
             std::process::id(),
-            started.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+            started
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
         )?;
         file.sync_all()?;
         cleanup_stale_staging(target, started)?;
@@ -497,11 +523,15 @@ pub fn cleanup_stale_staging(target: &Path, active_since: SystemTime) -> Result<
     for entry in fs::read_dir(target)? {
         let entry = entry?;
         let name = entry.file_name();
-        if !name.to_string_lossy().starts_with(".email-to-markdown-tmp-") {
+        if !name
+            .to_string_lossy()
+            .starts_with(".email-to-markdown-tmp-")
+        {
             continue;
         }
         let metadata = entry.metadata()?;
-        if metadata.is_dir() && metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH) < active_since {
+        if metadata.is_dir() && metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH) < active_since
+        {
             fs::remove_dir_all(entry.path())?;
             removed += 1;
         }
@@ -519,7 +549,11 @@ pub fn proof_matches_candidate(proof: &LocalSourceProof, candidate: &ContextualC
     ) {
         return left == right;
     }
-    if candidate.locations.iter().any(|location| location == &proof.location) {
+    if candidate
+        .locations
+        .iter()
+        .any(|location| location == &proof.location)
+    {
         return true;
     }
     proof.identity.message_id.is_some()
@@ -663,9 +697,8 @@ fn install_staged(
                     destination.file_name().unwrap().to_string_lossy().as_ref(),
                 );
             }
-            fs::rename(&path, &destination).with_context(|| {
-                format!("install attachment {}", destination.display())
-            })?;
+            fs::rename(&path, &destination)
+                .with_context(|| format!("install attachment {}", destination.display()))?;
             installed.push(destination);
         }
         fs::write(staged_markdown, markdown_content)?;
@@ -692,7 +725,10 @@ fn unique_stable_path(target: &Path, original_name: &std::ffi::OsStr, stable_key
     if !direct.exists() {
         return direct;
     }
-    let stem = original.file_stem().unwrap_or(original_name).to_string_lossy();
+    let stem = original
+        .file_stem()
+        .unwrap_or(original_name)
+        .to_string_lossy();
     let extension = original.extension().map(|value| value.to_string_lossy());
     for counter in 1usize.. {
         let suffix = if counter == 1 {

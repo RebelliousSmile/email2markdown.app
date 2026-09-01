@@ -1,5 +1,7 @@
-use email_to_markdown::config::{Config, Settings, AccountBehavior, RawAccount, load_raw_accounts, save_accounts};
-use email_to_markdown::network::{NetworkConfig, ProgressIndicator};  // [3][4]
+use email_to_markdown::config::{
+    load_raw_accounts, save_accounts, AccountBehavior, Config, RawAccount, Settings,
+};
+use email_to_markdown::network::{NetworkConfig, ProgressIndicator}; // [3][4]
 use email_to_markdown::utils::*;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -29,7 +31,10 @@ mod utils_tests {
 
     #[test]
     fn test_get_short_name_full_name() {
-        assert_eq!(get_short_name(Some("John Doe <john@example.com>")), "JohnDoe");
+        assert_eq!(
+            get_short_name(Some("John Doe <john@example.com>")),
+            "JohnDoe"
+        );
     }
 
     #[test]
@@ -163,7 +168,11 @@ mod config_tests {
         let temp = TempDir::new().expect("create tempdir");
         let path = temp.path().join("nonexistent_accounts.yaml");
         let result = load_raw_accounts(&path).expect("load_raw_accounts on missing file");
-        assert!(result.is_empty(), "expected empty vec for missing file, got {:?}", result);
+        assert!(
+            result.is_empty(),
+            "expected empty vec for missing file, got {:?}",
+            result
+        );
     }
 
     #[test]
@@ -242,7 +251,6 @@ mod config_tests {
         assert_eq!(loaded[1].name, "AccountB");
         assert_eq!(loaded[2].name, "AccountC");
     }
-
 }
 
 mod settings_tests {
@@ -293,7 +301,10 @@ mod settings_tests {
 
         let config = Config::load_with_settings(&accounts_path, &settings_path).unwrap();
         assert_eq!(config.accounts.len(), 1);
-        assert_eq!(config.accounts[0].export_directory, "/tmp/emails/TestAccount");
+        assert_eq!(
+            config.accounts[0].export_directory,
+            "/tmp/emails/TestAccount"
+        );
     }
 
     #[test]
@@ -304,7 +315,8 @@ mod settings_tests {
         let accounts_path = temp.path().join("accounts.yaml");
         std::fs::write(&accounts_path, accounts_yaml).unwrap();
 
-        let settings_yaml = "export_base_dir: /tmp/emails\ndefaults:\n  quote_depth: 3\n  collect_contacts: true\n";
+        let settings_yaml =
+            "export_base_dir: /tmp/emails\ndefaults:\n  quote_depth: 3\n  collect_contacts: true\n";
         let settings_path = temp.path().join("settings.yaml");
         std::fs::write(&settings_path, settings_yaml).unwrap();
 
@@ -326,7 +338,9 @@ mod settings_tests {
         std::fs::write(&settings_path, settings_yaml).unwrap();
 
         let config = Config::load_with_settings(&accounts_path, &settings_path).unwrap();
-        assert!(config.accounts[0].export_directory.ends_with("custom-folder"));
+        assert!(config.accounts[0]
+            .export_directory
+            .ends_with("custom-folder"));
         assert_eq!(config.accounts[0].quote_depth, 5);
     }
 
@@ -363,16 +377,44 @@ accounts:
 
         let settings = Settings::load(&path).expect("load settings");
 
-        let behavior = settings.accounts.get("myaccount").expect("myaccount entry missing");
+        let behavior = settings
+            .accounts
+            .get("myaccount")
+            .expect("myaccount entry missing");
         // Inclusive: fields set in YAML must round-trip correctly.
-        assert_eq!(behavior.skip_signature_images, Some(true), "skip_signature_images should be Some(true)");
-        assert_eq!(behavior.delete_after_export, Some(false), "delete_after_export should be Some(false)");
-        assert_eq!(behavior.quote_depth, Some(5), "quote_depth should be Some(5)");
+        assert_eq!(
+            behavior.skip_signature_images,
+            Some(true),
+            "skip_signature_images should be Some(true)"
+        );
+        assert_eq!(
+            behavior.delete_after_export,
+            Some(false),
+            "delete_after_export should be Some(false)"
+        );
+        assert_eq!(
+            behavior.quote_depth,
+            Some(5),
+            "quote_depth should be Some(5)"
+        );
         // Exclusive: fields absent from YAML must not bleed in from defaults or other sources.
-        assert_eq!(behavior.skip_existing, None, "skip_existing must not bleed from YAML");
-        assert_eq!(behavior.collect_contacts, None, "collect_contacts must not bleed");
-        assert_eq!(behavior.folder_name, None, "folder_name should be None (not set)");
-        assert_eq!(settings.defaults.skip_signature_images, Some(false), "defaults.skip_signature_images should be Some(false)");
+        assert_eq!(
+            behavior.skip_existing, None,
+            "skip_existing must not bleed from YAML"
+        );
+        assert_eq!(
+            behavior.collect_contacts, None,
+            "collect_contacts must not bleed"
+        );
+        assert_eq!(
+            behavior.folder_name, None,
+            "folder_name should be None (not set)"
+        );
+        assert_eq!(
+            settings.defaults.skip_signature_images,
+            Some(false),
+            "defaults.skip_signature_images should be Some(false)"
+        );
     }
 
     #[test]
@@ -381,20 +423,29 @@ accounts:
         let path = temp.path().join("settings.yaml");
 
         let mut settings = Settings::default();
-        settings.accounts.insert("myaccount".to_string(), AccountBehavior {
-            skip_signature_images: Some(true),
-            ..AccountBehavior::default()
-        });
+        settings.accounts.insert(
+            "myaccount".to_string(),
+            AccountBehavior {
+                skip_signature_images: Some(true),
+                ..AccountBehavior::default()
+            },
+        );
         settings.save(&path).expect("save settings");
 
         let saved_content = std::fs::read_to_string(&path).expect("read saved yaml");
-        assert!(saved_content.contains("myaccount"), "saved YAML should contain 'myaccount'");
+        assert!(
+            saved_content.contains("myaccount"),
+            "saved YAML should contain 'myaccount'"
+        );
 
         settings.accounts.remove("myaccount");
         settings.save(&path).expect("save settings after remove");
 
         let reloaded = Settings::load(&path).expect("reload settings");
-        assert!(reloaded.accounts.is_empty(), "accounts map should be empty after removing the only entry");
+        assert!(
+            reloaded.accounts.is_empty(),
+            "accounts map should be empty after removing the only entry"
+        );
     }
 }
 
@@ -403,7 +454,8 @@ mod email_export_tests {
 
     #[test]
     fn test_analyze_email_type_direct() {
-        let raw_email = b"From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nBody";
+        let raw_email =
+            b"From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nBody";
         let mail = mailparse::parse_mail(raw_email).unwrap();
         let analysis = analyze_email_type(&mail);
 
@@ -452,8 +504,14 @@ mod email_export_tests {
         use std::collections::BTreeMap;
 
         let mut links: BTreeMap<String, String> = BTreeMap::new();
-        links.insert("instagram".to_string(), "https://www.instagram.com/foo".to_string());
-        links.insert("facebook".to_string(), "https://www.facebook.com/foo".to_string());
+        links.insert(
+            "instagram".to_string(),
+            "https://www.instagram.com/foo".to_string(),
+        );
+        links.insert(
+            "facebook".to_string(),
+            "https://www.facebook.com/foo".to_string(),
+        );
 
         let fm = EmailFrontmatter {
             from: "a@example.com".to_string(),
@@ -469,9 +527,21 @@ mod email_export_tests {
         };
 
         let yaml = serde_yaml::to_string(&fm).expect("serialize");
-        assert!(yaml.contains("social_links:"), "missing social_links key in:\n{}", yaml);
-        assert!(yaml.contains("instagram: https://www.instagram.com/foo"), "missing instagram entry in:\n{}", yaml);
-        assert!(yaml.contains("facebook: https://www.facebook.com/foo"), "missing facebook entry in:\n{}", yaml);
+        assert!(
+            yaml.contains("social_links:"),
+            "missing social_links key in:\n{}",
+            yaml
+        );
+        assert!(
+            yaml.contains("instagram: https://www.instagram.com/foo"),
+            "missing instagram entry in:\n{}",
+            yaml
+        );
+        assert!(
+            yaml.contains("facebook: https://www.facebook.com/foo"),
+            "missing facebook entry in:\n{}",
+            yaml
+        );
     }
 
     #[test]
@@ -490,7 +560,11 @@ mod email_export_tests {
         };
 
         let yaml = serde_yaml::to_string(&fm).expect("serialize");
-        assert!(!yaml.contains("social_links"), "social_links should be omitted when None, got:\n{}", yaml);
+        assert!(
+            !yaml.contains("social_links"),
+            "social_links should be omitted when None, got:\n{}",
+            yaml
+        );
     }
 
     #[test]
@@ -509,7 +583,11 @@ mod email_export_tests {
         };
 
         let yaml = serde_yaml::to_string(&fm).expect("serialize");
-        assert!(yaml.contains("email_type: newsletter"), "expected email_type in:\n{}", yaml);
+        assert!(
+            yaml.contains("email_type: newsletter"),
+            "expected email_type in:\n{}",
+            yaml
+        );
     }
 
     #[test]
@@ -528,7 +606,11 @@ mod email_export_tests {
         };
 
         let yaml = serde_yaml::to_string(&fm).expect("serialize");
-        assert!(!yaml.contains("email_type"), "email_type should be omitted when None, got:\n{}", yaml);
+        assert!(
+            !yaml.contains("email_type"),
+            "email_type should be omitted when None, got:\n{}",
+            yaml
+        );
     }
 }
 
@@ -877,20 +959,26 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 }
 
 mod route_tests {
-    use email_to_markdown::route::{
-        apply_decision, ai_route, delete_email, ensure_year_month, join_safe_segments, move_email,
-        normalize_address, parse_destinations, repair_legacy_attachments,
-        resolve_contextual_destination, route_email, upsert_rule,
-        Destination, EmailMeta, MatchRule,
-    };
     use chrono::DateTime;
+    use email_to_markdown::route::{
+        ai_route, apply_decision, delete_email, ensure_year_month, join_safe_segments, move_email,
+        normalize_address, parse_destinations, repair_legacy_attachments,
+        resolve_contextual_destination, route_email, upsert_rule, Destination, EmailMeta,
+        MatchRule,
+    };
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    fn make_meta(from: &str, domain: &str, subject: &str, account: &str, date_str: &str) -> EmailMeta {
+    fn make_meta(
+        from: &str,
+        domain: &str,
+        subject: &str,
+        account: &str,
+        date_str: &str,
+    ) -> EmailMeta {
         EmailMeta {
             from: from.to_string(),
             to: Vec::new(),
@@ -905,10 +993,8 @@ mod route_tests {
 
     #[test]
     fn test_correspondent_matches_all_available_address_headers() {
-        let dests = parse_destinations(
-            "Pro/Client | correspondent:contact+project@example.com\n",
-        )
-        .unwrap();
+        let dests =
+            parse_destinations("Pro/Client | correspondent:contact+project@example.com\n").unwrap();
         let mut meta = make_meta(
             "sender@elsewhere.example",
             "elsewhere.example",
@@ -967,9 +1053,7 @@ mod route_tests {
         let config = DestinationsConfig {
             destinations: vec![DestinationEntry {
                 path: "Pro/Client".into(),
-                rules: vec![DestinationRule::Correspondent(
-                    "Contact@Example.COM".into(),
-                )],
+                rules: vec![DestinationRule::Correspondent("Contact@Example.COM".into())],
                 ..Default::default()
             }],
         };
@@ -1000,8 +1084,8 @@ mod route_tests {
         }];
         let accounts = vec!["Personal".into(), "Work".into()];
 
-        let resolved = resolve_contextual_destination(&notes, &target, &destinations, &accounts)
-            .unwrap();
+        let resolved =
+            resolve_contextual_destination(&notes, &target, &destinations, &accounts).unwrap();
         assert_eq!(resolved.relative_path, "Pro/Client");
         assert_eq!(resolved.allowed_accounts, vec!["Work"]);
         assert_eq!(resolved.address_rules.len(), 1);
@@ -1013,6 +1097,34 @@ mod route_tests {
             &["Personal".into()]
         )
         .is_err());
+    }
+
+    #[test]
+    fn test_resolve_contextual_destination_reports_missing_rule_as_setup_state() {
+        use email_to_markdown::route::ContextualDestinationError;
+
+        let temp = TempDir::new().unwrap();
+        let notes = temp.path().join("notes");
+        let target = notes.join("Perso").join("Associations");
+        fs::create_dir_all(&target).unwrap();
+        let destinations = vec![Destination {
+            path: "Perso/Associations".into(),
+            rules: vec![],
+            is_default: false,
+        }];
+
+        let error =
+            resolve_contextual_destination(&notes, &target, &destinations, &["Personnel".into()])
+                .unwrap_err();
+        let typed = error
+            .downcast_ref::<ContextualDestinationError>()
+            .expect("missing rules must be distinguishable from a broken configuration");
+        assert_eq!(
+            typed,
+            &ContextualDestinationError::MissingAddressRule {
+                path: "Perso/Associations".into()
+            }
+        );
     }
 
     #[cfg(unix)]
@@ -1029,8 +1141,9 @@ mod route_tests {
             rules: vec![MatchRule::From("a@example.com".into())],
             is_default: false,
         }];
-        assert!(resolve_contextual_destination(&notes, &link, &destinations, &["Work".into()])
-            .is_err());
+        assert!(
+            resolve_contextual_destination(&notes, &link, &destinations, &["Work".into()]).is_err()
+        );
     }
 
     #[cfg(windows)]
@@ -1049,8 +1162,9 @@ mod route_tests {
             rules: vec![MatchRule::From("a@example.com".into())],
             is_default: false,
         }];
-        assert!(resolve_contextual_destination(&notes, &link, &destinations, &["Work".into()])
-            .is_err());
+        assert!(
+            resolve_contextual_destination(&notes, &link, &destinations, &["Work".into()]).is_err()
+        );
     }
 
     // --- join_safe_segments: migrated from sort_emails_tests ---
@@ -1059,7 +1173,10 @@ mod route_tests {
     fn test_join_safe_segments_nested_path() {
         let root = PathBuf::from("/notes");
         let joined = join_safe_segments(&root, "Travail/Projets/Client A").unwrap();
-        assert_eq!(joined, root.join("Travail").join("Projets").join("Client A"));
+        assert_eq!(
+            joined,
+            root.join("Travail").join("Projets").join("Client A")
+        );
     }
 
     #[test]
@@ -1129,11 +1246,17 @@ mod route_tests {
         let md_dest = dst_dir.join("email.md");
         let att_dest = dst_dir.join("email__file.pdf");
         assert!(md_dest.exists(), "moved .md must exist at dest");
-        assert!(att_dest.exists(), "flat attachment must be co-located at dest");
+        assert!(
+            att_dest.exists(),
+            "flat attachment must be co-located at dest"
+        );
 
         // Exclusive: original paths no longer exist
         assert!(!md_src.exists(), "original .md must not remain at src");
-        assert!(!att_src.exists(), "original attachment must not remain at src");
+        assert!(
+            !att_src.exists(),
+            "original attachment must not remain at src"
+        );
 
         // Inclusive: bare link preserved in moved .md
         let new_content = fs::read_to_string(&md_dest).unwrap();
@@ -1202,7 +1325,10 @@ mod route_tests {
         assert!(dst_dir.join("email.md").exists(), ".md must be at dest");
         // Exclusive: originals gone
         assert!(!md_src.exists(), "original .md must not remain at src");
-        assert!(!att_src.exists(), "original attachment must not remain at src");
+        assert!(
+            !att_src.exists(),
+            "original attachment must not remain at src"
+        );
     }
 
     #[test]
@@ -1219,7 +1345,10 @@ mod route_tests {
         move_email(&md_src, &dst_dir).unwrap();
 
         // Inclusive: .md moved
-        assert!(dst_dir.join("plain.md").exists(), "moved .md must exist at dest");
+        assert!(
+            dst_dir.join("plain.md").exists(),
+            "moved .md must exist at dest"
+        );
         // Exclusive: original gone
         assert!(!md_src.exists(), "original .md must not remain at src");
         // Exclusive: no spurious _attachments dir created
@@ -1376,7 +1505,10 @@ mod route_tests {
 
         // Inclusive: attachment moved co-located with the .md.
         let att_dest = dst_dir.join(att_name);
-        assert!(att_dest.exists(), "legacy attachment must be co-located with moved .md");
+        assert!(
+            att_dest.exists(),
+            "legacy attachment must be co-located with moved .md"
+        );
         assert_eq!(fs::read(&att_dest).unwrap(), b"PDF data");
 
         // Inclusive: .md frontmatter updated to bare filename.
@@ -1393,7 +1525,10 @@ mod route_tests {
         );
 
         // Exclusive: original legacy file removed.
-        assert!(!att_src.exists(), "legacy source must be removed after move");
+        assert!(
+            !att_src.exists(),
+            "legacy source must be removed after move"
+        );
     }
 
     // --- repair_legacy_attachments ---
@@ -1432,7 +1567,10 @@ mod route_tests {
 
         assert_eq!(repaired, 1);
         assert!(!att_src.exists(), "source must be removed");
-        assert!(md_dir.join(att_name).exists(), "attachment must be co-located");
+        assert!(
+            md_dir.join(att_name).exists(),
+            "attachment must be co-located"
+        );
         let content = fs::read_to_string(&md_path).unwrap();
         assert!(content.contains(&format!("- {}\n", att_name)));
         assert!(!content.contains("attachments/Sent/"));
@@ -1483,7 +1621,10 @@ mod route_tests {
         assert!(!att_src.exists(), "attachment must be moved out of staging");
         // Inclusive: the attachment is preserved under _deleted.
         let recovered = src_dir.join("_deleted").join("email__file.pdf");
-        assert!(recovered.exists(), "attachment must be relocated to _deleted");
+        assert!(
+            recovered.exists(),
+            "attachment must be relocated to _deleted"
+        );
         assert_eq!(fs::read(&recovered).unwrap(), b"PDF content");
     }
 
@@ -1535,17 +1676,24 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         // Inclusive: both entries parsed
         assert_eq!(dests.len(), 2);
         assert_eq!(dests[0].path, "Perso/Finance/Banque");
-        assert!(dests[0].rules.contains(&MatchRule::Domain("credit-agricole.fr".to_string())));
-        assert!(dests[0].rules.contains(&MatchRule::From("noreply@ca.fr".to_string())));
+        assert!(dests[0]
+            .rules
+            .contains(&MatchRule::Domain("credit-agricole.fr".to_string())));
+        assert!(dests[0]
+            .rules
+            .contains(&MatchRule::From("noreply@ca.fr".to_string())));
         assert_eq!(dests[1].path, "Pro/Clients/Acme");
         // Exclusive: no spurious rules
-        assert!(!dests[0].rules.contains(&MatchRule::Subject("Invoice".to_string())));
+        assert!(!dests[0]
+            .rules
+            .contains(&MatchRule::Subject("Invoice".to_string())));
         assert!(!dests[1].is_default);
     }
 
     #[test]
     fn test_parse_destinations_comments_and_empty_lines_skipped() {
-        let content = "# This is a comment\n\nPerso/Inbox | domain:example.com\n# another comment\n";
+        let content =
+            "# This is a comment\n\nPerso/Inbox | domain:example.com\n# another comment\n";
         let dests = parse_destinations(content).unwrap();
         // Inclusive: only the real entry
         assert_eq!(dests.len(), 1);
@@ -1587,10 +1735,20 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_matches_domain_exact() {
         let content = "Perso/Finance/Banque | domain:acme.com\n";
         let dests = parse_destinations(content).unwrap();
-        let meta = make_meta("alice@acme.com", "acme.com", "Hello", "personal", "2026-06-15T10:00:00+00:00");
+        let meta = make_meta(
+            "alice@acme.com",
+            "acme.com",
+            "Hello",
+            "personal",
+            "2026-06-15T10:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: path starts with expected dir
-        assert!(decision.rel_path.starts_with("Perso/Finance/Banque/"), "got: {}", decision.rel_path);
+        assert!(
+            decision.rel_path.starts_with("Perso/Finance/Banque/"),
+            "got: {}",
+            decision.rel_path
+        );
         assert!(!decision.is_default);
         // Exclusive: not the default fallback
         assert!(!decision.rel_path.starts_with("Perso/Messy"));
@@ -1600,10 +1758,20 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_domain_suffix_matches_subdomain() {
         let content = "Perso/Finance/Banque | domain:acme.com\n";
         let dests = parse_destinations(content).unwrap();
-        let meta = make_meta("bob@mail.acme.com", "mail.acme.com", "Hello", "personal", "2026-06-15T10:00:00+00:00");
+        let meta = make_meta(
+            "bob@mail.acme.com",
+            "mail.acme.com",
+            "Hello",
+            "personal",
+            "2026-06-15T10:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: subdomain "mail.acme.com" matches rule "acme.com"
-        assert!(decision.rel_path.starts_with("Perso/Finance/Banque/"), "got: {}", decision.rel_path);
+        assert!(
+            decision.rel_path.starts_with("Perso/Finance/Banque/"),
+            "got: {}",
+            decision.rel_path
+        );
         assert!(!decision.is_default);
     }
 
@@ -1612,10 +1780,19 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         let content = "Perso/Finance/Banque | domain:acme.com\n";
         let dests = parse_destinations(content).unwrap();
         // "notacme.com" must NOT match rule "acme.com"
-        let meta = make_meta("evil@notacme.com", "notacme.com", "Hello", "personal", "2026-06-15T10:00:00+00:00");
+        let meta = make_meta(
+            "evil@notacme.com",
+            "notacme.com",
+            "Hello",
+            "personal",
+            "2026-06-15T10:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: falls to default
-        assert!(decision.is_default, "notacme.com must not match acme.com rule");
+        assert!(
+            decision.is_default,
+            "notacme.com must not match acme.com rule"
+        );
         // Exclusive: not routed to the finance folder
         assert!(!decision.rel_path.starts_with("Perso/Finance"));
     }
@@ -1626,10 +1803,20 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_matches_from_case_insensitive() {
         let content = "Pro/Clients/X | from:BILLING@ACME.COM\n";
         let dests = parse_destinations(content).unwrap();
-        let meta = make_meta("billing@acme.com", "acme.com", "Invoice", "work", "2026-03-01T00:00:00+00:00");
+        let meta = make_meta(
+            "billing@acme.com",
+            "acme.com",
+            "Invoice",
+            "work",
+            "2026-03-01T00:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: from rule matched despite case difference
-        assert!(decision.rel_path.starts_with("Pro/Clients/X/"), "got: {}", decision.rel_path);
+        assert!(
+            decision.rel_path.starts_with("Pro/Clients/X/"),
+            "got: {}",
+            decision.rel_path
+        );
         assert!(!decision.is_default);
         // Exclusive: not default path
         assert!(!decision.rel_path.contains("Messy"));
@@ -1641,10 +1828,20 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_matches_subject_substring() {
         let content = "Perso/Shopping | subject:invoice\n";
         let dests = parse_destinations(content).unwrap();
-        let meta = make_meta("shop@store.com", "store.com", "Your Invoice #123", "personal", "2026-01-05T00:00:00+00:00");
+        let meta = make_meta(
+            "shop@store.com",
+            "store.com",
+            "Your Invoice #123",
+            "personal",
+            "2026-01-05T00:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: substring "invoice" found case-insensitively in "Your Invoice #123"
-        assert!(decision.rel_path.starts_with("Perso/Shopping/"), "got: {}", decision.rel_path);
+        assert!(
+            decision.rel_path.starts_with("Perso/Shopping/"),
+            "got: {}",
+            decision.rel_path
+        );
         assert!(!decision.is_default);
     }
 
@@ -1652,10 +1849,19 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_subject_no_match_on_different_keyword() {
         let content = "Perso/Shopping | subject:invoice\n";
         let dests = parse_destinations(content).unwrap();
-        let meta = make_meta("shop@store.com", "store.com", "Hello world", "personal", "2026-01-05T00:00:00+00:00");
+        let meta = make_meta(
+            "shop@store.com",
+            "store.com",
+            "Hello world",
+            "personal",
+            "2026-01-05T00:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: subject "Hello world" does not contain "invoice" → falls to default
-        assert!(decision.is_default, "non-matching subject must fall to default");
+        assert!(
+            decision.is_default,
+            "non-matching subject must fall to default"
+        );
         // Exclusive: not routed to Shopping
         assert!(!decision.rel_path.starts_with("Perso/Shopping"));
     }
@@ -1666,10 +1872,20 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_matches_account() {
         let content = "Pro/Work | account:work@corp.com\n";
         let dests = parse_destinations(content).unwrap();
-        let meta = make_meta("sender@any.com", "any.com", "Hello", "work@corp.com", "2026-04-10T00:00:00+00:00");
+        let meta = make_meta(
+            "sender@any.com",
+            "any.com",
+            "Hello",
+            "work@corp.com",
+            "2026-04-10T00:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: account rule matched
-        assert!(decision.rel_path.starts_with("Pro/Work/"), "got: {}", decision.rel_path);
+        assert!(
+            decision.rel_path.starts_with("Pro/Work/"),
+            "got: {}",
+            decision.rel_path
+        );
         assert!(!decision.is_default);
     }
 
@@ -1682,7 +1898,11 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-05-20T00:00:00+00:00");
         let decision = route_email(&meta, &dests);
         // Inclusive: starts with Perso
-        assert!(decision.rel_path.starts_with("Perso/"), "default must start with Perso, got: {}", decision.rel_path);
+        assert!(
+            decision.rel_path.starts_with("Perso/"),
+            "default must start with Perso, got: {}",
+            decision.rel_path
+        );
         assert!(decision.is_default);
     }
 
@@ -1690,10 +1910,20 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_pro_forced_by_first_segment() {
         let content = "Pro/Contracts | domain:corp.com\n";
         let dests = parse_destinations(content).unwrap();
-        let meta = make_meta("legal@corp.com", "corp.com", "Contract", "work", "2026-02-14T00:00:00+00:00");
+        let meta = make_meta(
+            "legal@corp.com",
+            "corp.com",
+            "Contract",
+            "work",
+            "2026-02-14T00:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: first segment is Pro
-        assert!(decision.rel_path.starts_with("Pro/"), "matched rule must start with Pro, got: {}", decision.rel_path);
+        assert!(
+            decision.rel_path.starts_with("Pro/"),
+            "matched rule must start with Pro, got: {}",
+            decision.rel_path
+        );
         assert!(!decision.is_default);
         // Exclusive: not Perso
         assert!(!decision.rel_path.starts_with("Perso/"));
@@ -1705,13 +1935,31 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_appends_year_month() {
         let content = "Perso/Finance | domain:bank.com\n";
         let dests = parse_destinations(content).unwrap();
-        let meta = make_meta("noreply@bank.com", "bank.com", "Statement", "personal", "2026-03-15T00:00:00+00:00");
+        let meta = make_meta(
+            "noreply@bank.com",
+            "bank.com",
+            "Statement",
+            "personal",
+            "2026-03-15T00:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: ends with 2026/03
-        assert!(decision.rel_path.ends_with("2026/03"), "expected year/month suffix, got: {}", decision.rel_path);
+        assert!(
+            decision.rel_path.ends_with("2026/03"),
+            "expected year/month suffix, got: {}",
+            decision.rel_path
+        );
         // Exclusive: no wrong format (not "2026/3" or double slash)
-        assert!(!decision.rel_path.contains("2026/3/"), "month must be zero-padded, got: {}", decision.rel_path);
-        assert!(!decision.rel_path.contains("//"), "no double slash, got: {}", decision.rel_path);
+        assert!(
+            !decision.rel_path.contains("2026/3/"),
+            "month must be zero-padded, got: {}",
+            decision.rel_path
+        );
+        assert!(
+            !decision.rel_path.contains("//"),
+            "no double slash, got: {}",
+            decision.rel_path
+        );
     }
 
     #[test]
@@ -1720,9 +1968,16 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-11-30T00:00:00+00:00");
         let decision = route_email(&meta, &dests);
         // Inclusive: path ends with 2026/11
-        assert!(decision.rel_path.ends_with("2026/11"), "got: {}", decision.rel_path);
+        assert!(
+            decision.rel_path.ends_with("2026/11"),
+            "got: {}",
+            decision.rel_path
+        );
         // Exclusive: not "2026/1" (not zero-padded)
-        assert!(!decision.rel_path.ends_with("2026/1"), "month must be 2 digits");
+        assert!(
+            !decision.rel_path.ends_with("2026/1"),
+            "month must be 2 digits"
+        );
     }
 
     // ── ensure_year_month — normalize manually reassigned destinations ───────
@@ -1742,7 +1997,11 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         // Inclusive: unchanged
         assert_eq!(out, "Perso/Finance/2026/06");
         // Exclusive: NOT doubled (the bug we guard against)
-        assert!(!out.contains("2026/06/2026/06"), "must not double the suffix, got: {}", out);
+        assert!(
+            !out.contains("2026/06/2026/06"),
+            "must not double the suffix, got: {}",
+            out
+        );
     }
 
     #[test]
@@ -1753,7 +2012,10 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         assert_eq!(out, "Perso/Bank/2026/2026/06");
         let out2 = ensure_year_month("Perso/X/Reports/13", "2026", "06");
         assert_eq!(out2, "Perso/X/Reports/13/2026/06");
-        assert!(!out2.ends_with("/13"), "invalid month tail must not be treated as dated");
+        assert!(
+            !out2.ends_with("/13"),
+            "invalid month tail must not be treated as dated"
+        );
     }
 
     // ── route_email — path outside destinations.txt → default ────────────────
@@ -1762,7 +2024,13 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_unknown_domain_falls_to_default() {
         let content = "Perso/Finance/Banque | domain:bank.com\n";
         let dests = parse_destinations(content).unwrap();
-        let meta = make_meta("x@unknown.org", "unknown.org", "Hi", "acc", "2026-06-01T00:00:00+00:00");
+        let meta = make_meta(
+            "x@unknown.org",
+            "unknown.org",
+            "Hi",
+            "acc",
+            "2026-06-01T00:00:00+00:00",
+        );
         let decision = route_email(&meta, &dests);
         // Inclusive: is_default flag set
         assert!(decision.is_default, "unknown domain must fall to default");
@@ -1807,7 +2075,12 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         let rel_path = "Perso/Finance/Banque/2026/06";
         apply_decision(&md_src, rel_path, &notes_dir).unwrap();
 
-        let expected_dir = notes_dir.join("Perso").join("Finance").join("Banque").join("2026").join("06");
+        let expected_dir = notes_dir
+            .join("Perso")
+            .join("Finance")
+            .join("Banque")
+            .join("2026")
+            .join("06");
         let expected_md = expected_dir.join("email.md");
 
         // Inclusive: directory created and file moved
@@ -1836,7 +2109,10 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "error must mention the bad segment: {msg}"
         );
         // Exclusive: original file not moved
-        assert!(md_src.exists(), "original file must remain when apply is rejected");
+        assert!(
+            md_src.exists(),
+            "original file must remain when apply is rejected"
+        );
     }
 
     // ── M7: route review window — apply-layer validator (IPC contract) ───────
@@ -1876,8 +2152,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         // dest-A is listed first and matches via `from:`
         // dest-B is listed second and would also match via `domain:`
         // Expected: dest-A wins because it appears first.
-        let content =
-            "Perso/First | from:sender@acme.com\nPerso/Second | domain:acme.com\n";
+        let content = "Perso/First | from:sender@acme.com\nPerso/Second | domain:acme.com\n";
         let dests = parse_destinations(content).unwrap();
         let meta = make_meta(
             "sender@acme.com",
@@ -1910,8 +2185,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_file_order_reversed_changes_winner() {
         // Same two destinations as above, but listed in opposite order.
         // Now dest-B (domain:) is first → it must win over dest-A (from:).
-        let content =
-            "Perso/Second | domain:acme.com\nPerso/First | from:sender@acme.com\n";
+        let content = "Perso/Second | domain:acme.com\nPerso/First | from:sender@acme.com\n";
         let dests = parse_destinations(content).unwrap();
         let meta = make_meta(
             "sender@acme.com",
@@ -1949,7 +2223,12 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         let content = "destinations:\n- path: Perso/Alpha\n  rules:\n  - domain: a.com\n- path: Perso/Beta\n  rules:\n  - domain: b.com\n- path: Perso/Gamma\n  rules:\n  - domain: g.com\n";
         fs::write(&dest_file, content).unwrap();
 
-        upsert_rule(&dest_file, "Perso/Beta", MatchRule::From("beta@b.com".to_string())).unwrap();
+        upsert_rule(
+            &dest_file,
+            "Perso/Beta",
+            MatchRule::From("beta@b.com".to_string()),
+        )
+        .unwrap();
 
         let cfg = load_yaml(&dest_file).unwrap();
         let paths: Vec<&str> = cfg.destinations.iter().map(|e| e.path.as_str()).collect();
@@ -1969,15 +2248,24 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         )
         .unwrap();
 
-        upsert_rule(&dest_file, "Perso/Work", MatchRule::From("bob@corp.com".to_string())).unwrap();
+        upsert_rule(
+            &dest_file,
+            "Perso/Work",
+            MatchRule::From("bob@corp.com".to_string()),
+        )
+        .unwrap();
 
         let cfg = load_yaml(&dest_file).unwrap();
         // Exclusive: exactly one entry (no new entry created)
         assert_eq!(cfg.destinations.len(), 1, "must not create a second entry");
         let work = &cfg.destinations[0];
         // Inclusive: both rules present on the same entry
-        assert!(work.rules.contains(&DestinationRule::Domain("corp.com".to_string())));
-        assert!(work.rules.contains(&DestinationRule::From("bob@corp.com".to_string())));
+        assert!(work
+            .rules
+            .contains(&DestinationRule::Domain("corp.com".to_string())));
+        assert!(work
+            .rules
+            .contains(&DestinationRule::From("bob@corp.com".to_string())));
         assert_eq!(work.rules.len(), 2, "exactly two rules expected");
     }
 
@@ -1993,8 +2281,12 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         )
         .unwrap();
 
-        upsert_rule(&dest_file, "Perso/NewPath", MatchRule::From("new@example.com".to_string()))
-            .unwrap();
+        upsert_rule(
+            &dest_file,
+            "Perso/NewPath",
+            MatchRule::From("new@example.com".to_string()),
+        )
+        .unwrap();
 
         let cfg = load_yaml(&dest_file).unwrap();
         // Exclusive: exactly one entry added
@@ -2002,7 +2294,9 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         // Inclusive: new entry is last, with the rule
         let last = cfg.destinations.last().unwrap();
         assert_eq!(last.path, "Perso/NewPath");
-        assert!(last.rules.contains(&DestinationRule::From("new@example.com".to_string())));
+        assert!(last
+            .rules
+            .contains(&DestinationRule::From("new@example.com".to_string())));
         // Exclusive: existing entry preserved
         assert_eq!(cfg.destinations[0].path, "Perso/Known");
     }
@@ -2019,7 +2313,12 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         )
         .unwrap();
 
-        upsert_rule(&dest_file, "Perso/Work", MatchRule::From("b@x.com".to_string())).unwrap();
+        upsert_rule(
+            &dest_file,
+            "Perso/Work",
+            MatchRule::From("b@x.com".to_string()),
+        )
+        .unwrap();
 
         let cfg = load_yaml(&dest_file).unwrap();
         let count = cfg.destinations[0]
@@ -2037,7 +2336,12 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         let temp = TempDir::new().unwrap();
         let dest_file = temp.path().join("destinations.yaml");
         // File does not exist yet.
-        upsert_rule(&dest_file, "Perso/New", MatchRule::Domain("X.COM".to_string())).unwrap();
+        upsert_rule(
+            &dest_file,
+            "Perso/New",
+            MatchRule::Domain("X.COM".to_string()),
+        )
+        .unwrap();
 
         let cfg = load_yaml(&dest_file).unwrap();
         assert_eq!(cfg.destinations.len(), 1);
@@ -2072,11 +2376,18 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         apply_decision(&md_src, free_path, &notes_dir).unwrap();
 
         let expected_md = notes_dir
-            .join("Perso").join("NewCategory").join("FreeSubcat")
-            .join("2026").join("06").join("invoice.md");
+            .join("Perso")
+            .join("NewCategory")
+            .join("FreeSubcat")
+            .join("2026")
+            .join("06")
+            .join("invoice.md");
 
         // Inclusive: file is at the new location
-        assert!(expected_md.exists(), "md must be moved to the new free path");
+        assert!(
+            expected_md.exists(),
+            "md must be moved to the new free path"
+        );
         // Exclusive: original not at staging
         assert!(!md_src.exists(), "original .md must not remain in staging");
 
@@ -2095,14 +2406,14 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 }
 
 mod contextual_export_tests {
-    use email_to_markdown::contextual_export::{
-        build_deletion_batch, build_search_batches, candidate_matches_rules,
-        cleanup_stale_staging, convert_raw_contextual, evaluate_deletion_preflight,
-        merge_candidates, parse_header_candidate, parse_uid_fetch_response, read_source_proof,
-        validate_uidvalidity, ContextualLock, ConversionStatus, DeletionProvider,
-        MessageConversionResult, MessageLocation,
-    };
     use email_to_markdown::config::Account;
+    use email_to_markdown::contextual_export::{
+        build_deletion_batch, build_search_batches, candidate_matches_rules, cleanup_stale_staging,
+        convert_raw_contextual, evaluate_deletion_preflight, merge_candidates,
+        parse_header_candidate, parse_uid_fetch_response, read_source_proof, validate_uidvalidity,
+        ContextualLock, ConversionStatus, DeletionProvider, MessageConversionResult,
+        MessageLocation,
+    };
     use email_to_markdown::route::MatchRule;
     use std::fs;
     use std::time::{Duration, SystemTime};
@@ -2157,7 +2468,9 @@ mod contextual_export_tests {
         let batches = build_search_batches(&rules).unwrap();
         assert_eq!(batches.len(), 5);
         assert!(batches.iter().all(|query| query.starts_with("UNDELETED ")));
-        assert!(batches.iter().all(|query| !query.contains('\r') && !query.contains('\n')));
+        assert!(batches
+            .iter()
+            .all(|query| !query.contains('\r') && !query.contains('\n')));
 
         let deduped = build_search_batches(&[
             MatchRule::From("Same@Example.com".into()),
@@ -2166,10 +2479,9 @@ mod contextual_export_tests {
         .unwrap();
         assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].matches("FROM").count(), 1);
-        assert!(build_search_batches(&[MatchRule::From(
-            "victim@example.com\r\nALL".into()
-        )])
-        .is_err());
+        assert!(
+            build_search_batches(&[MatchRule::From("victim@example.com\r\nALL".into())]).is_err()
+        );
     }
 
     #[test]
@@ -2195,7 +2507,10 @@ mod contextual_export_tests {
             &[MatchRule::Correspondent("bob@example.com".into())]
         ));
         assert_eq!(candidate.locations[0].uid, 12);
-        assert_eq!(candidate.source.message_id.as_deref(), Some("one@example.com"));
+        assert_eq!(
+            candidate.source.message_id.as_deref(),
+            Some("one@example.com")
+        );
     }
 
     #[test]
@@ -2206,20 +2521,10 @@ mod contextual_export_tests {
             "bob@example.com",
             "Same",
         );
-        let a = parse_header_candidate(
-            "Work",
-            location("INBOX", 1),
-            &raw,
-            Some("999".into()),
-        )
-        .unwrap();
-        let b = parse_header_candidate(
-            "Work",
-            location("Archive", 2),
-            &raw,
-            Some("999".into()),
-        )
-        .unwrap();
+        let a =
+            parse_header_candidate("Work", location("INBOX", 1), &raw, Some("999".into())).unwrap();
+        let b = parse_header_candidate("Work", location("Archive", 2), &raw, Some("999".into()))
+            .unwrap();
         let merged = merge_candidates(vec![a, b]);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].locations.len(), 2);
@@ -2236,13 +2541,7 @@ mod contextual_export_tests {
             None,
         )
         .unwrap();
-        let original = parse_header_candidate(
-            "Work",
-            location("INBOX", 1),
-            &raw,
-            None,
-        )
-        .unwrap();
+        let original = parse_header_candidate("Work", location("INBOX", 1), &raw, None).unwrap();
         assert_eq!(merge_candidates(vec![original, reused]).len(), 2);
     }
 
@@ -2313,14 +2612,8 @@ mod contextual_export_tests {
         let location = location("INBOX", 42);
         let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
 
-        let first = convert_raw_contextual(
-            &target,
-            &account(&target),
-            &candidate,
-            &location,
-            &raw,
-        )
-        .unwrap();
+        let first = convert_raw_contextual(&target, &account(&target), &candidate, &location, &raw)
+            .unwrap();
         let (markdown, proof) = match first {
             ConversionStatus::Written { markdown, proof } => (markdown, proof),
             other => panic!("expected write, got {other:?}"),
@@ -2334,19 +2627,20 @@ mod contextual_export_tests {
             name.starts_with(".email-to-markdown-tmp-") || name.ends_with(".lock")
         }));
 
-        let second = convert_raw_contextual(
-            &target,
-            &account(&target),
-            &candidate,
-            &location,
-            &raw,
-        )
-        .unwrap();
+        let second =
+            convert_raw_contextual(&target, &account(&target), &candidate, &location, &raw)
+                .unwrap();
         assert!(matches!(second, ConversionStatus::AlreadyPresent { .. }));
         assert_eq!(
             fs::read_dir(&target)
                 .unwrap()
-                .filter(|entry| entry.as_ref().unwrap().path().extension().and_then(|e| e.to_str()) == Some("md"))
+                .filter(|entry| entry
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    == Some("md"))
                 .count(),
             1
         );
@@ -2399,14 +2693,8 @@ mod contextual_export_tests {
         let raw = multipart_raw("legacy@example.com");
         let location = location("INBOX", 5);
         let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
-        let first = convert_raw_contextual(
-            &target,
-            &account(&target),
-            &candidate,
-            &location,
-            &raw,
-        )
-        .unwrap();
+        let first = convert_raw_contextual(&target, &account(&target), &candidate, &location, &raw)
+            .unwrap();
         let original = match first {
             ConversionStatus::Written { markdown, .. } => markdown,
             _ => unreachable!(),
@@ -2419,16 +2707,15 @@ mod contextual_export_tests {
             .join("\n");
         // Replacing the full nested YAML safely is unnecessary here: an invalid
         // source block is deliberately treated like an old unproved Markdown.
-        fs::write(&original, legacy_content.replace("identity:", "legacy_identity:")).unwrap();
-
-        let second = convert_raw_contextual(
-            &target,
-            &account(&target),
-            &candidate,
-            &location,
-            &raw,
+        fs::write(
+            &original,
+            legacy_content.replace("identity:", "legacy_identity:"),
         )
         .unwrap();
+
+        let second =
+            convert_raw_contextual(&target, &account(&target), &candidate, &location, &raw)
+                .unwrap();
         let second_path = match second {
             ConversionStatus::Written { markdown, .. } => markdown,
             other => panic!("legacy note must be reconverted, got {other:?}"),
@@ -2456,11 +2743,8 @@ mod contextual_export_tests {
         fs::create_dir(&user).unwrap();
         fs::write(reserved.join("partial"), b"x").unwrap();
         fs::write(user.join("keep"), b"x").unwrap();
-        let removed = cleanup_stale_staging(
-            temp.path(),
-            SystemTime::now() + Duration::from_secs(1),
-        )
-        .unwrap();
+        let removed =
+            cleanup_stale_staging(temp.path(), SystemTime::now() + Duration::from_secs(1)).unwrap();
         assert_eq!(removed, 1);
         assert!(!reserved.exists());
         assert!(user.join("keep").exists());
@@ -2492,7 +2776,13 @@ mod contextual_export_tests {
         assert_eq!(
             fs::read_dir(&target)
                 .unwrap()
-                .filter(|entry| entry.as_ref().unwrap().path().extension().and_then(|e| e.to_str()) == Some("md"))
+                .filter(|entry| entry
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    == Some("md"))
                 .count(),
             0
         );
@@ -2539,7 +2829,10 @@ mod destinations_tests {
 
         // External tagging → one-key maps in YAML.
         let raw = fs::read_to_string(&path).unwrap();
-        assert!(raw.contains("domain: ubs.ch"), "external tagging expected; got:\n{raw}");
+        assert!(
+            raw.contains("domain: ubs.ch"),
+            "external tagging expected; got:\n{raw}"
+        );
 
         let back = load_yaml(&path).unwrap();
         assert_eq!(back.destinations.len(), 1);
@@ -2552,7 +2845,11 @@ mod destinations_tests {
     #[test]
     fn test_upsert_entry_adds_new_path() {
         let mut cfg = DestinationsConfig::default();
-        upsert_entry(&mut cfg, "Perso/New", &[DestinationRule::Domain("x.com".to_string())]);
+        upsert_entry(
+            &mut cfg,
+            "Perso/New",
+            &[DestinationRule::Domain("x.com".to_string())],
+        );
         assert_eq!(cfg.destinations.len(), 1);
         assert_eq!(cfg.destinations[0].path, "Perso/New");
     }
@@ -2569,7 +2866,11 @@ mod destinations_tests {
             }],
         };
         // Same path different case + identical rule → no growth.
-        upsert_entry(&mut cfg, "perso/work", &[DestinationRule::Domain("corp.com".to_string())]);
+        upsert_entry(
+            &mut cfg,
+            "perso/work",
+            &[DestinationRule::Domain("corp.com".to_string())],
+        );
         assert_eq!(cfg.destinations.len(), 1);
         assert_eq!(cfg.destinations[0].rules.len(), 1);
     }
@@ -2615,9 +2916,17 @@ mod destinations_tests {
 
         let cfg = load_yaml(&yaml).unwrap();
         assert_eq!(cfg.destinations.len(), 2);
-        let banque = cfg.destinations.iter().find(|e| e.path == "Perso/Banque").unwrap();
+        let banque = cfg
+            .destinations
+            .iter()
+            .find(|e| e.path == "Perso/Banque")
+            .unwrap();
         assert_eq!(banque.rules.len(), 2);
-        let inbox = cfg.destinations.iter().find(|e| e.path == "Perso/Inbox").unwrap();
+        let inbox = cfg
+            .destinations
+            .iter()
+            .find(|e| e.path == "Perso/Inbox")
+            .unwrap();
         assert!(inbox.default, "default flag must carry over");
     }
 
@@ -2686,8 +2995,16 @@ mod dest_cmd_tests {
     fn test_list_shows_anomaly_double_default() {
         let cfg = DestinationsConfig {
             destinations: vec![
-                DestinationEntry { path: "A".into(), default: true, ..Default::default() },
-                DestinationEntry { path: "B".into(), default: true, ..Default::default() },
+                DestinationEntry {
+                    path: "A".into(),
+                    default: true,
+                    ..Default::default()
+                },
+                DestinationEntry {
+                    path: "B".into(),
+                    default: true,
+                    ..Default::default()
+                },
             ],
         };
         let warnings = detect_anomalies(&cfg);
@@ -2826,7 +3143,10 @@ mod suggest_tests {
         write_md(temp.path(), "ok.md", "ok@visible.com");
 
         let groups = scan_domains(temp.path()).unwrap();
-        assert!(groups.get("hidden.com").is_none(), "dot-dir must be skipped");
+        assert!(
+            groups.get("hidden.com").is_none(),
+            "dot-dir must be skipped"
+        );
         assert_eq!(groups.get("visible.com"), Some(&1));
     }
 
@@ -2838,7 +3158,10 @@ mod suggest_tests {
         write_md(temp.path(), "ok.md", "ok@here.com");
 
         let groups = scan_domains(temp.path()).unwrap();
-        assert!(groups.get("gone.com").is_none(), "underscore-dir must be skipped");
+        assert!(
+            groups.get("gone.com").is_none(),
+            "underscore-dir must be skipped"
+        );
         assert_eq!(groups.get("here.com"), Some(&1));
     }
 
@@ -2855,7 +3178,10 @@ mod suggest_tests {
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
 
         let groups = scan_domains(&root).unwrap();
-        assert!(groups.get("external.com").is_none(), "symlink must not be followed");
+        assert!(
+            groups.get("external.com").is_none(),
+            "symlink must not be followed"
+        );
         assert_eq!(groups.get("inside.com"), Some(&1));
     }
 
@@ -2872,7 +3198,10 @@ mod suggest_tests {
         // Symlink creation may require privileges; skip the assertion if it fails.
         if std::os::windows::fs::symlink_dir(&outside, root.join("link")).is_ok() {
             let groups = scan_domains(&root).unwrap();
-            assert!(groups.get("external.com").is_none(), "symlink must not be followed");
+            assert!(
+                groups.get("external.com").is_none(),
+                "symlink must not be followed"
+            );
             assert_eq!(groups.get("inside.com"), Some(&1));
         }
     }
@@ -2902,7 +3231,10 @@ mod suggest_tests {
     /// A typed path carrying a year/month suffix is stripped to the bare path.
     #[test]
     fn test_suggest_strips_year_month_from_path() {
-        assert_eq!(strip_trailing_year_month("Perso/Banque/2026/06"), "Perso/Banque");
+        assert_eq!(
+            strip_trailing_year_month("Perso/Banque/2026/06"),
+            "Perso/Banque"
+        );
         // No suffix → unchanged.
         assert_eq!(strip_trailing_year_month("Perso/Banque"), "Perso/Banque");
     }
@@ -2919,7 +3251,10 @@ mod suggest_tests {
     #[test]
     fn test_extract_domain_forms() {
         assert_eq!(extract_domain("alice@ubs.ch").as_deref(), Some("ubs.ch"));
-        assert_eq!(extract_domain("Alice <alice@UBS.ch>").as_deref(), Some("ubs.ch"));
+        assert_eq!(
+            extract_domain("Alice <alice@UBS.ch>").as_deref(),
+            Some("ubs.ch")
+        );
         assert_eq!(extract_domain("no-at-sign"), None);
     }
 }
@@ -2933,12 +3268,19 @@ mod dest_interactive_tests {
     };
 
     fn entry(path: &str) -> DestinationEntry {
-        DestinationEntry { path: path.into(), ..Default::default() }
+        DestinationEntry {
+            path: path.into(),
+            ..Default::default()
+        }
     }
 
     fn sample() -> DestinationsConfig {
         DestinationsConfig {
-            destinations: vec![entry("Perso/Banque"), entry("Perso/Work"), entry("Pro/Clients")],
+            destinations: vec![
+                entry("Perso/Banque"),
+                entry("Perso/Work"),
+                entry("Pro/Clients"),
+            ],
         }
     }
 
@@ -2997,8 +3339,15 @@ mod dest_interactive_tests {
                 ..Default::default()
             }],
         };
-        assert!(remove_rule(&mut cfg, "Perso/Banque", &DestinationRule::Domain("ubs.ch".into())));
-        assert_eq!(cfg.destinations[0].rules, vec![DestinationRule::Subject("facture".into())]);
+        assert!(remove_rule(
+            &mut cfg,
+            "Perso/Banque",
+            &DestinationRule::Domain("ubs.ch".into())
+        ));
+        assert_eq!(
+            cfg.destinations[0].rules,
+            vec![DestinationRule::Subject("facture".into())]
+        );
     }
 
     /// remove_rule for a rule that isn't present is a no-op returning false.
@@ -3011,7 +3360,11 @@ mod dest_interactive_tests {
                 ..Default::default()
             }],
         };
-        assert!(!remove_rule(&mut cfg, "Perso/Banque", &DestinationRule::Subject("x".into())));
+        assert!(!remove_rule(
+            &mut cfg,
+            "Perso/Banque",
+            &DestinationRule::Subject("x".into())
+        ));
         assert_eq!(cfg.destinations[0].rules.len(), 1);
     }
 
@@ -3038,12 +3391,19 @@ mod dest_gui_tests {
     };
 
     fn entry(path: &str) -> DestinationEntry {
-        DestinationEntry { path: path.into(), ..Default::default() }
+        DestinationEntry {
+            path: path.into(),
+            ..Default::default()
+        }
     }
 
     fn sample() -> DestinationsConfig {
         DestinationsConfig {
-            destinations: vec![entry("Perso/Banque"), entry("Perso/Work"), entry("Pro/Clients")],
+            destinations: vec![
+                entry("Perso/Banque"),
+                entry("Perso/Work"),
+                entry("Pro/Clients"),
+            ],
         }
     }
 
@@ -3071,7 +3431,12 @@ mod dest_gui_tests {
         let mut cfg = sample();
         cfg.destinations[0].default = true;
         set_default(&mut cfg, "Pro/Clients");
-        let defaults: Vec<&str> = cfg.destinations.iter().filter(|e| e.default).map(|e| e.path.as_str()).collect();
+        let defaults: Vec<&str> = cfg
+            .destinations
+            .iter()
+            .filter(|e| e.default)
+            .map(|e| e.path.as_str())
+            .collect();
         assert_eq!(defaults, vec!["Pro/Clients"]);
     }
 
@@ -3080,16 +3445,26 @@ mod dest_gui_tests {
     fn test_dest_gui_set_note() {
         let mut cfg = sample();
         set_note(&mut cfg, "Perso/Banque", Some("relevés mensuels".into()));
-        assert_eq!(cfg.destinations[0].note.as_deref(), Some("relevés mensuels"));
+        assert_eq!(
+            cfg.destinations[0].note.as_deref(),
+            Some("relevés mensuels")
+        );
     }
 
     /// add_rule: rule is pushed onto the matching entry's rules list.
     #[test]
     fn test_dest_gui_add_rule() {
         let mut cfg = sample();
-        let added = add_rule(&mut cfg, "Perso/Banque", DestinationRule::Domain("ubs.ch".into()));
+        let added = add_rule(
+            &mut cfg,
+            "Perso/Banque",
+            DestinationRule::Domain("ubs.ch".into()),
+        );
         assert!(added);
-        assert_eq!(cfg.destinations[0].rules, vec![DestinationRule::Domain("ubs.ch".into())]);
+        assert_eq!(
+            cfg.destinations[0].rules,
+            vec![DestinationRule::Domain("ubs.ch".into())]
+        );
     }
 
     /// add_rule: duplicate rule is not inserted a second time.
@@ -3102,7 +3477,11 @@ mod dest_gui_tests {
                 ..Default::default()
             }],
         };
-        let added = add_rule(&mut cfg, "Perso/Banque", DestinationRule::Domain("ubs.ch".into()));
+        let added = add_rule(
+            &mut cfg,
+            "Perso/Banque",
+            DestinationRule::Domain("ubs.ch".into()),
+        );
         assert!(!added);
         assert_eq!(cfg.destinations[0].rules.len(), 1);
     }
@@ -3120,8 +3499,15 @@ mod dest_gui_tests {
                 ..Default::default()
             }],
         };
-        remove_rule(&mut cfg, "Perso/Banque", &DestinationRule::Domain("ubs.ch".into()));
-        assert_eq!(cfg.destinations[0].rules, vec![DestinationRule::Subject("facture".into())]);
+        remove_rule(
+            &mut cfg,
+            "Perso/Banque",
+            &DestinationRule::Domain("ubs.ch".into()),
+        );
+        assert_eq!(
+            cfg.destinations[0].rules,
+            vec![DestinationRule::Subject("facture".into())]
+        );
     }
 
     /// reorder_destinations: entries appear in the supplied order.
@@ -3136,13 +3522,23 @@ mod dest_gui_tests {
     /// suggest_confirm: batch upsert_entry adds Domain rules for each pair.
     #[test]
     fn test_dest_gui_suggest_confirm() {
-        let mut cfg = DestinationsConfig { destinations: vec![] };
+        let mut cfg = DestinationsConfig {
+            destinations: vec![],
+        };
         let pairs = [("ubs.ch", "Perso/Banque"), ("apple.com", "Perso/Tech")];
         for (domain, path) in &pairs {
-            upsert_entry(&mut cfg, path, &[DestinationRule::Domain(domain.to_string())]);
+            upsert_entry(
+                &mut cfg,
+                path,
+                &[DestinationRule::Domain(domain.to_string())],
+            );
         }
         assert_eq!(cfg.destinations.len(), 2);
-        assert!(cfg.destinations[0].rules.contains(&DestinationRule::Domain("ubs.ch".into())));
-        assert!(cfg.destinations[1].rules.contains(&DestinationRule::Domain("apple.com".into())));
+        assert!(cfg.destinations[0]
+            .rules
+            .contains(&DestinationRule::Domain("ubs.ch".into())));
+        assert!(cfg.destinations[1]
+            .rules
+            .contains(&DestinationRule::Domain("apple.com".into())));
     }
 }

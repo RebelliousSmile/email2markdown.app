@@ -31,9 +31,12 @@ pub fn get_thunderbird_profiles_dir() -> Option<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        env::var("HOME")
-            .ok()
-            .map(|home| PathBuf::from(home).join("Library").join("Thunderbird").join("Profiles"))
+        env::var("HOME").ok().map(|home| {
+            PathBuf::from(home)
+                .join("Library")
+                .join("Thunderbird")
+                .join("Profiles")
+        })
     }
 
     #[cfg(target_os = "linux")]
@@ -54,7 +57,8 @@ pub fn list_profiles() -> Result<Vec<ThunderbirdProfile>> {
     let profiles_dir = get_thunderbird_profiles_dir()
         .context("Could not determine Thunderbird profiles directory")?;
 
-    let profiles_ini = profiles_dir.parent()
+    let profiles_ini = profiles_dir
+        .parent()
         .unwrap_or(&profiles_dir)
         .join("profiles.ini");
 
@@ -68,8 +72,7 @@ pub fn list_profiles() -> Result<Vec<ThunderbirdProfile>> {
 
 /// Parse profiles.ini file
 fn parse_profiles_ini(ini_path: &Path, _base_dir: &Path) -> Result<Vec<ThunderbirdProfile>> {
-    let content = fs::read_to_string(ini_path)
-        .context("Failed to read profiles.ini")?;
+    let content = fs::read_to_string(ini_path).context("Failed to read profiles.ini")?;
 
     // The base directory for relative paths is the Thunderbird folder (parent of profiles.ini)
     let thunderbird_dir = ini_path.parent().unwrap_or(Path::new("."));
@@ -109,7 +112,10 @@ fn parse_profiles_ini(ini_path: &Path, _base_dir: &Path) -> Result<Vec<Thunderbi
     Ok(profiles)
 }
 
-fn build_profile_from_map(map: &HashMap<String, String>, base_dir: &Path) -> Option<ThunderbirdProfile> {
+fn build_profile_from_map(
+    map: &HashMap<String, String>,
+    base_dir: &Path,
+) -> Option<ThunderbirdProfile> {
     let name = map.get("name")?.clone();
     let path_str = map.get("path")?;
     let is_relative = map.get("isrelative").map(|s| s == "1").unwrap_or(true);
@@ -167,8 +173,7 @@ pub fn extract_accounts(profile: &ThunderbirdProfile) -> Result<Vec<Account>> {
         anyhow::bail!("prefs.js not found in profile: {}", profile.path.display());
     }
 
-    let content = fs::read_to_string(&prefs_file)
-        .context("Failed to read prefs.js")?;
+    let content = fs::read_to_string(&prefs_file).context("Failed to read prefs.js")?;
 
     parse_prefs_js(&content)
 }
@@ -305,7 +310,10 @@ pub fn generate_env_template(accounts: &[Account]) -> String {
         env.push_str(&format!("{}_PASSWORD=your_password\n", env_var));
         // Also add APPLICATION_PASSWORD variant for Gmail-like accounts
         if account.server.contains("gmail") {
-            env.push_str(&format!("{}_APPLICATION_PASSWORD=your_app_password\n", env_var));
+            env.push_str(&format!(
+                "{}_APPLICATION_PASSWORD=your_app_password\n",
+                env_var
+            ));
         }
     }
 
@@ -366,10 +374,12 @@ pub fn find_nss_library_path(_profile: &ThunderbirdProfile) -> Option<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        let p = PathBuf::from(
-            "/Applications/Thunderbird.app/Contents/MacOS/libnss3.dylib",
-        );
-        if p.exists() { Some(p) } else { None }
+        let p = PathBuf::from("/Applications/Thunderbird.app/Contents/MacOS/libnss3.dylib");
+        if p.exists() {
+            Some(p)
+        } else {
+            None
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -417,8 +427,7 @@ fn decrypt_nss_string(nss: &Library, encrypted_b64: &str) -> Result<String> {
     let result = if output.data.is_null() || output.len == 0 {
         String::new()
     } else {
-        let bytes =
-            unsafe { std::slice::from_raw_parts(output.data, output.len as usize) };
+        let bytes = unsafe { std::slice::from_raw_parts(output.data, output.len as usize) };
         String::from_utf8_lossy(bytes).into_owned()
     };
 
@@ -463,9 +472,8 @@ pub fn extract_passwords(
     }
 
     // Find NSS library
-    let nss_path = find_nss_library_path(profile).context(
-        "NSS library (nss3) not found. Please verify that Thunderbird is installed.",
-    )?;
+    let nss_path = find_nss_library_path(profile)
+        .context("NSS library (nss3) not found. Please verify that Thunderbird is installed.")?;
 
     // On Windows, prepend Thunderbird's install directory to PATH so that
     // nss3.dll can locate its own dependencies (mozglue.dll etc.)
@@ -481,8 +489,7 @@ pub fn extract_passwords(
 
     // NSS_Init requires the profile path (forward slashes on all platforms)
     let profile_path_str = profile.path.to_string_lossy().replace('\\', "/");
-    let profile_c =
-        CString::new(profile_path_str).context("Profile path contains null bytes")?;
+    let profile_c = CString::new(profile_path_str).context("Profile path contains null bytes")?;
 
     let init_status = unsafe {
         let nss_init: libloading::Symbol<unsafe extern "C" fn(*const c_char) -> i32> = nss
@@ -520,8 +527,7 @@ pub fn extract_passwords(
             let status = check_pw(slot, mp_c.as_ptr());
 
             // Free the slot reference
-            if let Ok(free_slot) =
-                nss.get::<unsafe extern "C" fn(*mut c_void)>(b"PK11_FreeSlot\0")
+            if let Ok(free_slot) = nss.get::<unsafe extern "C" fn(*mut c_void)>(b"PK11_FreeSlot\0")
             {
                 free_slot(slot);
             }

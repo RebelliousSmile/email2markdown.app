@@ -20,7 +20,11 @@ pub fn limit_quote_depth(text: &str, max_depth: usize) -> String {
 /// `Capitalized` (first letter upper, rest lower). Returns an empty string when
 /// `token` has no letters.
 fn take_capitalized(token: &str, n: usize) -> String {
-    let letters: String = token.chars().filter(|c| c.is_alphabetic()).take(n).collect();
+    let letters: String = token
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .take(n)
+        .collect();
     let mut chars = letters.chars();
     match chars.next() {
         None => String::new(),
@@ -76,7 +80,11 @@ pub fn get_short_name(email_str: Option<&str>) -> String {
         // Single token (single-word name or indivisible local part): up to 8 letters.
         [only] => take_capitalized(only, 8),
         // Otherwise: first 4 letters of the first name + first 4 of the last name.
-        [first, .., last] => format!("{}{}", take_capitalized(first, 4), take_capitalized(last, 4)),
+        [first, .., last] => format!(
+            "{}{}",
+            take_capitalized(first, 4),
+            take_capitalized(last, 4)
+        ),
     };
 
     if result.is_empty() {
@@ -159,11 +167,12 @@ fn quoted_printable_decode(text: &str, charset: &str) -> Result<String, ()> {
 fn base64_decode(text: &str, charset: &str) -> Result<String, ()> {
     use std::collections::HashMap;
 
-    let base64_table: HashMap<char, u8> = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        .chars()
-        .enumerate()
-        .map(|(i, c)| (c, i as u8))
-        .collect();
+    let base64_table: HashMap<char, u8> =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| (c, i as u8))
+            .collect();
 
     let chars: Vec<u8> = text
         .chars()
@@ -322,14 +331,20 @@ pub fn is_signature_image(
     payload_size: usize,
     content_disposition: Option<&str>,
 ) -> bool {
-    let filename_lower = attachment_filename
-        .unwrap_or("")
-        .to_lowercase();
+    let filename_lower = attachment_filename.unwrap_or("").to_lowercase();
 
     // Common signature image patterns
     let signature_patterns = [
-        "signature", "logo", "banner", "footer", "header",
-        "company", "corporate", "brand", "societe", "entreprise",
+        "signature",
+        "logo",
+        "banner",
+        "footer",
+        "header",
+        "company",
+        "corporate",
+        "brand",
+        "societe",
+        "entreprise",
     ];
 
     // Check 1: Common signature filenames (only if small)
@@ -366,10 +381,15 @@ pub fn is_signature_image(
     let common_image_extensions = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg"];
     let generic_names = ["image", "img", "picture", "pic", "photo"];
 
-    if common_image_extensions.iter().any(|ext| filename_lower.ends_with(ext))
+    if common_image_extensions
+        .iter()
+        .any(|ext| filename_lower.ends_with(ext))
         && payload_size < 100 * 1024
     {
-        if generic_names.iter().any(|name| filename_lower.starts_with(name)) {
+        if generic_names
+            .iter()
+            .any(|name| filename_lower.starts_with(name))
+        {
             return true;
         }
     }
@@ -404,10 +424,7 @@ pub fn subject_extract(subject: &str) -> String {
 /// Generate MD5 hash prefix for uniqueness.
 pub fn hash_md5_prefix(text: &str, length: usize) -> String {
     let digest = md5::compute(text.as_bytes());
-    format!("{:x}", digest)
-        .chars()
-        .take(length)
-        .collect()
+    format!("{:x}", digest).chars().take(length).collect()
 }
 
 /// Sanitize filename for filesystem.
@@ -538,7 +555,10 @@ mod tests {
         // Single-token local part → up to 8 letters, capitalized.
         assert_eq!(get_short_name(Some("sender@example.com")), "Sender");
         // Display name → 4 of first name + 4 of last name.
-        assert_eq!(get_short_name(Some("John Doe <john@example.com>")), "JohnDoe");
+        assert_eq!(
+            get_short_name(Some("John Doe <john@example.com>")),
+            "JohnDoe"
+        );
         // Multi-word → first + last only (middle dropped).
         assert_eq!(get_short_name(Some("John Michael Doe")), "JohnDoe");
         // Long names truncate to 4 + 4.
@@ -570,17 +590,40 @@ mod tests {
 
     #[test]
     fn test_is_signature_image() {
-        assert!(is_signature_image(Some("signature.png"), "image/png", 1024, Some("inline")));
-        assert!(is_signature_image(Some("logo.jpg"), "image/jpeg", 5120, Some("attachment")));
-        assert!(!is_signature_image(Some("contract.pdf"), "application/pdf", 102400, Some("attachment")));
-        assert!(!is_signature_image(Some("photo_vacation.jpg"), "image/jpeg", 2048000, Some("attachment")));
+        assert!(is_signature_image(
+            Some("signature.png"),
+            "image/png",
+            1024,
+            Some("inline")
+        ));
+        assert!(is_signature_image(
+            Some("logo.jpg"),
+            "image/jpeg",
+            5120,
+            Some("attachment")
+        ));
+        assert!(!is_signature_image(
+            Some("contract.pdf"),
+            "application/pdf",
+            102400,
+            Some("attachment")
+        ));
+        assert!(!is_signature_image(
+            Some("photo_vacation.jpg"),
+            "image/jpeg",
+            2048000,
+            Some("attachment")
+        ));
     }
 
     #[test]
     fn test_subject_extract_normal() {
         // "Contract" (8) and "project" (7) qualify; "for", "the", "new" do not (≤3)
         // "ContractProject" truncated to 12 = "ContractProj"
-        assert_eq!(subject_extract("Re: Contract for the new project"), "ContractProj");
+        assert_eq!(
+            subject_extract("Re: Contract for the new project"),
+            "ContractProj"
+        );
     }
 
     #[test]

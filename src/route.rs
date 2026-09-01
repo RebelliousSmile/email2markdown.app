@@ -125,8 +125,12 @@ pub fn rewrite_attachment_paths(
     }
 
     let new_content = format!("---\n{}---{}", new_frontmatter, after_frontmatter);
-    fs::write(md_path, new_content)
-        .with_context(|| format!("failed to write updated frontmatter to {}", md_path.display()))?;
+    fs::write(md_path, new_content).with_context(|| {
+        format!(
+            "failed to write updated frontmatter to {}",
+            md_path.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -179,10 +183,7 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
         .symlink_metadata()
         .with_context(|| format!("failed to stat {}", md_path.display()))?;
     if meta.file_type().is_symlink() {
-        anyhow::bail!(
-            "refusing to move symlink: {}",
-            md_path.display()
-        );
+        anyhow::bail!("refusing to move symlink: {}", md_path.display());
     }
 
     let old_parent = md_path
@@ -241,7 +242,8 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
                     Some(account_root) => {
                         let fallback = account_root.join(&link_native);
                         // Security: resolved path must stay within account_root.
-                        let safe = fallback.parent()
+                        let safe = fallback
+                            .parent()
                             .map_or(false, |p| p.starts_with(account_root));
                         if safe {
                             (fallback, true)
@@ -317,9 +319,8 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
                 dest_dir.display()
             )
         })?;
-        fs::remove_file(md_path).with_context(|| {
-            format!("failed to remove {} after copy", md_path.display())
-        })?;
+        fs::remove_file(md_path)
+            .with_context(|| format!("failed to remove {} after copy", md_path.display()))?;
     }
 
     // --- Update links for any attachment renamed on collision ---
@@ -473,9 +474,8 @@ pub fn delete_email(md_path: &Path) -> Result<()> {
         };
 
         // Create the _deleted folder lazily, on first real move.
-        fs::create_dir_all(&deleted_dir).with_context(|| {
-            format!("failed to create {}", deleted_dir.display())
-        })?;
+        fs::create_dir_all(&deleted_dir)
+            .with_context(|| format!("failed to create {}", deleted_dir.display()))?;
         let att_dest = deleted_dir.join(file_name);
 
         if fs::rename(&att_src, &att_dest).is_err() {
@@ -497,8 +497,7 @@ pub fn delete_email(md_path: &Path) -> Result<()> {
     }
 
     // --- Remove the .md file ---
-    fs::remove_file(md_path)
-        .with_context(|| format!("failed to remove {}", md_path.display()))?;
+    fs::remove_file(md_path).with_context(|| format!("failed to remove {}", md_path.display()))?;
 
     Ok(())
 }
@@ -676,7 +675,10 @@ pub fn parse_destinations(content: &str) -> Result<Vec<Destination>> {
 
         let path = path_part.trim().to_string();
         if path.is_empty() {
-            eprintln!("warning: destinations.txt — skipping line with empty path: {:?}", raw_line);
+            eprintln!(
+                "warning: destinations.txt — skipping line with empty path: {:?}",
+                raw_line
+            );
             continue;
         }
 
@@ -693,31 +695,46 @@ pub fn parse_destinations(content: &str) -> Result<Vec<Destination>> {
                     is_default = true;
                 } else if let Some(d) = token.strip_prefix("domain:") {
                     if d.is_empty() {
-                        eprintln!("warning: destinations.txt — empty domain value in {:?}", raw_line);
+                        eprintln!(
+                            "warning: destinations.txt — empty domain value in {:?}",
+                            raw_line
+                        );
                     } else {
                         rules.push(MatchRule::Domain(d.to_string()));
                     }
                 } else if let Some(a) = token.strip_prefix("from:") {
                     if a.is_empty() {
-                        eprintln!("warning: destinations.txt — empty from value in {:?}", raw_line);
+                        eprintln!(
+                            "warning: destinations.txt — empty from value in {:?}",
+                            raw_line
+                        );
                     } else {
                         rules.push(MatchRule::From(a.to_string()));
                     }
                 } else if let Some(a) = token.strip_prefix("correspondent:") {
                     if a.is_empty() {
-                        eprintln!("warning: destinations.txt — empty correspondent value in {:?}", raw_line);
+                        eprintln!(
+                            "warning: destinations.txt — empty correspondent value in {:?}",
+                            raw_line
+                        );
                     } else {
                         rules.push(MatchRule::Correspondent(a.to_string()));
                     }
                 } else if let Some(k) = token.strip_prefix("subject:") {
                     if k.is_empty() {
-                        eprintln!("warning: destinations.txt — empty subject value in {:?}", raw_line);
+                        eprintln!(
+                            "warning: destinations.txt — empty subject value in {:?}",
+                            raw_line
+                        );
                     } else {
                         rules.push(MatchRule::Subject(k.to_string()));
                     }
                 } else if let Some(a) = token.strip_prefix("account:") {
                     if a.is_empty() {
-                        eprintln!("warning: destinations.txt — empty account value in {:?}", raw_line);
+                        eprintln!(
+                            "warning: destinations.txt — empty account value in {:?}",
+                            raw_line
+                        );
                     } else {
                         rules.push(MatchRule::Account(a.to_string()));
                     }
@@ -741,7 +758,11 @@ pub fn parse_destinations(content: &str) -> Result<Vec<Destination>> {
             }
         }
 
-        destinations.push(Destination { path, rules, is_default });
+        destinations.push(Destination {
+            path,
+            rules,
+            is_default,
+        });
     }
 
     Ok(destinations)
@@ -789,9 +810,7 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
                 MatchRule::From(a) => meta.from.eq_ignore_ascii_case(a),
                 MatchRule::Correspondent(a) => email_has_correspondent(meta, a),
                 // No Regex::new here — k is dynamic; str::contains is correct.
-                MatchRule::Subject(k) => {
-                    meta.subject.to_lowercase().contains(&k.to_lowercase())
-                }
+                MatchRule::Subject(k) => meta.subject.to_lowercase().contains(&k.to_lowercase()),
                 MatchRule::Account(a) => meta.account == *a,
             };
 
@@ -853,15 +872,20 @@ pub fn normalize_address(value: &str) -> Result<String> {
     {
         anyhow::bail!("invalid email address: {value:?}");
     }
-    if !local.chars().all(|c| {
-        c.is_alphanumeric() || "!#$%&'*+-/=?^_`{|}~.".contains(c)
-    }) || !domain
+    if !local
         .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '.')
+        .all(|c| c.is_alphanumeric() || "!#$%&'*+-/=?^_`{|}~.".contains(c))
+        || !domain
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '.')
     {
         anyhow::bail!("invalid email address: {value:?}");
     }
-    Ok(format!("{}@{}", local.to_lowercase(), domain.to_lowercase()))
+    Ok(format!(
+        "{}@{}",
+        local.to_lowercase(),
+        domain.to_lowercase()
+    ))
 }
 
 /// Exact, case-insensitive correspondent match across all available address headers.
@@ -887,6 +911,15 @@ pub struct ContextualDestination {
     pub allowed_accounts: Vec<String>,
 }
 
+/// A contextual destination can be valid and selected while still requiring
+/// its first sender/recipient rule. Callers use this typed error to open the
+/// destination editor instead of treating first-time setup as a failure.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ContextualDestinationError {
+    #[error("destination has no usable address search rule: {path}")]
+    MissingAddressRule { path: String },
+}
+
 /// Resolve an existing local directory to the one configured destination that owns it.
 /// The comparison uses canonical filesystem identity, never a case-folded path string.
 pub fn resolve_contextual_destination(
@@ -903,7 +936,10 @@ pub fn resolve_contextual_destination(
         .canonicalize()
         .with_context(|| format!("target directory does not exist: {}", target.display()))?;
     if !target_real.is_dir() || !target_real.starts_with(&notes_real) {
-        anyhow::bail!("target is not a local directory under notes_dir: {}", target.display());
+        anyhow::bail!(
+            "target is not a local directory under notes_dir: {}",
+            target.display()
+        );
     }
 
     for destination in destinations {
@@ -933,7 +969,10 @@ pub fn resolve_contextual_destination(
             })
             .collect();
         if address_rules.is_empty() {
-            anyhow::bail!("destination has no usable address search rule: {}", destination.path);
+            return Err(ContextualDestinationError::MissingAddressRule {
+                path: destination.path.clone(),
+            }
+            .into());
         }
 
         let account_rules: Vec<&str> = destination
@@ -946,11 +985,16 @@ pub fn resolve_contextual_destination(
             .collect();
         let allowed_accounts: Vec<String> = configured_accounts
             .iter()
-            .filter(|name| account_rules.is_empty() || account_rules.iter().any(|rule| *rule == name.as_str()))
+            .filter(|name| {
+                account_rules.is_empty() || account_rules.iter().any(|rule| *rule == name.as_str())
+            })
             .cloned()
             .collect();
         if allowed_accounts.is_empty() {
-            anyhow::bail!("no configured mailbox is allowed for destination: {}", destination.path);
+            anyhow::bail!(
+                "no configured mailbox is allowed for destination: {}",
+                destination.path
+            );
         }
 
         return Ok(ContextualDestination {
@@ -961,7 +1005,10 @@ pub fn resolve_contextual_destination(
         });
     }
 
-    anyhow::bail!("directory is not an exact configured destination: {}", target.display())
+    anyhow::bail!(
+        "directory is not an exact configured destination: {}",
+        target.display()
+    )
 }
 
 fn reject_symlink_path(notes_dir: &Path, target: &Path) -> Result<()> {
@@ -970,7 +1017,8 @@ fn reject_symlink_path(notes_dir: &Path, target: &Path) -> Result<()> {
     if root_meta.file_type().is_symlink() {
         anyhow::bail!("notes_dir must not be a symlink: {}", notes_dir.display());
     }
-    let relative = target.strip_prefix(notes_dir)
+    let relative = target
+        .strip_prefix(notes_dir)
         .with_context(|| format!("target is outside notes_dir: {}", target.display()))?;
     let mut current = notes_dir.to_path_buf();
     for component in relative.components() {
@@ -978,7 +1026,10 @@ fn reject_symlink_path(notes_dir: &Path, target: &Path) -> Result<()> {
         let metadata = fs::symlink_metadata(&current)
             .with_context(|| format!("failed to inspect {}", current.display()))?;
         if metadata.file_type().is_symlink() {
-            anyhow::bail!("contextual destination must not contain a symlink: {}", current.display());
+            anyhow::bail!(
+                "contextual destination must not contain a symlink: {}",
+                current.display()
+            );
         }
     }
     Ok(())
@@ -1033,8 +1084,13 @@ pub fn apply_decision(staging_md: &Path, rel_path: &str, notes_dir: &Path) -> Re
         .with_context(|| format!("invalid routing path {:?}", rel_path))?;
     fs::create_dir_all(&dest_dir)
         .with_context(|| format!("failed to create directory {}", dest_dir.display()))?;
-    move_email(staging_md, &dest_dir)
-        .with_context(|| format!("failed to move {} to {}", staging_md.display(), dest_dir.display()))
+    move_email(staging_md, &dest_dir).with_context(|| {
+        format!(
+            "failed to move {} to {}",
+            staging_md.display(),
+            dest_dir.display()
+        )
+    })
 }
 
 // ── Repair legacy attachments ────────────────────────────────────────────────
@@ -1122,7 +1178,10 @@ fn repair_one_md(md_path: &Path, account_root: &Path, dry_run: bool) -> Result<u
             p.starts_with(&canonical_account)
         });
         if !safe {
-            eprintln!("warning: repair: {:?} resolves outside account root; skipping", link);
+            eprintln!(
+                "warning: repair: {:?} resolves outside account root; skipping",
+                link
+            );
             continue;
         }
 
@@ -1146,7 +1205,11 @@ fn repair_one_md(md_path: &Path, account_root: &Path, dry_run: bool) -> Result<u
         } else {
             if fs::rename(&att_src, &att_dest).is_err() {
                 fs::copy(&att_src, &att_dest).with_context(|| {
-                    format!("failed to copy {} to {}", att_src.display(), att_dest.display())
+                    format!(
+                        "failed to copy {} to {}",
+                        att_src.display(),
+                        att_dest.display()
+                    )
                 })?;
                 fs::remove_file(&att_src).with_context(|| {
                     format!("failed to remove {} after copy", att_src.display())
@@ -1221,4 +1284,3 @@ pub fn upsert_rule(destinations_file: &Path, target_path: &str, rule: MatchRule)
         .with_context(|| format!("failed to save {}", destinations_file.display()))?;
     Ok(())
 }
-

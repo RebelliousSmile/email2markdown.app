@@ -81,7 +81,8 @@ impl ContextualBatchSummary {
 /// serializable state injected into the standalone contextual window.
 pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualLaunch> {
     dotenvy::from_path(config::env_file_path()).ok();
-    let cfg = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let cfg =
+        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
     let settings = Settings::load(&config::settings_path()).context("Failed to load settings")?;
     let notes_dir = settings
         .notes_dir
@@ -89,7 +90,11 @@ pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualL
         .map(std::path::Path::new)
         .context("notes_dir is not configured")?;
     let destinations = route::load_destinations();
-    let configured_names: Vec<String> = cfg.accounts.iter().map(|account| account.name.clone()).collect();
+    let configured_names: Vec<String> = cfg
+        .accounts
+        .iter()
+        .map(|account| account.name.clone())
+        .collect();
     // With no configured account, still validate the exact local destination so
     // the window can offer its explicit configuration action.
     let validation_names = if configured_names.is_empty() {
@@ -106,12 +111,8 @@ pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualL
     } else {
         configured_names.clone()
     };
-    let resolved = route::resolve_contextual_destination(
-        notes_dir,
-        target,
-        &destinations,
-        &validation_names,
-    )?;
+    let resolved =
+        route::resolve_contextual_destination(notes_dir, target, &destinations, &validation_names)?;
     let accounts = cfg
         .accounts
         .iter()
@@ -142,21 +143,31 @@ pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualL
     })
 }
 
-pub fn run_contextual_search(launch: &ContextualLaunch, account_name: &str) -> Result<ContextualSearchWork> {
+pub fn run_contextual_search(
+    launch: &ContextualLaunch,
+    account_name: &str,
+) -> Result<ContextualSearchWork> {
     dotenvy::from_path(config::env_file_path()).ok();
-    let cfg = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let cfg =
+        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
     let account = cfg
         .get_account(account_name)
         .with_context(|| format!("Account '{}' not found", account_name))?
         .clone();
-    if !launch.accounts.iter().any(|choice| choice.name == account.name) {
+    if !launch
+        .accounts
+        .iter()
+        .any(|choice| choice.name == account.name)
+    {
         anyhow::bail!("account is not allowed for this destination");
     }
     if account.password.is_none() {
         anyhow::bail!("No password found for {}", account.name);
     }
     let mut exporter = ImapExporter::new(account, false);
-    exporter.connect().context("Failed to connect to IMAP server")?;
+    exporter
+        .connect()
+        .context("Failed to connect to IMAP server")?;
     let preflight = exporter.contextual_deletion_preflight()?;
     let candidates = exporter.search_contextual(&launch.rules)?;
     let rows = candidates
@@ -183,7 +194,11 @@ pub fn run_contextual_search(launch: &ContextualLaunch, account_name: &str) -> R
         })
         .collect::<Result<Vec<_>>>()?;
     exporter.disconnect().ok();
-    Ok(ContextualSearchWork { candidates, rows, preflight })
+    Ok(ContextualSearchWork {
+        candidates,
+        rows,
+        preflight,
+    })
 }
 
 pub fn run_contextual_batch(
@@ -192,22 +207,35 @@ pub fn run_contextual_batch(
     selected: &[ContextualCandidate],
 ) -> Result<ContextualBatchSummary> {
     dotenvy::from_path(config::env_file_path()).ok();
-    let cfg = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let cfg =
+        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
     let account = cfg
         .get_account(account_name)
         .with_context(|| format!("Account '{}' not found", account_name))?
         .clone();
     let delete_after_export = account.delete_after_export;
     let mut exporter = ImapExporter::new(account, false);
-    exporter.connect().context("Failed to connect to IMAP server")?;
+    exporter
+        .connect()
+        .context("Failed to connect to IMAP server")?;
     let conversions = exporter.convert_contextual_selection(target, selected)?;
     let converted = conversions
         .iter()
-        .filter(|result| matches!(result.status, Some(crate::contextual_export::ConversionStatus::Written { .. })))
+        .filter(|result| {
+            matches!(
+                result.status,
+                Some(crate::contextual_export::ConversionStatus::Written { .. })
+            )
+        })
         .count();
     let already_present = conversions
         .iter()
-        .filter(|result| matches!(result.status, Some(crate::contextual_export::ConversionStatus::AlreadyPresent { .. })))
+        .filter(|result| {
+            matches!(
+                result.status,
+                Some(crate::contextual_export::ConversionStatus::AlreadyPresent { .. })
+            )
+        })
         .count();
     let retry_conversion: Vec<String> = conversions
         .iter()
@@ -254,13 +282,16 @@ pub fn retry_contextual_deletions(
     requests: &[DeletionRequest],
 ) -> Result<ContextualBatchSummary> {
     dotenvy::from_path(config::env_file_path()).ok();
-    let cfg = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let cfg =
+        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
     let account = cfg
         .get_account(account_name)
         .with_context(|| format!("Account '{}' not found", account_name))?
         .clone();
     let mut exporter = ImapExporter::new(account, false);
-    exporter.connect().context("Failed to connect to IMAP server")?;
+    exporter
+        .connect()
+        .context("Failed to connect to IMAP server")?;
     let outcomes = exporter.delete_proved_messages(requests)?;
     let mut deleted = 0;
     let mut stale_search = false;
@@ -342,7 +373,9 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
         },
         progress_rx,
         on_close: None,
-        error_action: Some(Box::new(|| { let _ = action_open_config(); })),
+        error_action: Some(Box::new(|| {
+            let _ = action_open_config();
+        })),
         sender: result_sender.clone(),
         cancel_token: Some(cancel_token),
     }) {
@@ -368,7 +401,12 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
                 text: text.to_string(),
             });
         };
-        match run_export(&account_name, Some(&on_progress), Some(&on_status), cancel_token_worker) {
+        match run_export(
+            &account_name,
+            Some(&on_progress),
+            Some(&on_status),
+            cancel_token_worker,
+        ) {
             Ok((summary, decisions)) => {
                 let _ = progress_tx.send(ProgressUpdate::Done { summary });
                 // D6: files stay in staging. Open the route review window so the
@@ -404,7 +442,8 @@ fn run_export(
 ) -> Result<(String, Vec<(PathBuf, RouteDecision)>)> {
     dotenvy::from_path(config::env_file_path()).ok();
 
-    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let config =
+        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
 
     let account = config
         .get_account(account_name)
@@ -420,7 +459,9 @@ fn run_export(
     }
 
     let mut exporter = ImapExporter::new(account.clone(), false);
-    exporter.connect().context("Failed to connect to IMAP server")?;
+    exporter
+        .connect()
+        .context("Failed to connect to IMAP server")?;
 
     let (results, decisions) = exporter
         .export_account(on_progress, on_status, Some(cancel_token.as_ref()))
@@ -435,7 +476,11 @@ fn run_export(
     let total_skipped: usize = results.values().map(|s| s.skipped).sum();
     let total_errors: usize = results.values().map(|s| s.errors).sum();
 
-    let prefix = if cancelled { "Export annulé" } else { "Export terminé" };
+    let prefix = if cancelled {
+        "Export annulé"
+    } else {
+        "Export terminé"
+    };
     Ok((
         format!(
             "{} — {} exportés, {} ignorés, {} erreurs",
@@ -460,9 +505,9 @@ pub fn action_resume_sort(account_name: String, result_sender: Sender<ActionResu
             ));
         }
         Ok(decisions) => {
-            if let Err(e) = crate::tray::send_command(
-                crate::tray::AppCommand::OpenRouteReview(decisions),
-            ) {
+            if let Err(e) =
+                crate::tray::send_command(crate::tray::AppCommand::OpenRouteReview(decisions))
+            {
                 let _ = result_sender.send(ActionResult::Error(format!(
                     "Ouverture de la revue : {:#}",
                     e
@@ -470,10 +515,7 @@ pub fn action_resume_sort(account_name: String, result_sender: Sender<ActionResu
             }
         }
         Err(e) => {
-            let _ = result_sender.send(ActionResult::Error(format!(
-                "Reprendre le tri : {:#}",
-                e
-            )));
+            let _ = result_sender.send(ActionResult::Error(format!("Reprendre le tri : {:#}", e)));
         }
     });
 }
@@ -481,7 +523,10 @@ pub fn action_resume_sort(account_name: String, result_sender: Sender<ActionResu
 /// Directories created by the export pipeline that must never be treated as
 /// staged emails to re-sort: the delete bin, the failed-dump, and contacts.
 fn is_excluded_staging_dir(name: &std::ffi::OsStr) -> bool {
-    matches!(name.to_str(), Some("_deleted") | Some("_failed") | Some("contacts"))
+    matches!(
+        name.to_str(),
+        Some("_deleted") | Some("_failed") | Some("contacts")
+    )
 }
 
 /// Walk an account's `export_directory` and rebuild `(staging_path, RouteDecision)`
@@ -489,8 +534,8 @@ fn is_excluded_staging_dir(name: &std::ffi::OsStr) -> bool {
 fn scan_staged_decisions(account_name: &str) -> Result<Vec<(PathBuf, RouteDecision)>> {
     dotenvy::from_path(config::env_file_path()).ok();
 
-    let config = Config::load(&config::accounts_yaml_path())
-        .context("Failed to load configuration")?;
+    let config =
+        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
     let account = config
         .get_account(account_name)
         .context(format!("Account '{}' not found", account_name))?;
@@ -618,7 +663,9 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
         warning: None,
         progress_rx,
         on_close,
-        error_action: Some(Box::new(|| { let _ = action_open_config(); })),
+        error_action: Some(Box::new(|| {
+            let _ = action_open_config();
+        })),
         sender: sender_for_error.clone(),
         cancel_token: None,
     }) {
@@ -764,10 +811,7 @@ fn set_notes_dir(base_dir: &std::path::Path) -> Result<String> {
 
 /// Open the documentation (README.md) in the default viewer.
 pub fn action_open_documentation() -> Result<()> {
-    let readme_paths = [
-        "README.md",
-        "docs/README.md",
-    ];
+    let readme_paths = ["README.md", "docs/README.md"];
 
     for path in &readme_paths {
         let readme_path = PathBuf::from(path);
@@ -826,7 +870,9 @@ pub fn action_fix_html(account_name: String, result_sender: Sender<ActionResult>
         warning: None,
         progress_rx,
         on_close: None,
-        error_action: Some(Box::new(|| { let _ = action_open_config(); })),
+        error_action: Some(Box::new(|| {
+            let _ = action_open_config();
+        })),
         sender: result_sender.clone(),
         cancel_token: None,
     }) {
@@ -866,7 +912,8 @@ fn run_fix_html(
 ) -> Result<String> {
     dotenvy::from_path(config::env_file_path()).ok();
 
-    let config = Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let config =
+        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
 
     let account = config
         .get_account(account_name)
@@ -894,5 +941,9 @@ pub fn get_account_names() -> Result<Vec<String>> {
     }
 
     let config = Config::load(&config_path)?;
-    Ok(config.list_accounts().into_iter().map(String::from).collect())
+    Ok(config
+        .list_accounts()
+        .into_iter()
+        .map(String::from)
+        .collect())
 }

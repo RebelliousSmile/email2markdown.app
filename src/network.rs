@@ -1,8 +1,8 @@
 // [4] Module pour la gestion reseau avec retry automatique
 // [5] Timeout configurable
 
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 /// Configuration for network operations
 #[derive(Debug, Clone)]

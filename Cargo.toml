@@ -2,6 +2,7 @@
 name = "email-to-markdown"
 version = "0.16.0"
 edition = "2021"
+exclude = [".pytest_cache", "packaging/windows/shell-extension/target"]
 authors = ["FX Guillois"]
 repository = "https://github.com/fxguillois/email-to-markdown"
 description = "Export emails from IMAP accounts to Markdown files with YAML frontmatter"

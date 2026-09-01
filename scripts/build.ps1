@@ -7,6 +7,8 @@ param(
     [switch]$Help
 )
 
+$ErrorActionPreference = "Stop"
+
 if ($Help) {
     Write-Host @"
 Usage: .\scripts\build.ps1 [options]
@@ -75,6 +77,9 @@ function Find-MSVCLinker {
 
 # Verifier si le link.exe actuel est le bon
 function Test-LinkExe {
+    if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
+        return $false
+    }
     $linkOutput = & link.exe 2>&1
     # Le link.exe MSVC affiche "Microsoft (R) Incremental Linker"
     return $linkOutput -match "Microsoft.*Linker"
@@ -141,6 +146,32 @@ if (-not (Test-Path $cargoPath)) {
 & $cargoPath @cargoArgs
 
 if ($LASTEXITCODE -eq 0) {
+    if ($Features -match "(^|,)\s*tray\s*(,|$)") {
+        $extensionManifest = Join-Path $PSScriptRoot "..\packaging\windows\shell-extension\Cargo.toml"
+        $extensionArgs = @("build", "--manifest-path", $extensionManifest)
+        if ($Release) {
+            $extensionArgs += "--release"
+        }
+        & $cargoPath @extensionArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Echec de la compilation de l'extension Explorer Windows 11" -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+
+        $extensionMode = if ($Release) { "release" } else { "debug" }
+        $extensionSource = Join-Path $PSScriptRoot "..\packaging\windows\shell-extension\target\$extensionMode\email_to_markdown_shell_extension.dll"
+        $extensionDestination = Join-Path $PSScriptRoot "..\target\$extensionMode\email-to-markdown-shell-extension-0.16.0.dll"
+        Copy-Item -LiteralPath $extensionSource -Destination $extensionDestination -Force
+        Write-Host "Extension Explorer: $extensionDestination" -ForegroundColor Cyan
+
+        $identityOutput = if ($Release) { "target\release" } else { "target\debug" }
+        & (Join-Path $PSScriptRoot "build-windows-identity.ps1") -OutputDir $identityOutput
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Echec de la construction du paquet d'identité Windows" -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+    }
+
     Write-Host ""
     Write-Host "Build reussi!" -ForegroundColor Green
 

@@ -45,7 +45,9 @@ fn shell_compatible_path(path: PathBuf) -> PathBuf {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn shell_compatible_path(path: PathBuf) -> PathBuf { path }
+fn shell_compatible_path(path: PathBuf) -> PathBuf {
+    path
+}
 
 pub fn install() -> Result<Vec<ArtifactStatus>> {
     if !cfg!(feature = "tray") {
@@ -73,7 +75,10 @@ pub fn local_path_from_uri(value: &str) -> Result<PathBuf> {
     if parsed.scheme() != "file" {
         anyhow::bail!("only local file:// URIs are accepted");
     }
-    if parsed.host_str().is_some_and(|host| !host.is_empty() && host != "localhost") {
+    if parsed
+        .host_str()
+        .is_some_and(|host| !host.is_empty() && host != "localhost")
+    {
         anyhow::bail!("remote file URI authorities are not accepted");
     }
     parsed
@@ -103,32 +108,53 @@ pub fn format_status(statuses: &[ArtifactStatus]) -> String {
 #[cfg(feature = "tray")]
 pub fn repair_if_installed() -> Result<()> {
     let states = status()?;
-    if states.iter().any(|artifact| !matches!(artifact.state, ArtifactState::Missing)) {
+    if states
+        .iter()
+        .any(|artifact| !matches!(artifact.state, ArtifactState::Missing))
+    {
         install()?;
     }
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn platform_install(binary: &Path) -> Result<Vec<ArtifactStatus>> { windows::install(binary) }
+fn platform_install(binary: &Path) -> Result<Vec<ArtifactStatus>> {
+    windows::install(binary)
+}
 #[cfg(target_os = "windows")]
-fn platform_status(binary: &Path) -> Result<Vec<ArtifactStatus>> { windows::status(binary) }
+fn platform_status(binary: &Path) -> Result<Vec<ArtifactStatus>> {
+    windows::status(binary)
+}
 #[cfg(target_os = "windows")]
-fn platform_uninstall() -> Result<()> { windows::uninstall() }
+fn platform_uninstall() -> Result<()> {
+    windows::uninstall()
+}
 
 #[cfg(target_os = "macos")]
-fn platform_install(binary: &Path) -> Result<Vec<ArtifactStatus>> { macos::install(binary) }
+fn platform_install(binary: &Path) -> Result<Vec<ArtifactStatus>> {
+    macos::install(binary)
+}
 #[cfg(target_os = "macos")]
-fn platform_status(binary: &Path) -> Result<Vec<ArtifactStatus>> { macos::status(binary) }
+fn platform_status(binary: &Path) -> Result<Vec<ArtifactStatus>> {
+    macos::status(binary)
+}
 #[cfg(target_os = "macos")]
-fn platform_uninstall() -> Result<()> { macos::uninstall() }
+fn platform_uninstall() -> Result<()> {
+    macos::uninstall()
+}
 
 #[cfg(target_os = "linux")]
-fn platform_install(binary: &Path) -> Result<Vec<ArtifactStatus>> { linux::install(binary) }
+fn platform_install(binary: &Path) -> Result<Vec<ArtifactStatus>> {
+    linux::install(binary)
+}
 #[cfg(target_os = "linux")]
-fn platform_status(binary: &Path) -> Result<Vec<ArtifactStatus>> { linux::status(binary) }
+fn platform_status(binary: &Path) -> Result<Vec<ArtifactStatus>> {
+    linux::status(binary)
+}
 #[cfg(target_os = "linux")]
-fn platform_uninstall() -> Result<()> { linux::uninstall() }
+fn platform_uninstall() -> Result<()> {
+    linux::uninstall()
+}
 
 #[cfg(test)]
 mod tests {

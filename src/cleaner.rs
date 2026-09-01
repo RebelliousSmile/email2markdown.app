@@ -106,10 +106,7 @@ pub fn trim_trailing(s: &str) -> String {
         return String::new();
     }
     let had_trailing_newline = s.ends_with('\n');
-    let mut out: Vec<String> = s
-        .split('\n')
-        .map(|l| l.trim_end().to_string())
-        .collect();
+    let mut out: Vec<String> = s.split('\n').map(|l| l.trim_end().to_string()).collect();
     // `split('\n')` on a string ending with '\n' produces a trailing empty
     // slot. Drop it so we can re-append exactly one newline.
     if had_trailing_newline {
@@ -243,8 +240,8 @@ pub fn strip_invisible_chars(s: &str) -> String {
 /// matching second byte is not flagged.
 pub fn detect_mojibake(s: &str) -> bool {
     const PATTERNS: &[&str] = &[
-        "Ã©", "Ã¨", "Ã ", "Ã¢", "Ã´", "Ã»", "Ãª", "Ã®", "Ã¯", "Ã§", "Ã±", "Ã¼",
-        "Â°", "Â«", "Â»", "Â ", "Â£", "Â§",
+        "Ã©", "Ã¨", "Ã ", "Ã¢", "Ã´", "Ã»", "Ãª", "Ã®", "Ã¯", "Ã§", "Ã±", "Ã¼", "Â°", "Â«", "Â»",
+        "Â ", "Â£", "Â§",
     ];
     PATTERNS.iter().any(|p| s.contains(p))
 }
@@ -258,9 +255,28 @@ fn is_url_safe_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
             c,
-            '.' | '_' | '~' | ':' | '/' | '?' | '#' | '[' | ']'
-            | '@' | '!' | '$' | '&' | '\'' | '(' | ')' | '*'
-            | '+' | ',' | ';' | '=' | '%' | '-'
+            '.' | '_'
+                | '~'
+                | ':'
+                | '/'
+                | '?'
+                | '#'
+                | '['
+                | ']'
+                | '@'
+                | '!'
+                | '$'
+                | '&'
+                | '\''
+                | '('
+                | ')'
+                | '*'
+                | '+'
+                | ','
+                | ';'
+                | '='
+                | '%'
+                | '-'
         )
 }
 
@@ -284,10 +300,8 @@ pub fn reattach_urls(s: &str) -> String {
     // class mirrors `is_url_safe_char` so markdown-link tails ending in `)`
     // still match.
     static DANGLING_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?:https?://|www\.)[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*$",
-        )
-        .expect("static regex")
+        Regex::new(r"(?:https?://|www\.)[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*$")
+            .expect("static regex")
     });
 
     if s.is_empty() {
@@ -319,9 +333,7 @@ pub fn reattach_urls(s: &str) -> String {
 
             let should_join = match next_first {
                 Some(n) => {
-                    is_url_safe_char(n)
-                        && !next_starts_with_ws
-                        && DANGLING_URL_RE.is_match(prev)
+                    is_url_safe_char(n) && !next_starts_with_ws && DANGLING_URL_RE.is_match(prev)
                 }
                 None => false,
             };
@@ -561,7 +573,10 @@ fn strip_utm_params(url: &Url) -> String {
         new_url.set_query(None);
     } else {
         // Clear and re-extend to rewrite the query string from the kept pairs.
-        new_url.query_pairs_mut().clear().extend_pairs(kept.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        new_url
+            .query_pairs_mut()
+            .clear()
+            .extend_pairs(kept.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     }
     new_url.into()
 }
@@ -830,10 +845,7 @@ mod tests {
     #[test]
     fn test_decontaminate_ref_urls_strips_utm() {
         let input = "[1]: https://example.com/?utm_source=x";
-        assert_eq!(
-            decontaminate_ref_urls(input),
-            "[1]: https://example.com/"
-        );
+        assert_eq!(decontaminate_ref_urls(input), "[1]: https://example.com/");
     }
 
     #[test]
@@ -1218,10 +1230,22 @@ mod tests {
         assert_eq!(body, "Body content here.");
         let map = links.expect("expected social_links to be populated");
         assert_eq!(map.len(), 4);
-        assert_eq!(map.get("instagram").map(|s| s.as_str()), Some("https://www.instagram.com/foo"));
-        assert_eq!(map.get("facebook").map(|s| s.as_str()), Some("https://www.facebook.com/foo"));
-        assert_eq!(map.get("tiktok").map(|s| s.as_str()), Some("https://www.tiktok.com/@foo"));
-        assert_eq!(map.get("linkedin").map(|s| s.as_str()), Some("https://www.linkedin.com/in/foo"));
+        assert_eq!(
+            map.get("instagram").map(|s| s.as_str()),
+            Some("https://www.instagram.com/foo")
+        );
+        assert_eq!(
+            map.get("facebook").map(|s| s.as_str()),
+            Some("https://www.facebook.com/foo")
+        );
+        assert_eq!(
+            map.get("tiktok").map(|s| s.as_str()),
+            Some("https://www.tiktok.com/@foo")
+        );
+        assert_eq!(
+            map.get("linkedin").map(|s| s.as_str()),
+            Some("https://www.linkedin.com/in/foo")
+        );
     }
 
     #[test]
@@ -1280,8 +1304,14 @@ More text after.";
         let (body, links) = extract_social_footer(input);
         assert_eq!(body, "Body.");
         let map = links.expect("expected social_links");
-        assert_eq!(map.get("instagram").map(|s| s.as_str()), Some("https://www.instagram.com/foo"));
-        assert_eq!(map.get("facebook").map(|s| s.as_str()), Some("https://www.facebook.com/foo"));
+        assert_eq!(
+            map.get("instagram").map(|s| s.as_str()),
+            Some("https://www.instagram.com/foo")
+        );
+        assert_eq!(
+            map.get("facebook").map(|s| s.as_str()),
+            Some("https://www.facebook.com/foo")
+        );
     }
 
     #[test]
@@ -1293,7 +1323,10 @@ More text after.";
         assert_eq!(body, "Body.");
         let map = links.expect("expected social_links");
         assert_eq!(map.get("x").map(|s| s.as_str()), Some("https://x.com/foo"));
-        assert_eq!(map.get("youtube").map(|s| s.as_str()), Some("https://www.youtube.com/foo"));
+        assert_eq!(
+            map.get("youtube").map(|s| s.as_str()),
+            Some("https://www.youtube.com/foo")
+        );
     }
 
     #[test]
@@ -1365,10 +1398,7 @@ More text after.";
     fn test_unwrap_lines_preserves_fenced_code_block() {
         let input = "```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n";
         let out = unwrap_lines(input);
-        assert_eq!(
-            out,
-            "```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n"
-        );
+        assert_eq!(out, "```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n");
     }
 
     #[test]
@@ -1549,14 +1579,16 @@ More text after.";
 
     #[test]
     fn test_decontaminate_unwraps_generic_click_tracker() {
-        let input = "https://click.example.com/ls/click?upn=foo&url=https%3A%2F%2Fdestination.com%2F";
+        let input =
+            "https://click.example.com/ls/click?upn=foo&url=https%3A%2F%2Fdestination.com%2F";
         let out = decontaminate_trackers(input);
         assert_eq!(out, "https://destination.com/");
     }
 
     #[test]
     fn test_decontaminate_unwraps_sendgrid() {
-        let input = "https://u123.sendgrid.net/wf/click?url=https%3A%2F%2Ftarget.example.com%2F&upn=foo";
+        let input =
+            "https://u123.sendgrid.net/wf/click?url=https%3A%2F%2Ftarget.example.com%2F&upn=foo";
         let out = decontaminate_trackers(input);
         assert_eq!(out, "https://target.example.com/");
     }
@@ -1620,7 +1652,13 @@ More text after.";
 [FB](https://facebook.com/foo)";
         let (_body, links) = extract_social_footer(input);
         let map = links.expect("expected social_links");
-        assert_eq!(map.get("twitter").map(|s| s.as_str()), Some("https://twitter.com/foo"));
-        assert_eq!(map.get("facebook").map(|s| s.as_str()), Some("https://facebook.com/foo"));
+        assert_eq!(
+            map.get("twitter").map(|s| s.as_str()),
+            Some("https://twitter.com/foo")
+        );
+        assert_eq!(
+            map.get("facebook").map(|s| s.as_str()),
+            Some("https://facebook.com/foo")
+        );
     }
 }

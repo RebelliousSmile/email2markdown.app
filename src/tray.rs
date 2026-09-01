@@ -18,7 +18,7 @@ use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use tao::window::{Window, WindowBuilder, WindowId};
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu, accelerator::Accelerator},
+    menu::{accelerator::Accelerator, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     TrayIcon, TrayIconBuilder,
 };
 use wry::{WebView, WebViewBuilder};
@@ -112,6 +112,11 @@ pub enum AppCommand {
         window_id: WindowId,
         json: String,
     },
+    /// The contextual destination editor saved its configuration. Revalidate
+    /// the clicked directory and continue directly to the email search.
+    ContextualDestinationSaved {
+        window_id: WindowId,
+    },
 }
 
 /// Per-progress-window state. Fields declared in drop order:
@@ -169,6 +174,20 @@ struct ContextualState {
     webview: WebView,
     #[allow(dead_code)]
     window: Window,
+}
+
+enum ContextualStandaloneState {
+    DestinationSetup(DestGuiState),
+    Export(ContextualState),
+}
+
+impl ContextualStandaloneState {
+    fn window_id(&self) -> WindowId {
+        match self {
+            Self::DestinationSetup(state) => state.window.id(),
+            Self::Export(state) => state.window.id(),
+        }
+    }
 }
 
 enum WState {
@@ -275,7 +294,13 @@ pub fn run_tray() -> Result<()> {
                 error_action,
                 sender,
                 cancel_token,
-            }) => match build_progress_window(target, &proxy, &action_name, warning.as_deref(), cancel_token) {
+            }) => match build_progress_window(
+                target,
+                &proxy,
+                &action_name,
+                warning.as_deref(),
+                cancel_token,
+            ) {
                 Ok((window, webview, window_id)) => {
                     windows.insert(
                         window_id,
@@ -290,17 +315,16 @@ pub fn run_tray() -> Result<()> {
                     thread::spawn(move || {
                         for update in progress_rx {
                             if matches!(update, ProgressUpdate::AutoClose) {
-                                let _ = bridge_proxy.send_event(AppCommand::CloseWindow { window_id });
+                                let _ =
+                                    bridge_proxy.send_event(AppCommand::CloseWindow { window_id });
                                 break;
                             }
                             let terminal = matches!(
                                 update,
                                 ProgressUpdate::Done { .. } | ProgressUpdate::Error { .. }
                             );
-                            let _ = bridge_proxy.send_event(AppCommand::ProgressUpdate {
-                                window_id,
-                                update,
-                            });
+                            let _ = bridge_proxy
+                                .send_event(AppCommand::ProgressUpdate { window_id, update });
                             if terminal {
                                 break;
                             }
@@ -323,7 +347,8 @@ pub fn run_tray() -> Result<()> {
                 } else {
                     match build_config_window(target, &proxy, sender.clone()) {
                         Ok((window, webview, window_id)) => {
-                            windows.insert(window_id, WState::Config(ConfigState { webview, window }));
+                            windows
+                                .insert(window_id, WState::Config(ConfigState { webview, window }));
                         }
                         Err(e) => {
                             CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
@@ -344,7 +369,8 @@ pub fn run_tray() -> Result<()> {
                 } else {
                     match build_update_window(target, &proxy) {
                         Ok((window, webview, window_id)) => {
-                            windows.insert(window_id, WState::Update(UpdateState { webview, window }));
+                            windows
+                                .insert(window_id, WState::Update(UpdateState { webview, window }));
                         }
                         Err(e) => {
                             UPDATE_WINDOW_OPEN.store(false, Ordering::Release);
@@ -376,23 +402,33 @@ pub fn run_tray() -> Result<()> {
                     let _ = state.webview.evaluate_script(&js);
                 }
             }
-            Event::UserEvent(AppCommand::PersistRoutingRule { window_id, dest_path, attr_kind, attr_value }) => {
+            Event::UserEvent(AppCommand::PersistRoutingRule {
+                window_id,
+                dest_path,
+                attr_kind,
+                attr_value,
+            }) => {
                 // Resolve destinations.yaml path from settings (shared resolver).
                 let dest_file = crate::route::destinations_path();
 
                 // Reject subject/account; only domain/from are surfaced in the UI.
                 let rule_opt = match attr_kind.as_str() {
                     "domain" => Some(crate::route::MatchRule::Domain(attr_value.clone())),
-                    "from"   => Some(crate::route::MatchRule::From(attr_value.clone())),
-                    _        => None,
+                    "from" => Some(crate::route::MatchRule::From(attr_value.clone())),
+                    _ => None,
                 };
 
                 let Some(rule) = rule_opt else {
-                    let msg = format!("unsupported attr_kind {:?} — only domain/from allowed", attr_kind);
+                    let msg = format!(
+                        "unsupported attr_kind {:?} — only domain/from allowed",
+                        attr_kind
+                    );
                     if let (Ok(js_str), Some(WState::Route(state))) =
                         (serde_json::to_string(&msg), windows.get(&window_id))
                     {
-                        let _ = state.webview.evaluate_script(&format!("route_review_error({})", js_str));
+                        let _ = state
+                            .webview
+                            .evaluate_script(&format!("route_review_error({})", js_str));
                     }
                     return;
                 };
@@ -403,7 +439,9 @@ pub fn run_tray() -> Result<()> {
                         if let (Ok(js_str), Some(WState::Route(state))) =
                             (serde_json::to_string(&msg), windows.get(&window_id))
                         {
-                            let _ = state.webview.evaluate_script(&format!("route_review_error({})", js_str));
+                            let _ = state
+                                .webview
+                                .evaluate_script(&format!("route_review_error({})", js_str));
                         }
                     }
                     Ok(()) => {
@@ -416,9 +454,9 @@ pub fn run_tray() -> Result<()> {
                             (serde_json::to_string(&known_paths), windows.get(&window_id))
                         {
                             let escaped = escape_json_for_script(&json);
-                            let _ = state.webview.evaluate_script(
-                                &format!("route_review_set_tree({})", escaped),
-                            );
+                            let _ = state
+                                .webview
+                                .evaluate_script(&format!("route_review_set_tree({})", escaped));
                         }
                     }
                 }
@@ -432,7 +470,8 @@ pub fn run_tray() -> Result<()> {
                 } else {
                     match build_route_window(target, &proxy, decisions) {
                         Ok((window, webview, window_id)) => {
-                            windows.insert(window_id, WState::Route(RouteState { webview, window }));
+                            windows
+                                .insert(window_id, WState::Route(RouteState { webview, window }));
                         }
                         Err(e) => {
                             ROUTE_REVIEW_WINDOW_OPEN.store(false, Ordering::Release);
@@ -448,11 +487,16 @@ pub fn run_tray() -> Result<()> {
                 {
                     // Already open — ignore.
                 } else {
-                    match build_dest_gui_window(target, &proxy, &dest_file) {
+                    match build_dest_gui_window(target, &proxy, &dest_file, None, false) {
                         Ok((window, webview, window_id, cfg)) => {
                             windows.insert(
                                 window_id,
-                                WState::DestGui(DestGuiState { cfg, dest_file, webview, window }),
+                                WState::DestGui(DestGuiState {
+                                    cfg,
+                                    dest_file,
+                                    webview,
+                                    window,
+                                }),
                             );
                         }
                         Err(e) => {
@@ -468,6 +512,13 @@ pub fn run_tray() -> Result<()> {
                         let js = format!("window_msg({})", js_str);
                         let _ = state.webview.evaluate_script(&js);
                     }
+                }
+            }
+            Event::UserEvent(AppCommand::ContextualDestinationSaved { window_id }) => {
+                // This command is only emitted by the standalone contextual
+                // editor. Keep the regular tray loop defensive if received.
+                if let Some(WState::DestGui(_)) = windows.remove(&window_id) {
+                    DEST_GUI_WINDOW_OPEN.store(false, Ordering::Release);
                 }
             }
             Event::UserEvent(AppCommand::ActionRequested { window_id }) => {
@@ -527,22 +578,59 @@ pub fn run_tray() -> Result<()> {
 
 /// Run one contextual export window as a standalone process. This is the entry
 /// point used by file-manager actions; closing the window exits the process.
+fn contextual_launch_error_message(target_path: &Path, error: &anyhow::Error) -> String {
+    let detail = format!("{error:#}");
+    let guidance = if detail.contains("no usable address search rule") {
+        "Aucune règle d’expéditeur ou de destinataire n’est définie pour ce dossier.\n\
+         Ouvrez « Configurer les destinations » dans Email to Markdown, puis ajoutez au moins \
+         une règle correspondant, expéditeur ou domaine."
+    } else {
+        "Vérifiez la configuration des comptes et des destinations dans Email to Markdown."
+    };
+
+    format!(
+        "Impossible de préparer l’export des emails.\n\nDossier : {}\n\n{}\n\nDétail technique : {}",
+        target_path.display(),
+        guidance,
+        detail
+    )
+}
+
 pub fn run_contextual(target_path: PathBuf) -> Result<()> {
-    let launch = tray_actions::prepare_contextual_launch(&target_path)?;
+    let (initial_launch, setup_path) = match tray_actions::prepare_contextual_launch(&target_path) {
+        Ok(launch) => (Some(launch), None),
+        Err(error) => {
+            if let Some(crate::route::ContextualDestinationError::MissingAddressRule { path }) =
+                error.downcast_ref::<crate::route::ContextualDestinationError>()
+            {
+                (None, Some(path.clone()))
+            } else {
+                let message = contextual_launch_error_message(&target_path, &error);
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Error)
+                    .set_title("Export contextuel impossible")
+                    .set_description(&message)
+                    .set_buttons(rfd::MessageButtons::Ok)
+                    .show();
+                return Ok(());
+            }
+        }
+    };
     let event_loop = EventLoopBuilder::<AppCommand>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     APP_PROXY
         .set(proxy.clone())
         .map_err(|_| anyhow::anyhow!("APP_PROXY already initialised"))?;
-    let mut state: Option<ContextualState> = None;
+    let mut state: Option<ContextualStandaloneState> = None;
 
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
-                match build_contextual_window(target, &proxy, &launch) {
+                if let Some(launch) = initial_launch.as_ref() {
+                    match build_contextual_window(target, &proxy, launch) {
                     Ok((window, webview, window_id)) => {
-                        state = Some(ContextualState {
+                        state = Some(ContextualStandaloneState::Export(ContextualState {
                             launch: launch.clone(),
                             account: None,
                             candidates: Vec::new(),
@@ -550,17 +638,36 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                             busy: false,
                             webview,
                             window,
-                        });
+                        }));
                         let _ = window_id;
                     }
                     Err(error) => {
                         eprintln!("Fenêtre contextuelle : {error:#}");
                         *control_flow = ControlFlow::Exit;
                     }
+                    }
+                } else if let Some(path) = setup_path.as_deref() {
+                    let dest_file = crate::route::destinations_path();
+                    match build_dest_gui_window(target, &proxy, &dest_file, Some(path), true) {
+                        Ok((window, webview, _window_id, cfg)) => {
+                            state = Some(ContextualStandaloneState::DestinationSetup(DestGuiState {
+                                cfg,
+                                dest_file,
+                                webview,
+                                window,
+                            }));
+                        }
+                        Err(error) => {
+                            eprintln!("Fenêtre de configuration contextuelle : {error:#}");
+                            *control_flow = ControlFlow::Exit;
+                        }
+                    }
                 }
             }
             Event::UserEvent(AppCommand::ContextualSearchRequested { window_id, account }) => {
-                let Some(current) = state.as_mut() else { return; };
+                let Some(ContextualStandaloneState::Export(current)) = state.as_mut() else {
+                    return;
+                };
                 if current.window.id() != window_id || current.busy {
                     return;
                 }
@@ -580,9 +687,16 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                     });
                 });
             }
-            Event::UserEvent(AppCommand::ContextualSearchFinished { window_id, account, result }) => {
-                let Some(current) = state.as_mut() else { return; };
-                if current.window.id() != window_id || current.account.as_deref() != Some(&account) {
+            Event::UserEvent(AppCommand::ContextualSearchFinished {
+                window_id,
+                account,
+                result,
+            }) => {
+                let Some(ContextualStandaloneState::Export(current)) = state.as_mut() else {
+                    return;
+                };
+                if current.window.id() != window_id || current.account.as_deref() != Some(&account)
+                {
                     return;
                 }
                 current.busy = false;
@@ -604,12 +718,18 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                 }
             }
             Event::UserEvent(AppCommand::ContextualConvertRequested { window_id, keys }) => {
-                let Some(current) = state.as_mut() else { return; };
+                let Some(ContextualStandaloneState::Export(current)) = state.as_mut() else {
+                    return;
+                };
                 if current.window.id() != window_id || current.busy || keys.is_empty() {
                     return;
                 }
                 let Some(account) = current.account.clone() else {
-                    contextual_eval_error(&current.webview, "conversion", "Choisissez une boîte aux lettres");
+                    contextual_eval_error(
+                        &current.webview,
+                        "conversion",
+                        "Choisissez une boîte aux lettres",
+                    );
                     return;
                 };
                 let selected: Vec<_> = current
@@ -619,24 +739,31 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                     .cloned()
                     .collect();
                 if selected.is_empty() {
-                    contextual_eval_error(&current.webview, "conversion", "La sélection est vide ou périmée");
+                    contextual_eval_error(
+                        &current.webview,
+                        "conversion",
+                        "La sélection est vide ou périmée",
+                    );
                     return;
                 }
                 current.busy = true;
                 let target_path = current.launch.target.clone();
                 let worker_proxy = proxy.clone();
                 thread::spawn(move || {
-                    let result = tray_actions::run_contextual_batch(&target_path, &account, &selected)
-                        .map_err(|error| format!("{error:#}"));
-                    let _ = worker_proxy.send_event(AppCommand::ContextualConvertFinished {
-                        window_id,
-                        result,
-                    });
+                    let result =
+                        tray_actions::run_contextual_batch(&target_path, &account, &selected)
+                            .map_err(|error| format!("{error:#}"));
+                    let _ = worker_proxy
+                        .send_event(AppCommand::ContextualConvertFinished { window_id, result });
                 });
             }
             Event::UserEvent(AppCommand::ContextualConvertFinished { window_id, result }) => {
-                let Some(current) = state.as_mut() else { return; };
-                if current.window.id() != window_id { return; }
+                let Some(ContextualStandaloneState::Export(current)) = state.as_mut() else {
+                    return;
+                };
+                if current.window.id() != window_id {
+                    return;
+                }
                 current.busy = false;
                 match result {
                     Ok(summary) if summary.complete() => *control_flow = ControlFlow::Exit,
@@ -653,11 +780,18 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                 }
             }
             Event::UserEvent(AppCommand::ContextualRetryDeletionRequested { window_id }) => {
-                let Some(current) = state.as_mut() else { return; };
-                if current.window.id() != window_id || current.busy || current.retry_deletion.is_empty() {
+                let Some(ContextualStandaloneState::Export(current)) = state.as_mut() else {
+                    return;
+                };
+                if current.window.id() != window_id
+                    || current.busy
+                    || current.retry_deletion.is_empty()
+                {
                     return;
                 }
-                let Some(account) = current.account.clone() else { return; };
+                let Some(account) = current.account.clone() else {
+                    return;
+                };
                 current.busy = true;
                 let requests = current.retry_deletion.clone();
                 let worker_proxy = proxy.clone();
@@ -671,8 +805,12 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                 });
             }
             Event::UserEvent(AppCommand::ContextualRetryDeletionFinished { window_id, result }) => {
-                let Some(current) = state.as_mut() else { return; };
-                if current.window.id() != window_id { return; }
+                let Some(ContextualStandaloneState::Export(current)) = state.as_mut() else {
+                    return;
+                };
+                if current.window.id() != window_id {
+                    return;
+                }
                 current.busy = false;
                 match result {
                     Ok(summary) if summary.complete() => *control_flow = ControlFlow::Exit,
@@ -688,17 +826,82 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                     Err(error) => contextual_eval_error(&current.webview, "deletion", &error),
                 }
             }
+            Event::UserEvent(AppCommand::PushDestState { window_id, json }) => {
+                if let Some(ContextualStandaloneState::DestinationSetup(current)) = state.as_ref() {
+                    if current.window.id() == window_id {
+                        if let Ok(js_str) = serde_json::to_string(&json) {
+                            let _ = current
+                                .webview
+                                .evaluate_script(&format!("window_msg({js_str})"));
+                        }
+                    }
+                }
+            }
+            Event::UserEvent(AppCommand::ContextualDestinationSaved { window_id }) => {
+                if state.as_ref().map(ContextualStandaloneState::window_id) != Some(window_id) {
+                    return;
+                }
+                match tray_actions::prepare_contextual_launch(&target_path) {
+                    Ok(launch) => {
+                        state = None;
+                        match build_contextual_window(target, &proxy, &launch) {
+                            Ok((window, webview, _)) => {
+                                state = Some(ContextualStandaloneState::Export(ContextualState {
+                                    launch,
+                                    account: None,
+                                    candidates: Vec::new(),
+                                    retry_deletion: Vec::new(),
+                                    busy: false,
+                                    webview,
+                                    window,
+                                }));
+                            }
+                            Err(error) => {
+                                eprintln!("Fenêtre contextuelle : {error:#}");
+                                *control_flow = ControlFlow::Exit;
+                            }
+                        }
+                    }
+                    Err(error)
+                        if error
+                            .downcast_ref::<crate::route::ContextualDestinationError>()
+                            .is_some() =>
+                    {
+                        rfd::MessageDialog::new()
+                            .set_level(rfd::MessageLevel::Warning)
+                            .set_title("Une règle est nécessaire")
+                            .set_description(
+                                "Ajoutez au moins une règle « Correspondant », « Expéditeur » ou « Domaine » avant d’enregistrer.",
+                            )
+                            .set_buttons(rfd::MessageButtons::Ok)
+                            .show();
+                    }
+                    Err(error) => {
+                        let message = contextual_launch_error_message(&target_path, &error);
+                        rfd::MessageDialog::new()
+                            .set_level(rfd::MessageLevel::Error)
+                            .set_title("Export contextuel impossible")
+                            .set_description(&message)
+                            .set_buttons(rfd::MessageButtons::Ok)
+                            .show();
+                    }
+                }
+            }
             Event::UserEvent(AppCommand::ContextualOpenConfig) => {
                 let _ = open::that(config::accounts_yaml_path());
             }
             Event::UserEvent(AppCommand::CloseWindow { window_id }) => {
-                if state.as_ref().map(|current| current.window.id()) == Some(window_id) {
+                if state.as_ref().map(ContextualStandaloneState::window_id) == Some(window_id) {
                     state = None;
                     *control_flow = ControlFlow::Exit;
                 }
             }
-            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } => {
-                if state.as_ref().map(|current| current.window.id()) == Some(window_id) {
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                if state.as_ref().map(ContextualStandaloneState::window_id) == Some(window_id) {
                     state = None;
                     *control_flow = ControlFlow::Exit;
                 }
@@ -706,6 +909,24 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod contextual_launch_tests {
+    use super::contextual_launch_error_message;
+    use std::path::Path;
+
+    #[test]
+    fn launch_failure_message_names_the_directory_and_configuration_action() {
+        let message = contextual_launch_error_message(
+            Path::new(r"C:\Notes\Perso\Associations"),
+            &anyhow::anyhow!("destination has no usable address search rule: Perso/Associations"),
+        );
+
+        assert!(message.contains(r"C:\Notes\Perso\Associations"));
+        assert!(message.contains("Aucune règle d’expéditeur ou de destinataire"));
+        assert!(message.contains("Configurer les destinations"));
+    }
 }
 
 fn contextual_eval_error(webview: &WebView, kind: &str, message: &str) {
@@ -750,17 +971,28 @@ fn build_contextual_window(
             match message.action.as_str() {
                 "search" => {
                     if let Some(account) = message.account {
-                        let _ = proxy_ipc.send_event(AppCommand::ContextualSearchRequested { window_id, account });
+                        let _ = proxy_ipc.send_event(AppCommand::ContextualSearchRequested {
+                            window_id,
+                            account,
+                        });
                     }
                 }
                 "convert" => {
-                    let _ = proxy_ipc.send_event(AppCommand::ContextualConvertRequested { window_id, keys: message.keys });
+                    let _ = proxy_ipc.send_event(AppCommand::ContextualConvertRequested {
+                        window_id,
+                        keys: message.keys,
+                    });
                 }
                 "retry_deletion" => {
-                    let _ = proxy_ipc.send_event(AppCommand::ContextualRetryDeletionRequested { window_id });
+                    let _ = proxy_ipc
+                        .send_event(AppCommand::ContextualRetryDeletionRequested { window_id });
                 }
-                "open_config" => { let _ = proxy_ipc.send_event(AppCommand::ContextualOpenConfig); }
-                "cancel" => { let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id }); }
+                "open_config" => {
+                    let _ = proxy_ipc.send_event(AppCommand::ContextualOpenConfig);
+                }
+                "cancel" => {
+                    let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+                }
                 _ => {}
             }
         })
@@ -803,18 +1035,20 @@ fn build_progress_window(
     let proxy_ipc = proxy.clone();
     let webview = WebViewBuilder::new(&window)
         .with_html(html)
-        .with_ipc_handler(move |msg| {
-            match msg.body().as_str() {
-                "action" => { let _ = proxy_ipc.send_event(AppCommand::ActionRequested { window_id }); }
-                "close" => { let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id }); }
-                "cancel" => {
-                    if let Some(token) = &cancel_token {
-                        token.store(true, Ordering::Relaxed);
-                    }
-                    let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
-                }
-                _ => {}
+        .with_ipc_handler(move |msg| match msg.body().as_str() {
+            "action" => {
+                let _ = proxy_ipc.send_event(AppCommand::ActionRequested { window_id });
             }
+            "close" => {
+                let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+            }
+            "cancel" => {
+                if let Some(token) = &cancel_token {
+                    token.store(true, Ordering::Relaxed);
+                }
+                let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+            }
+            _ => {}
         })
         .build()
         .context("failed to create progress webview")?;
@@ -880,8 +1114,7 @@ fn build_config_window(
     let raw_accounts = config::load_raw_accounts(&accounts_path).unwrap_or_default();
 
     let html_template = include_str!("../assets/config_window.html");
-    let settings_json =
-        serde_json::to_string(&settings).context("failed to serialize settings")?;
+    let settings_json = serde_json::to_string(&settings).context("failed to serialize settings")?;
     let accounts_json =
         serde_json::to_string(&raw_accounts).context("failed to serialize accounts")?;
     let html = html_template
@@ -979,36 +1212,34 @@ fn build_update_window(
 
     let proxy_check = proxy.clone();
     let current_version = env!("CARGO_PKG_VERSION").to_string();
-    thread::spawn(move || {
-        match updater::check_update(&current_version) {
-            Ok(None) => {
-                let json = serde_json::json!({
-                    "type": "check_result",
-                    "current": current_version,
-                    "latest": serde_json::Value::Null
-                })
-                .to_string();
-                let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
-            }
-            Ok(Some(release)) => {
-                let json = serde_json::json!({
-                    "type": "check_result",
-                    "current": current_version,
-                    "latest": release.tag_name,
-                    "body": release.body,
-                    "asset_url": release.asset_url
-                })
-                .to_string();
-                let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
-            }
-            Err(e) => {
-                let json = serde_json::json!({
-                    "type": "msg",
-                    "text": format!("Erreur : {:#}", e)
-                })
-                .to_string();
-                let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
-            }
+    thread::spawn(move || match updater::check_update(&current_version) {
+        Ok(None) => {
+            let json = serde_json::json!({
+                "type": "check_result",
+                "current": current_version,
+                "latest": serde_json::Value::Null
+            })
+            .to_string();
+            let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
+        }
+        Ok(Some(release)) => {
+            let json = serde_json::json!({
+                "type": "check_result",
+                "current": current_version,
+                "latest": release.tag_name,
+                "body": release.body,
+                "asset_url": release.asset_url
+            })
+            .to_string();
+            let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
+        }
+        Err(e) => {
+            let json = serde_json::json!({
+                "type": "msg",
+                "text": format!("Erreur : {:#}", e)
+            })
+            .to_string();
+            let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
         }
     });
 
@@ -1028,10 +1259,10 @@ enum DestGuiIpcResult {
     Error(String),
     Suggestions(Vec<(String, usize)>),
     FolderSuggestions(Vec<String>),
+    Saved,
     Close,
     Noop,
 }
-
 
 fn state_json(cfg: &crate::destinations::DestinationsConfig) -> String {
     let json = serde_json::json!({ "type": "state", "destinations": cfg.destinations });
@@ -1054,13 +1285,16 @@ fn handle_dest_gui_ipc(
         "save" => {
             if let Err(e) = crate::destinations::save_yaml(dest_file, cfg) {
                 eprintln!("dest-gui: save failed: {:#}", e);
+                return DestGuiIpcResult::Error(format!("Enregistrement impossible : {e:#}"));
             }
-            DestGuiIpcResult::Close
+            DestGuiIpcResult::Saved
         }
         "cancel" => DestGuiIpcResult::Close,
         "init" => DestGuiIpcResult::StateChanged,
         "add_entry" => {
-            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
+            let Some(data) = msg.data else {
+                return DestGuiIpcResult::Noop;
+            };
             let path = match data["path"].as_str() {
                 Some(p) if !p.trim().is_empty() => p.trim().to_string(),
                 _ => return DestGuiIpcResult::Noop,
@@ -1069,7 +1303,11 @@ fn handle_dest_gui_ipc(
                 eprintln!("dest-gui: rejected invalid path {:?}", path);
                 return DestGuiIpcResult::Noop;
             }
-            if cfg.destinations.iter().any(|e| e.path.eq_ignore_ascii_case(&path)) {
+            if cfg
+                .destinations
+                .iter()
+                .any(|e| e.path.eq_ignore_ascii_case(&path))
+            {
                 return DestGuiIpcResult::StateChanged;
             }
             let note = data["note"]
@@ -1085,20 +1323,32 @@ fn handle_dest_gui_ipc(
             DestGuiIpcResult::StateChanged
         }
         "remove_entry" => {
-            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
-            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
+            let Some(data) = msg.data else {
+                return DestGuiIpcResult::Noop;
+            };
+            let Some(path) = data["path"].as_str() else {
+                return DestGuiIpcResult::Noop;
+            };
             crate::destinations::remove_entry(cfg, path);
             DestGuiIpcResult::StateChanged
         }
         "set_default" => {
-            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
-            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
+            let Some(data) = msg.data else {
+                return DestGuiIpcResult::Noop;
+            };
+            let Some(path) = data["path"].as_str() else {
+                return DestGuiIpcResult::Noop;
+            };
             crate::destinations::set_default(cfg, path);
             DestGuiIpcResult::StateChanged
         }
         "set_note" => {
-            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
-            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
+            let Some(data) = msg.data else {
+                return DestGuiIpcResult::Noop;
+            };
+            let Some(path) = data["path"].as_str() else {
+                return DestGuiIpcResult::Noop;
+            };
             let note = data["note"]
                 .as_str()
                 .filter(|s| !s.trim().is_empty())
@@ -1107,10 +1357,18 @@ fn handle_dest_gui_ipc(
             DestGuiIpcResult::StateChanged
         }
         "add_rule" => {
-            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
-            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
-            let Some(kind) = data["kind"].as_str() else { return DestGuiIpcResult::Noop };
-            let Some(raw_value) = data["value"].as_str() else { return DestGuiIpcResult::Noop };
+            let Some(data) = msg.data else {
+                return DestGuiIpcResult::Noop;
+            };
+            let Some(path) = data["path"].as_str() else {
+                return DestGuiIpcResult::Noop;
+            };
+            let Some(kind) = data["kind"].as_str() else {
+                return DestGuiIpcResult::Noop;
+            };
+            let Some(raw_value) = data["value"].as_str() else {
+                return DestGuiIpcResult::Noop;
+            };
             let value = raw_value.trim();
             if value.is_empty() {
                 return DestGuiIpcResult::Noop;
@@ -1133,9 +1391,15 @@ fn handle_dest_gui_ipc(
             DestGuiIpcResult::StateChanged
         }
         "remove_rule" => {
-            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
-            let Some(path) = data["path"].as_str() else { return DestGuiIpcResult::Noop };
-            let Some(rule_val) = data.get("rule") else { return DestGuiIpcResult::Noop };
+            let Some(data) = msg.data else {
+                return DestGuiIpcResult::Noop;
+            };
+            let Some(path) = data["path"].as_str() else {
+                return DestGuiIpcResult::Noop;
+            };
+            let Some(rule_val) = data.get("rule") else {
+                return DestGuiIpcResult::Noop;
+            };
             let Ok(rule) = serde_json::from_value::<DestinationRule>(rule_val.clone()) else {
                 return DestGuiIpcResult::Noop;
             };
@@ -1143,12 +1407,13 @@ fn handle_dest_gui_ipc(
             DestGuiIpcResult::StateChanged
         }
         "reorder" => {
-            let Some(data) = msg.data else { return DestGuiIpcResult::Noop };
-            let Some(order_arr) = data["order"].as_array() else { return DestGuiIpcResult::Noop };
-            let order: Vec<&str> = order_arr
-                .iter()
-                .filter_map(|v| v.as_str())
-                .collect();
+            let Some(data) = msg.data else {
+                return DestGuiIpcResult::Noop;
+            };
+            let Some(order_arr) = data["order"].as_array() else {
+                return DestGuiIpcResult::Noop;
+            };
+            let order: Vec<&str> = order_arr.iter().filter_map(|v| v.as_str()).collect();
             crate::destinations::reorder_destinations(cfg, &order);
             DestGuiIpcResult::StateChanged
         }
@@ -1157,7 +1422,9 @@ fn handle_dest_gui_ipc(
                 return DestGuiIpcResult::Noop;
             };
             for item in arr {
-                let Some(path) = item["path"].as_str() else { continue };
+                let Some(path) = item["path"].as_str() else {
+                    continue;
+                };
                 crate::destinations::remove_entry(cfg, path);
             }
             DestGuiIpcResult::StateChanged
@@ -1167,17 +1434,30 @@ fn handle_dest_gui_ipc(
                 return DestGuiIpcResult::Noop;
             };
             for item in arr {
-                let Some(path) = item["path"].as_str() else { continue };
+                let Some(path) = item["path"].as_str() else {
+                    continue;
+                };
                 let path = path.trim();
-                if path.is_empty() { continue }
-                if crate::route::join_safe_segments(Path::new(""), path).is_err() { continue }
-                if cfg.destinations.iter().any(|e| e.path.eq_ignore_ascii_case(path)) { continue }
-                cfg.destinations.push(crate::destinations::DestinationEntry {
-                    path: path.to_string(),
-                    note: None,
-                    rules: vec![],
-                    default: false,
-                });
+                if path.is_empty() {
+                    continue;
+                }
+                if crate::route::join_safe_segments(Path::new(""), path).is_err() {
+                    continue;
+                }
+                if cfg
+                    .destinations
+                    .iter()
+                    .any(|e| e.path.eq_ignore_ascii_case(path))
+                {
+                    continue;
+                }
+                cfg.destinations
+                    .push(crate::destinations::DestinationEntry {
+                        path: path.to_string(),
+                        note: None,
+                        rules: vec![],
+                        default: false,
+                    });
             }
             DestGuiIpcResult::StateChanged
         }
@@ -1208,8 +1488,11 @@ fn handle_dest_gui_ipc(
                 let candidates = crate::dest_cmd::uncovered_domains(scan.domains, cfg);
                 DestGuiIpcResult::Suggestions(candidates)
             } else {
-                let existing: std::collections::HashSet<String> =
-                    cfg.destinations.iter().map(|e| e.path.to_lowercase()).collect();
+                let existing: std::collections::HashSet<String> = cfg
+                    .destinations
+                    .iter()
+                    .map(|e| e.path.to_lowercase())
+                    .collect();
                 let folders = scan
                     .folders
                     .into_iter()
@@ -1224,13 +1507,20 @@ fn handle_dest_gui_ipc(
                 return DestGuiIpcResult::Noop;
             };
             for pair in pairs_arr {
-                let Some(domain) = pair["domain"].as_str() else { continue };
-                let Some(dest_path) = pair["path"].as_str() else { continue };
+                let Some(domain) = pair["domain"].as_str() else {
+                    continue;
+                };
+                let Some(dest_path) = pair["path"].as_str() else {
+                    continue;
+                };
                 if dest_path.trim().is_empty() {
                     continue;
                 }
                 if crate::route::join_safe_segments(Path::new(""), dest_path).is_err() {
-                    eprintln!("dest-gui: suggest_confirm: rejected invalid path {:?}", dest_path);
+                    eprintln!(
+                        "dest-gui: suggest_confirm: rejected invalid path {:?}",
+                        dest_path
+                    );
                     continue;
                 }
                 crate::destinations::upsert_entry(
@@ -1252,11 +1542,20 @@ fn build_dest_gui_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
     dest_file: &Path,
-) -> Result<(Window, WebView, WindowId, Arc<Mutex<crate::destinations::DestinationsConfig>>)> {
+    initial_path: Option<&str>,
+    contextual_on_save: bool,
+) -> Result<(
+    Window,
+    WebView,
+    WindowId,
+    Arc<Mutex<crate::destinations::DestinationsConfig>>,
+)> {
     let cfg = crate::destinations::load_yaml(dest_file).unwrap_or_default();
     let cfg_arc = Arc::new(Mutex::new(cfg));
 
-    let html = include_str!("../assets/destinations_window.html");
+    let initial_path_json = serde_json::to_string(&initial_path).unwrap_or_else(|_| "null".into());
+    let html = include_str!("../assets/destinations_window.html")
+        .replace("__INITIAL_PATH_JSON__", &initial_path_json);
 
     let window = WindowBuilder::new()
         .with_title("Email to Markdown \u{2014} Destinations")
@@ -1313,6 +1612,15 @@ fn build_dest_gui_window(
                         .to_string();
                     let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
                 }
+                DestGuiIpcResult::Saved => {
+                    drop(cfg_guard);
+                    let command = if contextual_on_save {
+                        AppCommand::ContextualDestinationSaved { window_id }
+                    } else {
+                        AppCommand::CloseWindow { window_id }
+                    };
+                    let _ = proxy_ipc.send_event(command);
+                }
                 DestGuiIpcResult::Close => {
                     drop(cfg_guard);
                     let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
@@ -1361,13 +1669,15 @@ fn extract_addr_and_domain(from_raw: &str) -> (String, String) {
         if lt < gt {
             trimmed[lt + 1..gt].trim().to_string()
         } else {
-            trimmed.split_whitespace()
+            trimmed
+                .split_whitespace()
                 .find(|t| t.contains('@'))
                 .unwrap_or("")
                 .to_string()
         }
     } else {
-        trimmed.split_whitespace()
+        trimmed
+            .split_whitespace()
             .find(|t| t.contains('@'))
             .unwrap_or("")
             .to_string()
@@ -1451,34 +1761,44 @@ fn build_route_window(
         .iter()
         .map(|(staging_path, decision)| {
             let file = staging_path.to_string_lossy().into_owned();
-            let subject = read_frontmatter_field(staging_path, "subject")
-                .unwrap_or_else(|| {
-                    staging_path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                });
+            let subject = read_frontmatter_field(staging_path, "subject").unwrap_or_else(|| {
+                staging_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
             let from_raw = read_frontmatter_field(staging_path, "from").unwrap_or_default();
-            let date     = read_frontmatter_field(staging_path, "date").unwrap_or_default();
+            let date = read_frontmatter_field(staging_path, "date").unwrap_or_default();
             let (sender_email, sender_domain) = extract_addr_and_domain(&from_raw);
-            (file, subject, from_raw, date, decision.rel_path.clone(), decision.is_default, sender_email, sender_domain)
+            (
+                file,
+                subject,
+                from_raw,
+                date,
+                decision.rel_path.clone(),
+                decision.is_default,
+                sender_email,
+                sender_domain,
+            )
         })
         .collect();
 
     let json_rows: Vec<serde_json::Value> = owned_rows
         .iter()
-        .map(|(file, subject, sender, date, dest_path, is_default, sender_email, sender_domain)| {
-            serde_json::json!({
-                "file":          file,
-                "subject":       subject,
-                "sender":        sender,
-                "date":          date,
-                "dest_path":     dest_path,
-                "is_default":    is_default,
-                "sender_email":  sender_email,
-                "sender_domain": sender_domain
-            })
-        })
+        .map(
+            |(file, subject, sender, date, dest_path, is_default, sender_email, sender_domain)| {
+                serde_json::json!({
+                    "file":          file,
+                    "subject":       subject,
+                    "sender":        sender,
+                    "date":          date,
+                    "dest_path":     dest_path,
+                    "is_default":    is_default,
+                    "sender_email":  sender_email,
+                    "sender_domain": sender_domain
+                })
+            },
+        )
         .collect();
 
     let decisions_json =
@@ -1534,7 +1854,8 @@ fn build_route_window(
                             let msg = format!("invalid create_rule payload: {:#}", e);
                             if let Ok(js_str) = serde_json::to_string(&msg) {
                                 let js = format!("route_review_error({})", js_str);
-                                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                                let _ =
+                                    proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
                             }
                         }
                     }
@@ -1550,13 +1871,15 @@ fn build_route_window(
                                     "route_review_deleted({})",
                                     escape_json_for_script(&js_arr)
                                 );
-                                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                                let _ =
+                                    proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
                             }
                             // Surface any failure without losing the successful deletions.
                             if let Some(msg) = err {
                                 if let Ok(js_str) = serde_json::to_string(&msg) {
                                     let js = format!("route_review_error({})", js_str);
-                                    let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                                    let _ = proxy_ipc
+                                        .send_event(AppCommand::EvalScript { window_id, js });
                                 }
                             }
                         }
@@ -1564,7 +1887,8 @@ fn build_route_window(
                             let msg = format!("invalid delete payload: {:#}", e);
                             if let Ok(js_str) = serde_json::to_string(&msg) {
                                 let js = format!("route_review_error({})", js_str);
-                                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                                let _ =
+                                    proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
                             }
                         }
                     }
@@ -1606,8 +1930,8 @@ fn apply_route_decisions(
     _window_id: WindowId,
     _proxy: &EventLoopProxy<AppCommand>,
 ) -> Result<()> {
-    let payload: RouteApplyPayload = serde_json::from_str(body)
-        .context("failed to parse route review IPC payload")?;
+    let payload: RouteApplyPayload =
+        serde_json::from_str(body).context("failed to parse route review IPC payload")?;
 
     for row in &payload.decisions {
         let staging_md = PathBuf::from(&row.file);
@@ -1627,17 +1951,16 @@ fn apply_route_decisions(
             None => row.dest_path.clone(),
         };
         // Anti-traversal validation — rejects "..", "\", absolute paths.
-        let dest_dir = crate::route::join_safe_segments(notes_dir, &dest_path)
-            .with_context(|| {
+        let dest_dir =
+            crate::route::join_safe_segments(notes_dir, &dest_path).with_context(|| {
                 format!(
                     "invalid destination path {:?} for file {:?}",
                     dest_path, row.file
                 )
             })?;
         // Create the directory tree (D4: mkdir -p).
-        std::fs::create_dir_all(&dest_dir).with_context(|| {
-            format!("failed to create directory {}", dest_dir.display())
-        })?;
+        std::fs::create_dir_all(&dest_dir)
+            .with_context(|| format!("failed to create directory {}", dest_dir.display()))?;
         // Move .md + its referenced attachment siblings.
         crate::route::move_email(&staging_md, &dest_dir).with_context(|| {
             format!(
@@ -1669,7 +1992,11 @@ fn delete_staged_emails(files: &[String]) -> (Vec<String>, Option<String>) {
     let err = if errors.is_empty() {
         None
     } else {
-        Some(format!("Suppression échouée pour {} fichier(s) :\n{}", errors.len(), errors.join("\n")))
+        Some(format!(
+            "Suppression échouée pour {} fichier(s) :\n{}",
+            errors.len(),
+            errors.join("\n")
+        ))
     };
     (deleted, err)
 }
@@ -1685,7 +2012,10 @@ fn read_frontmatter_field(path: &std::path::Path, field: &str) -> Option<String>
     for line in frontmatter.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with(&prefix) {
-            let value = trimmed[prefix.len()..].trim().trim_matches('"').trim_matches('\'');
+            let value = trimmed[prefix.len()..]
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
             if !value.is_empty() {
                 return Some(value.to_string());
             }
@@ -1702,7 +2032,10 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
         Ok(m) => m,
         Err(e) => {
             return (
-                Some(ActionResult::Error(format!("failed to parse IPC message: {}", e))),
+                Some(ActionResult::Error(format!(
+                    "failed to parse IPC message: {}",
+                    e
+                ))),
                 true,
             );
         }
@@ -1741,7 +2074,10 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
             match result {
                 Ok(r) => (Some(r), true),
                 Err(e) => (
-                    Some(ActionResult::Error(format!("Erreur de sauvegarde : {:#}", e))),
+                    Some(ActionResult::Error(format!(
+                        "Erreur de sauvegarde : {:#}",
+                        e
+                    ))),
                     true,
                 ),
             }
@@ -1792,8 +2128,11 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
                     .cloned()
                     .unwrap_or_else(|| data.account_name.clone());
 
-                let mut behavior =
-                    settings.accounts.get(&canonical_key).cloned().unwrap_or_default();
+                let mut behavior = settings
+                    .accounts
+                    .get(&canonical_key)
+                    .cloned()
+                    .unwrap_or_default();
                 behavior.delete_after_export = data.delete_after_export;
                 behavior.cleanup_empty_dirs = data.cleanup_empty_dirs;
                 behavior.skip_existing = data.skip_existing;
@@ -1820,21 +2159,28 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
             match result {
                 Ok(()) => (None, false),
                 Err(e) => (
-                    Some(ActionResult::Error(format!("Erreur de sauvegarde : {:#}", e))),
+                    Some(ActionResult::Error(format!(
+                        "Erreur de sauvegarde : {:#}",
+                        e
+                    ))),
                     false,
                 ),
             }
         }
         "open_raw" => {
-            if let Err(e) =
-                action_open_config().context("failed to open settings file in editor")
-            {
-                return (Some(ActionResult::Error(format!("Erreur : {:#}", e))), false);
+            if let Err(e) = action_open_config().context("failed to open settings file in editor") {
+                return (
+                    Some(ActionResult::Error(format!("Erreur : {:#}", e))),
+                    false,
+                );
             }
             (None, false)
         }
         other => (
-            Some(ActionResult::Error(format!("unknown IPC action '{}'", other))),
+            Some(ActionResult::Error(format!(
+                "unknown IPC action '{}'",
+                other
+            ))),
             true,
         ),
     }
@@ -1843,7 +2189,11 @@ fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
 /// Format a JS call for the progress webview.
 fn format_progress_js(update: &ProgressUpdate) -> String {
     match update {
-        ProgressUpdate::Step { current, total, message } => {
+        ProgressUpdate::Step {
+            current,
+            total,
+            message,
+        } => {
             format!("step({},{},{:?})", current, total, message)
         }
         ProgressUpdate::Indeterminate { message } => {
@@ -1852,7 +2202,10 @@ fn format_progress_js(update: &ProgressUpdate) -> String {
         ProgressUpdate::Done { summary } => {
             format!("finish({:?})", summary)
         }
-        ProgressUpdate::Error { message, action_label } => {
+        ProgressUpdate::Error {
+            message,
+            action_label,
+        } => {
             format!(
                 "error({:?}, {:?})",
                 message,
@@ -1892,12 +2245,7 @@ fn create_menu() -> Result<Menu> {
     let export_submenu = Submenu::new("Export compte", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::EXPORT_PREFIX, account);
-        let _ = export_submenu.append(&MenuItem::with_id(
-            id,
-            account,
-            true,
-            no_accel.clone(),
-        ));
+        let _ = export_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone()));
     }
     menu.append(&export_submenu)?;
 
@@ -1906,12 +2254,7 @@ fn create_menu() -> Result<Menu> {
     let resume_submenu = Submenu::new("Reprendre le tri", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::RESUME_SORT_PREFIX, account);
-        let _ = resume_submenu.append(&MenuItem::with_id(
-            id,
-            account,
-            true,
-            no_accel.clone(),
-        ));
+        let _ = resume_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone()));
     }
     menu.append(&resume_submenu)?;
 
@@ -1920,12 +2263,7 @@ fn create_menu() -> Result<Menu> {
     let fixhtml_submenu = Submenu::new("Fix HTML→Markdown", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::FIXHTML_PREFIX, account);
-        let _ = fixhtml_submenu.append(&MenuItem::with_id(
-            id,
-            account,
-            true,
-            no_accel.clone(),
-        ));
+        let _ = fixhtml_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone()));
     }
     let _ = outils_submenu.append(&fixhtml_submenu);
 
@@ -2058,10 +2396,7 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
 
 /// Load the tray icon.
 fn load_icon() -> Result<tray_icon::Icon> {
-    let icon_paths = [
-        "assets/icon.ico",
-        "assets/icon.png",
-    ];
+    let icon_paths = ["assets/icon.ico", "assets/icon.png"];
 
     for path in &icon_paths {
         if std::path::Path::new(path).exists() {
@@ -2202,7 +2537,10 @@ mod tests {
             "retry_deletion",
             "retry-conversion",
         ] {
-            assert!(html.contains(required), "missing contextual UI contract: {required}");
+            assert!(
+                html.contains(required),
+                "missing contextual UI contract: {required}"
+            );
         }
     }
 

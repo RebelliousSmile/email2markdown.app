@@ -89,7 +89,9 @@ pub fn download_and_apply(asset_url: &str, on_progress: impl Fn(&str)) -> Result
     tmp.flush()?;
 
     on_progress("Application de la mise à jour…");
-    let (_, tmp_path) = tmp.keep().map_err(|e| anyhow!("failed to persist temp file: {}", e))?;
+    let (_, tmp_path) = tmp
+        .keep()
+        .map_err(|e| anyhow!("failed to persist temp file: {}", e))?;
     self_replace::self_replace(&tmp_path)?;
     if let Err(error) = crate::shell_integration::repair_if_installed() {
         eprintln!("warning: could not repair file-manager integration: {error:#}");

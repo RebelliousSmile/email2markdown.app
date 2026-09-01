@@ -138,8 +138,13 @@ pub fn run(args: DestArgs) -> Result<()> {
         #[cfg(feature = "tray")]
         DestCommand::Gui => {
             println!("Ouverture de la fenêtre destinations…");
-            if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenDestGui { dest_file }) {
-                eprintln!("Erreur : impossible d'ouvrir la fenêtre (tray non démarré ?) — {:#}", e);
+            if let Err(e) =
+                crate::tray::send_command(crate::tray::AppCommand::OpenDestGui { dest_file })
+            {
+                eprintln!(
+                    "Erreur : impossible d'ouvrir la fenêtre (tray non démarré ?) — {:#}",
+                    e
+                );
                 std::process::exit(1);
             }
         }
@@ -225,7 +230,11 @@ fn interactive(dest_file: &Path) -> Result<()> {
     let mut cfg = destinations::load_yaml(dest_file)
         .with_context(|| format!("failed to load {}", dest_file.display()))?;
 
-    println!("Editing {} ({} entries).", dest_file.display(), cfg.destinations.len());
+    println!(
+        "Editing {} ({} entries).",
+        dest_file.display(),
+        cfg.destinations.len()
+    );
 
     'outer: loop {
         let filter = match prompt_line("\nFilter [Enter=all]: ")? {
@@ -340,10 +349,11 @@ fn action_add(cfg: &mut DestinationsConfig) -> Result<bool> {
         return Ok(false);
     }
 
-    let rules: Vec<DestinationRule> = match prompt_rule("domain/from/correspondent/subject/account/none")? {
-        Some(rule) => vec![rule],
-        None => vec![],
-    };
+    let rules: Vec<DestinationRule> =
+        match prompt_rule("domain/from/correspondent/subject/account/none")? {
+            Some(rule) => vec![rule],
+            None => vec![],
+        };
 
     destinations::upsert_entry(cfg, &path, &rules);
 
@@ -551,8 +561,8 @@ fn walk_notes(
     if depth > max_depth {
         return Ok(());
     }
-    let entries = std::fs::read_dir(dir)
-        .with_context(|| format!("failed to read {}", dir.display()))?;
+    let entries =
+        std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?;
     for entry in entries {
         let entry = entry?;
         let name = entry.file_name();
@@ -572,9 +582,7 @@ fn walk_notes(
                 folders.push(rel.to_string_lossy().replace('\\', "/"));
             }
             walk_notes(base, &path, depth + 1, max_depth, files, folders)?;
-        } else if file_type.is_file()
-            && path.extension().and_then(|e| e.to_str()) == Some("md")
-        {
+        } else if file_type.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
             files.push(path);
         }
     }
