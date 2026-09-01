@@ -103,9 +103,31 @@ enum Commands {
         directory: PathBuf,
     },
 
+    /// Install, inspect or remove the current OS file-manager action.
+    Shell {
+        #[command(subcommand)]
+        action: ShellAction,
+    },
+
+    /// Open from a local file:// URI supplied by a file manager.
+    #[command(hide = true)]
+    ContextualUri {
+        uri: String,
+    },
+
     /// Run as system tray application (requires --features tray)
     #[cfg(feature = "tray")]
     Tray,
+}
+
+#[derive(Subcommand)]
+enum ShellAction {
+    /// Install or repair the per-user action for the current executable.
+    Install,
+    /// Report missing, installed or stale managed artifacts.
+    Status,
+    /// Remove only artifacts owned by Email to Markdown.
+    Uninstall,
 }
 
 fn main() -> Result<()> {
@@ -452,6 +474,32 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::ContextualUri { uri } => {
+            let directory = email_to_markdown::shell_integration::local_path_from_uri(&uri)?;
+            #[cfg(feature = "tray")]
+            {
+                tray::run_contextual(directory)
+                    .context("Failed to run contextual email export")?;
+            }
+            #[cfg(not(feature = "tray"))]
+            {
+                let _ = directory;
+                anyhow::bail!(
+                    "the contextual window requires a build with the 'tray' GUI feature"
+                );
+            }
+        }
+
+        Commands::Shell { action } => {
+            use email_to_markdown::shell_integration as integration;
+            let statuses = match action {
+                ShellAction::Install => integration::install()?,
+                ShellAction::Status => integration::status()?,
+                ShellAction::Uninstall => integration::uninstall()?,
+            };
+            println!("{}", integration::format_status(&statuses));
+        }
+
         #[cfg(feature = "tray")]
         Commands::Tray => {
             println!("Starting system tray application...");
@@ -479,5 +527,13 @@ mod tests {
         }
         assert!(Cli::try_parse_from(["email-to-markdown", "contextual"]).is_err());
         assert!(Cli::try_parse_from(["email-to-markdown", "contextual", "one", "two"]).is_err());
+    }
+
+    #[test]
+    fn shell_command_exposes_install_status_and_uninstall() {
+        for action in ["install", "status", "uninstall"] {
+            let cli = Cli::try_parse_from(["email-to-markdown", "shell", action]).unwrap();
+            assert!(matches!(cli.command, Commands::Shell { .. }));
+        }
     }
 }

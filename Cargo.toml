@@ -98,6 +98,9 @@ dirs = "5.0"
 # Image handling for tray icon
 image = { version = "0.25", optional = true }
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 [features]
 default = []
 tray = ["tray-icon", "tao", "wry", "rfd", "image", "dep:ureq", "dep:self-replace"]

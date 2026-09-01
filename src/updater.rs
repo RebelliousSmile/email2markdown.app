@@ -54,14 +54,25 @@ pub fn check_update(current: &str) -> Result<Option<Release>> {
     let asset = response
         .assets
         .into_iter()
-        .find(|a| a.name.ends_with(".exe"))
-        .ok_or_else(|| anyhow!("No .exe asset found in release {}", response.tag_name))?;
+        .find(|asset| release_asset_matches(&asset.name))
+        .ok_or_else(|| anyhow!("No compatible asset found in release {}", response.tag_name))?;
 
     Ok(Some(Release {
         tag_name: remote_tag,
         body: response.body.unwrap_or_default(),
         asset_url: asset.browser_download_url,
     }))
+}
+
+fn release_asset_matches(name: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    return name.ends_with("windows-x86_64.exe");
+    #[cfg(target_os = "macos")]
+    return name.ends_with("macos-native");
+    #[cfg(target_os = "linux")]
+    return name.ends_with("linux-x86_64");
+    #[allow(unreachable_code)]
+    false
 }
 
 pub fn download_and_apply(asset_url: &str, on_progress: impl Fn(&str)) -> Result<()> {
@@ -80,6 +91,9 @@ pub fn download_and_apply(asset_url: &str, on_progress: impl Fn(&str)) -> Result
     on_progress("Application de la mise à jour…");
     let (_, tmp_path) = tmp.keep().map_err(|e| anyhow!("failed to persist temp file: {}", e))?;
     self_replace::self_replace(&tmp_path)?;
+    if let Err(error) = crate::shell_integration::repair_if_installed() {
+        eprintln!("warning: could not repair file-manager integration: {error:#}");
+    }
 
     on_progress("Mise à jour terminée — fermez et relancez l'application.");
     Ok(())

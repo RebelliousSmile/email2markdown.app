@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Service
+MimeType=inode/directory;
+Actions=contextualEmailExport;
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+
+[Desktop Action contextualEmailExport]
+Name=Convertir les emails associés en Markdown
+Icon=mail-message-new
+Exec=__BINARY_DESKTOP_QUOTED__ contextual-uri %u

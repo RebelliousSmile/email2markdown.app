@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_gmail_destructive:
+        description: Run the protected dedicated Gmail destructive fixture
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  portable:
+    name: ${{ matrix.os }} — core and GUI
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install Linux WebView dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+      - run: cargo check
+      - run: cargo check --features tray
+      - run: cargo clippy --all-targets --features tray
+      - run: cargo test --all-targets --features tray
+      - run: cargo build --features tray
+
+  dovecot:
+    name: Ubuntu — destructive Dovecot fixture
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: Start pinned fixture
+        run: docker compose -f tests/fixtures/imap/compose.yaml up -d --wait
+      - name: Run selected ignored IMAP test
+        env:
+          EMAIL_TO_MARKDOWN_IMAP_TEST: "1"
+        run: cargo test --test imap_integration contextual_search_uses_uidvalidity_and_keeps_messages_unseen -- --ignored --nocapture
+      - name: Destroy fixture
+        if: always()
+        run: docker compose -f tests/fixtures/imap/compose.yaml down -v
+
+  gmail-destructive:
+    name: Protected Gmail destructive fixture
+    if: github.event_name == 'workflow_dispatch' && inputs.run_gmail_destructive
+    runs-on: ubuntu-24.04
+    environment: gmail-destructive
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: Run the explicitly gated Gmail test
+        env:
+          EMAIL_TO_MARKDOWN_GMAIL_DESTRUCTIVE_TEST: "1"
+          EMAIL_TO_MARKDOWN_GMAIL_USER: ${{ secrets.EMAIL_TO_MARKDOWN_GMAIL_USER }}
+          EMAIL_TO_MARKDOWN_GMAIL_PASSWORD: ${{ secrets.EMAIL_TO_MARKDOWN_GMAIL_PASSWORD }}
+          EMAIL_TO_MARKDOWN_GMAIL_FIXTURE_ADDRESS: ${{ secrets.EMAIL_TO_MARKDOWN_GMAIL_FIXTURE_ADDRESS }}
+        run: cargo test --test imap_integration gmail_targeted_deletion_fixture -- --ignored --nocapture

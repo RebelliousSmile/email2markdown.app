@@ -1,0 +1,7 @@
+#!/bin/sh
+binary=__BINARY_SHELL_QUOTED__
+uris=${NAUTILUS_SCRIPT_SELECTED_URIS:-${NAUTILUS_SCRIPT_CURRENT_URI:-}}
+printf '%s\n' "$uris" | while IFS= read -r uri; do
+  [ -n "$uri" ] || continue
+  "$binary" contextual-uri "$uri" >/dev/null 2>&1 &
+done

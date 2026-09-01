@@ -2,42 +2,66 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
 
 permissions:
   contents: write
 
 jobs:
-  build-windows:
-    name: Build Windows x86_64
-    runs-on: windows-latest
-
+  build:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows x86_64
+            artifact: windows-x86_64
+          - os: macos-latest
+            label: macOS native
+            artifact: macos-native
+          - os: ubuntu-24.04
+            label: Linux x86_64
+            artifact: linux-x86_64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-cargo-${{ hashFiles('Cargo.toml') }}
-          restore-keys: windows-cargo-
-
-      - name: Build release (tray)
-        run: cargo build --release --features tray
-
-      - name: Rename binary
+          key: release-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+      - run: cargo build --release --features tray
+      - name: Name Windows artifact
+        if: runner.os == 'Windows'
         shell: pwsh
-        run: Copy-Item target\release\email-to-markdown.exe "email-to-markdown-${{ github.ref_name }}-windows-x86_64.exe"
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        run: Copy-Item target\release\email-to-markdown.exe "email-to-markdown-${{ github.ref_name }}-${{ matrix.artifact }}.exe"
+      - name: Name Unix artifact
+        if: runner.os != 'Windows'
+        run: cp target/release/email-to-markdown "email-to-markdown-${{ github.ref_name }}-${{ matrix.artifact }}"
+      - uses: actions/upload-artifact@v4
         with:
-          files: email-to-markdown-${{ github.ref_name }}-windows-x86_64.exe
+          name: ${{ matrix.artifact }}
+          path: email-to-markdown-${{ github.ref_name }}-*
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
           generate_release_notes: false

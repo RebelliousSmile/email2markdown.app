@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>AMApplicationBuild</key><string>523</string>
+  <key>AMApplicationVersion</key><string>2.10</string>
+  <key>AMDocumentVersion</key><string>2</string>
+  <key>actions</key>
+  <array><dict>
+    <key>action</key><dict>
+      <key>AMAccepts</key><dict><key>Container</key><string>List</string><key>Optional</key><true/><key>Types</key><array><string>com.apple.cocoa.path</string></array></dict>
+      <key>AMActionVersion</key><string>2.0.3</string>
+      <key>AMApplication</key><array><string>Automator</string></array>
+      <key>AMParameterProperties</key><dict/>
+      <key>AMProvides</key><dict><key>Container</key><string>List</string><key>Types</key><array><string>com.apple.cocoa.path</string></array></dict>
+      <key>ActionBundlePath</key><string>/System/Library/Automator/Run Shell Script.action</string>
+      <key>ActionName</key><string>Run Shell Script</string>
+      <key>ActionParameters</key><dict>
+        <key>COMMAND_STRING</key><string>for folder in "$@"; do
+  __BINARY_SHELL_QUOTED__ contextual "$folder" &amp;
+done</string>
+        <key>CheckedForUserDefaultShell</key><true/>
+        <key>inputMethod</key><integer>1</integer>
+        <key>shell</key><string>/bin/zsh</string>
+      </dict>
+    </dict>
+  </dict></array>
+  <key>connectors</key><dict/>
+  <key>workflowMetaData</key><dict>
+    <key>serviceInputTypeIdentifier</key><string>com.apple.finder.folder</string>
+    <key>serviceOutputTypeIdentifier</key><string>com.apple.Automator.nothing</string>
+    <key>serviceProcessesInput</key><string>com.apple.finder</string>
+  </dict>
+</dict>
+</plist>

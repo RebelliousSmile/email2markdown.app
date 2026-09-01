@@ -8,6 +8,7 @@ pub mod utils;
 pub mod cleaner;      // Email body cleaner pipeline
 pub mod thunderbird;  // [1] Import automatique depuis Thunderbird
 pub mod network;      // [3][4] Progress indicator et retry logic
+pub mod shell_integration;
 #[cfg(feature = "tray")]
 pub mod updater;      // Auto-update: GitHub release check and binary replacement
 

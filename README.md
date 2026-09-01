@@ -11,13 +11,14 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # Compiler en mode release (optimisé)
 cargo build --release
 
-# Compiler avec l'icône dans la barre système (optionnel)
+# Compiler avec les fenêtres et intégrations gestionnaire de fichiers
 cargo build --release --features tray
 ```
 
-**Linux** — dépendances système requises avant de compiler :
+**Linux** — dépendances système requises pour la GUI :
 ```bash
-sudo apt-get install build-essential pkg-config libssl-dev
+sudo apt-get install build-essential pkg-config libssl-dev libgtk-3-dev \
+  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
 ```
 
 ## Configuration rapide
@@ -169,6 +170,49 @@ Au premier lancement sans comptes configurés, le sous-menu **Export** est désa
 - Cliquer **Appliquer** pour déplacer tous les fichiers vers leur destination finale
 
 Aucun fichier n'est déplacé avant que vous cliquiez Appliquer.
+
+---
+
+### `contextual` — Rechercher depuis un dossier
+
+La commande autonome ouvre la fenêtre de recherche directement dans une
+destination exacte de `destinations.yaml` :
+
+```bash
+email-to-markdown contextual "/chemin/Notes/Pro/Client"
+```
+
+Le programme n’a pas besoin d’être lancé au préalable. Il demande la boîte aux
+lettres, recherche tous les messages correspondant aux règles d’adresse du
+dossier, laisse la liste entièrement décochée, convertit la sélection dans ce
+dossier puis se ferme. Si `delete_after_export` est actif, seuls les messages
+portant une preuve Markdown locale complète sont supprimés du serveur.
+
+Le dossier doit être un répertoire local existant, non symbolique, situé sous
+`notes_dir` et correspondre exactement à une destination configurée. Une entrée
+de menu peut être visible ailleurs, mais l’application refuse alors le chemin
+avant toute connexion IMAP.
+
+### `shell` — Menu contextuel du gestionnaire de fichiers
+
+Le binaire doit avoir été construit avec `--features tray`.
+
+```bash
+email-to-markdown shell install
+email-to-markdown shell status
+email-to-markdown shell uninstall
+```
+
+- Windows : verbes Explorer par utilisateur sur le dossier sélectionné et le
+  fond du dossier courant (HKCU, sans élévation).
+- macOS : action rapide Finder `Email to Markdown` dans `~/Library/Services` ;
+  si nécessaire, l’activer dans Réglages Système → Extensions → Finder.
+- GNOME : script `Email to Markdown` dans le sous-menu Scripts de Nautilus.
+- KDE : service menu Dolphin pour les dossiers.
+
+`install` est idempotent et répare le chemin si le binaire a été déplacé.
+`status` compare l’artefact au binaire qui exécute la commande. `uninstall` ne
+retire que les deux clés/fichiers portant le nom géré par l’application.
 
 ---
 

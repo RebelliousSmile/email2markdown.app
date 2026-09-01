@@ -107,3 +107,53 @@ fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
             .all(|flag| !matches!(flag, imap::types::Flag::Seen))
     }));
 }
+
+#[test]
+#[ignore = "requires an isolated Gmail fixture account and EMAIL_TO_MARKDOWN_GMAIL_DESTRUCTIVE_TEST=1"]
+fn gmail_targeted_deletion_fixture() {
+    if std::env::var("EMAIL_TO_MARKDOWN_GMAIL_DESTRUCTIVE_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let username = std::env::var("EMAIL_TO_MARKDOWN_GMAIL_USER").unwrap();
+    let password = std::env::var("EMAIL_TO_MARKDOWN_GMAIL_PASSWORD").unwrap();
+    let correspondent = std::env::var("EMAIL_TO_MARKDOWN_GMAIL_FIXTURE_ADDRESS").unwrap();
+    let fixture = Account {
+        name: "Dedicated Gmail destructive fixture".into(),
+        server: "imap.gmail.com".into(),
+        port: 993,
+        username,
+        password: Some(password),
+        ignored_folders: vec![
+            "[Gmail]/Spam".into(),
+            "[Gmail]/Trash".into(),
+            "[Gmail]/Drafts".into(),
+        ],
+        export_directory: String::new(),
+        quote_depth: 1,
+        skip_existing: false,
+        collect_contacts: false,
+        skip_signature_images: false,
+        delete_after_export: true,
+        cleanup_empty_dirs: true,
+    };
+    let mut exporter = ImapExporter::new(fixture, false);
+    exporter.connect().unwrap();
+    let candidates = exporter
+        .search_contextual(&[MatchRule::Correspondent(correspondent)])
+        .unwrap();
+    let selected: Vec<_> = candidates
+        .into_iter()
+        .filter(|candidate| candidate.subject == "[email-to-markdown destructive fixture]")
+        .collect();
+    assert_eq!(selected.len(), 1, "the dedicated account must contain exactly one marked fixture");
+    assert!(selected[0].source.provider_id.is_some());
+    let target = tempfile::TempDir::new().unwrap();
+    let conversions = exporter
+        .convert_contextual_selection(target.path(), &selected)
+        .unwrap();
+    let requests = build_deletion_batch(&conversions);
+    assert_eq!(requests.len(), 1);
+    let outcomes = exporter.delete_proved_messages(&requests).unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].outcome, DeletionOutcome::Deleted);
+}
