@@ -321,6 +321,128 @@ pub struct MessageConversionResult {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeletionProvider {
+    None,
+    GenericUidPlus,
+    Gmail { trash_folder: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletionPreflight {
+    pub required: bool,
+    pub supported: bool,
+    pub provider: DeletionProvider,
+    pub reason: Option<String>,
+}
+
+pub fn evaluate_deletion_preflight(
+    required: bool,
+    gmail: bool,
+    capabilities: &[String],
+    trash_folder: Option<String>,
+) -> DeletionPreflight {
+    if !required {
+        return DeletionPreflight {
+            required: false,
+            supported: true,
+            provider: DeletionProvider::None,
+            reason: None,
+        };
+    }
+    let has = |value: &str| capabilities.iter().any(|cap| cap.eq_ignore_ascii_case(value));
+    if gmail {
+        let missing: Vec<&str> = ["X-GM-EXT-1", "UIDPLUS", "MOVE"]
+            .into_iter()
+            .filter(|capability| !has(capability))
+            .collect();
+        if !missing.is_empty() {
+            return DeletionPreflight {
+                required: true,
+                supported: false,
+                provider: DeletionProvider::None,
+                reason: Some(format!("missing Gmail capabilities: {}", missing.join(", "))),
+            };
+        }
+        let Some(trash_folder) = trash_folder else {
+            return DeletionPreflight {
+                required: true,
+                supported: false,
+                provider: DeletionProvider::None,
+                reason: Some("Gmail Trash mailbox with SPECIAL-USE is missing".into()),
+            };
+        };
+        DeletionPreflight {
+            required: true,
+            supported: true,
+            provider: DeletionProvider::Gmail { trash_folder },
+            reason: None,
+        }
+    } else if has("UIDPLUS") {
+        DeletionPreflight {
+            required: true,
+            supported: true,
+            provider: DeletionProvider::GenericUidPlus,
+            reason: None,
+        }
+    } else {
+        DeletionPreflight {
+            required: true,
+            supported: false,
+            provider: DeletionProvider::None,
+            reason: Some("UIDPLUS is required for targeted UID EXPUNGE".into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletionRequest {
+    pub markdown: PathBuf,
+    pub proof: LocalSourceProof,
+}
+
+pub fn build_deletion_batch(results: &[MessageConversionResult]) -> Vec<DeletionRequest> {
+    results
+        .iter()
+        .filter_map(|result| match &result.status {
+            Some(ConversionStatus::Written { markdown, proof })
+            | Some(ConversionStatus::AlreadyPresent { markdown, proof })
+                if proof_is_complete(proof)
+                    && markdown.is_file()
+                    && read_source_proof(markdown).ok().flatten().as_ref() == Some(proof) =>
+            {
+                Some(DeletionRequest {
+                    markdown: markdown.clone(),
+                    proof: proof.clone(),
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn proof_is_complete(proof: &LocalSourceProof) -> bool {
+    !proof.identity.account.trim().is_empty()
+        && !proof.identity.header_fingerprint.trim().is_empty()
+        && proof.location.uid > 0
+        && proof.location.uid_validity > 0
+        && (proof.identity.provider_id.is_some() || proof.identity.message_id.is_some())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeletionOutcome {
+    Deleted,
+    AlreadyAbsent,
+    RetryRequired(String),
+    StaleUidValidity { expected: u32, actual: Option<u32> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageDeletionResult {
+    pub proof: LocalSourceProof,
+    pub outcome: DeletionOutcome,
+}
+
 /// Exclusive lock for one target/account pair. The OS releases the lock even
 /// after a crash; the file content remains useful for diagnostics until the
 /// owning process exits normally.

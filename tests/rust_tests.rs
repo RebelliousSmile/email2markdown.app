@@ -2096,10 +2096,11 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 
 mod contextual_export_tests {
     use email_to_markdown::contextual_export::{
-        build_search_batches, candidate_matches_rules, merge_candidates,
-        cleanup_stale_staging, convert_raw_contextual, parse_header_candidate,
-        parse_uid_fetch_response, read_source_proof, validate_uidvalidity, ContextualLock,
-        ConversionStatus, MessageLocation,
+        build_deletion_batch, build_search_batches, candidate_matches_rules,
+        cleanup_stale_staging, convert_raw_contextual, evaluate_deletion_preflight,
+        merge_candidates, parse_header_candidate, parse_uid_fetch_response, read_source_proof,
+        validate_uidvalidity, ContextualLock, ConversionStatus, DeletionProvider,
+        MessageConversionResult, MessageLocation,
     };
     use email_to_markdown::config::Account;
     use email_to_markdown::route::MatchRule;
@@ -2271,6 +2272,39 @@ mod contextual_export_tests {
     }
 
     #[test]
+    fn deletion_preflight_requires_exact_server_capabilities_only_when_enabled() {
+        let disabled = evaluate_deletion_preflight(false, false, &[], None);
+        assert!(disabled.supported);
+        assert_eq!(disabled.provider, DeletionProvider::None);
+
+        let generic_blocked = evaluate_deletion_preflight(true, false, &["IMAP4rev1".into()], None);
+        assert!(!generic_blocked.supported);
+        assert!(generic_blocked.reason.unwrap().contains("UIDPLUS"));
+        let generic = evaluate_deletion_preflight(true, false, &["UIDPLUS".into()], None);
+        assert_eq!(generic.provider, DeletionProvider::GenericUidPlus);
+
+        let gmail_without_trash = evaluate_deletion_preflight(
+            true,
+            true,
+            &["X-GM-EXT-1".into(), "UIDPLUS".into(), "MOVE".into()],
+            None,
+        );
+        assert!(!gmail_without_trash.supported);
+        let gmail = evaluate_deletion_preflight(
+            true,
+            true,
+            &["x-gm-ext-1".into(), "uidplus".into(), "move".into()],
+            Some("[Gmail]/Trash".into()),
+        );
+        assert_eq!(
+            gmail.provider,
+            DeletionProvider::Gmail {
+                trash_folder: "[Gmail]/Trash".into()
+            }
+        );
+    }
+
+    #[test]
     fn contextual_conversion_commits_attachment_then_proved_markdown() {
         let temp = TempDir::new().unwrap();
         let target = temp.path().join("target");
@@ -2316,6 +2350,45 @@ mod contextual_export_tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn destructive_batch_contains_only_revalidated_local_proofs() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let raw = multipart_raw("delete-proof@example.com");
+        let source_location = location("INBOX", 42);
+        let candidate =
+            parse_header_candidate("Work", source_location.clone(), &raw, None).unwrap();
+        let status = convert_raw_contextual(
+            &target,
+            &account(&target),
+            &candidate,
+            &source_location,
+            &raw,
+        )
+        .unwrap();
+        let valid = MessageConversionResult {
+            candidate_key: candidate.logical_key(),
+            status: Some(status.clone()),
+            error: None,
+        };
+        let failed = MessageConversionResult {
+            candidate_key: "failed".into(),
+            status: None,
+            error: Some("conversion failed".into()),
+        };
+        let batch = build_deletion_batch(&[valid.clone(), failed]);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].proof.location.uid, 42);
+
+        let markdown = match status {
+            ConversionStatus::Written { markdown, .. } => markdown,
+            _ => unreachable!(),
+        };
+        fs::write(&markdown, "---\nlegacy: true\n---\n").unwrap();
+        assert!(build_deletion_batch(&[valid]).is_empty());
     }
 
     #[test]

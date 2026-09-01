@@ -850,49 +850,6 @@ impl ImapExporter {
         Ok(())
     }
 
-    fn expunge_gmail_all_mail(&mut self) -> Result<()> {
-        let raw_name = self.find_gmail_all_mail_folder()?;
-        let session = self.session.as_mut().context("Not connected")?;
-        session
-            .select(&raw_name)
-            .with_context(|| format!("select {}", raw_name))?;
-        session
-            .expunge()
-            .with_context(|| format!("expunge {}", raw_name))?;
-        Ok(())
-    }
-
-    /// Find the Gmail "All Mail" mailbox by SPECIAL-USE `\All` flag (RFC 6154),
-    /// falling back to known localized names for servers that omit SPECIAL-USE.
-    fn find_gmail_all_mail_folder(&mut self) -> Result<String> {
-        let session = self.session.as_mut().context("Not connected")?;
-        let folders = session
-            .list(None, Some("*"))
-            .context("list folders for \\All discovery")?;
-
-        if let Some(f) = folders
-            .iter()
-            .find(|f| f.attributes().contains(&NameAttribute::All))
-        {
-            return Ok(f.name().to_string());
-        }
-
-        const KNOWN: &[&str] = &[
-            "[Gmail]/All Mail",
-            "[Gmail]/Tous les messages",
-            "[Google Mail]/All Mail",
-        ];
-        for candidate in KNOWN {
-            if folders.iter().any(|f| f.name() == *candidate) {
-                return Ok((*candidate).to_string());
-            }
-        }
-
-        anyhow::bail!(
-            "Gmail \\All mailbox not found (SPECIAL-USE missing and no known name match)"
-        )
-    }
-
     /// List all folders.
     ///
     /// Returns the raw IMAP name (modified UTF-7, used for `SELECT`) and a decoded
@@ -1024,6 +981,44 @@ impl ImapExporter {
         Ok(merge_candidates(candidates))
     }
 
+    /// Check whether this account can honor its configured deletion policy
+    /// without ever issuing a broad EXPUNGE.
+    pub fn contextual_deletion_preflight(
+        &mut self,
+    ) -> Result<crate::contextual_export::DeletionPreflight> {
+        use crate::contextual_export::evaluate_deletion_preflight;
+        use imap_proto::Capability;
+
+        if !self.account.delete_after_export {
+            return Ok(evaluate_deletion_preflight(false, self.is_gmail, &[], None));
+        }
+        let session = self.session.as_mut().context("Not connected")?;
+        let capabilities = session.capabilities()?;
+        let capability_names: Vec<String> = capabilities
+            .iter()
+            .map(|capability| match capability {
+                Capability::Imap4rev1 => "IMAP4rev1".to_string(),
+                Capability::Auth(value) => format!("AUTH={value}"),
+                Capability::Atom(value) => value.to_string(),
+            })
+            .collect();
+        let trash_folder = if self.is_gmail {
+            session
+                .list(None, Some("*"))?
+                .iter()
+                .find(|folder| folder.attributes().contains(&NameAttribute::Trash))
+                .map(|folder| folder.name().to_string())
+        } else {
+            None
+        };
+        Ok(evaluate_deletion_preflight(
+            true,
+            self.is_gmail,
+            &capability_names,
+            trash_folder,
+        ))
+    }
+
     /// Revalidate and convert exactly the selected logical candidates into one
     /// physical destination. UIDVALIDITY for every involved mailbox is checked
     /// before the first body is downloaded or local file is written.
@@ -1038,6 +1033,13 @@ impl ImapExporter {
         };
         use std::collections::{BTreeMap, HashMap};
 
+        let deletion_preflight = self.contextual_deletion_preflight()?;
+        if !deletion_preflight.supported {
+            anyhow::bail!(
+                "configured server deletion is not safe: {}",
+                deletion_preflight.reason.unwrap_or_else(|| "unknown reason".into())
+            );
+        }
         let _lock = ContextualLock::acquire(target, &self.account.name)?;
         let mut results = Vec::new();
         let mut pending = Vec::new();
@@ -1147,6 +1149,150 @@ impl ImapExporter {
         Ok(results)
     }
 
+    /// Permanently delete only locally proved messages. Failures are returned
+    /// per message so the same proofs can be retried without reconversion.
+    pub fn delete_proved_messages(
+        &mut self,
+        requests: &[crate::contextual_export::DeletionRequest],
+    ) -> Result<Vec<crate::contextual_export::MessageDeletionResult>> {
+        use crate::contextual_export::{
+            read_source_proof, DeletionOutcome, DeletionProvider, MessageDeletionResult,
+        };
+        use std::collections::BTreeMap;
+
+        let preflight = self.contextual_deletion_preflight()?;
+        if !preflight.required {
+            return Ok(Vec::new());
+        }
+        if !preflight.supported {
+            anyhow::bail!(
+                "targeted deletion blocked: {}",
+                preflight.reason.unwrap_or_else(|| "unsupported server".into())
+            );
+        }
+
+        let mut valid = Vec::new();
+        for request in requests {
+            if !request.markdown.is_file()
+                || read_source_proof(&request.markdown)?.as_ref() != Some(&request.proof)
+            {
+                continue;
+            }
+            valid.push(request.clone());
+        }
+
+        match preflight.provider {
+            DeletionProvider::GenericUidPlus => {
+                let mut grouped: BTreeMap<(String, String, u32), Vec<_>> = BTreeMap::new();
+                for request in valid {
+                    grouped
+                        .entry((
+                            request.proof.location.folder_raw.clone(),
+                            request.proof.location.folder_display.clone(),
+                            request.proof.location.uid_validity,
+                        ))
+                        .or_default()
+                        .push(request);
+                }
+                let mut results = Vec::new();
+                for ((raw, _display, expected_validity), group) in grouped {
+                    let session = self.session.as_mut().context("Not connected")?;
+                    let mailbox = match session.select(&raw) {
+                        Ok(mailbox) => mailbox,
+                        Err(error) => {
+                            results.extend(group.into_iter().map(|request| MessageDeletionResult {
+                                proof: request.proof,
+                                outcome: DeletionOutcome::RetryRequired(format!("{error:#}")),
+                            }));
+                            continue;
+                        }
+                    };
+                    if mailbox.uid_validity != Some(expected_validity) {
+                        results.extend(group.into_iter().map(|request| MessageDeletionResult {
+                            proof: request.proof,
+                            outcome: DeletionOutcome::StaleUidValidity {
+                                expected: expected_validity,
+                                actual: mailbox.uid_validity,
+                            },
+                        }));
+                        continue;
+                    }
+                    for request in group {
+                        let uid = request.proof.location.uid;
+                        let outcome = match session.uid_search(format!("UID {uid}")) {
+                            Ok(found) if found.is_empty() => DeletionOutcome::AlreadyAbsent,
+                            Ok(_) => match session.uid_store(
+                                uid.to_string(),
+                                "+FLAGS.SILENT (\\Deleted)",
+                            ) {
+                                Ok(_) => match session.uid_expunge(uid.to_string()) {
+                                    Ok(_) => DeletionOutcome::Deleted,
+                                    Err(error) => {
+                                        DeletionOutcome::RetryRequired(format!("{error:#}"))
+                                    }
+                                },
+                                Err(error) => DeletionOutcome::RetryRequired(format!("{error:#}")),
+                            },
+                            Err(error) => DeletionOutcome::RetryRequired(format!("{error:#}")),
+                        };
+                        results.push(MessageDeletionResult {
+                            proof: request.proof,
+                            outcome,
+                        });
+                    }
+                }
+                Ok(results)
+            }
+            DeletionProvider::Gmail { trash_folder } => {
+                let mut results = Vec::new();
+                for request in valid {
+                    let Some(provider_id) = request.proof.identity.provider_id.clone() else {
+                        results.push(MessageDeletionResult {
+                            proof: request.proof,
+                            outcome: DeletionOutcome::RetryRequired(
+                                "Gmail deletion requires X-GM-MSGID".into(),
+                            ),
+                        });
+                        continue;
+                    };
+                    let session = self.session.as_mut().context("Not connected")?;
+                    let outcome = (|| -> Result<DeletionOutcome> {
+                        session.select(&request.proof.location.folder_raw)?;
+                        let source_uids = session.uid_search(format!("X-GM-MSGID {provider_id}"))?;
+                        if !source_uids.is_empty() {
+                            let uid_set = source_uids
+                                .iter()
+                                .map(u32::to_string)
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            session.uid_mv(&uid_set, &trash_folder)?;
+                        }
+                        session.select(&trash_folder)?;
+                        let trash_uids = session.uid_search(format!("X-GM-MSGID {provider_id}"))?;
+                        if trash_uids.is_empty() {
+                            return Ok(DeletionOutcome::AlreadyAbsent);
+                        }
+                        let uid_set = trash_uids
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        session.uid_store(&uid_set, "+FLAGS.SILENT (\\Deleted)")?;
+                        session.uid_expunge(&uid_set)?;
+                        Ok(DeletionOutcome::Deleted)
+                    })()
+                    .unwrap_or_else(|error| DeletionOutcome::RetryRequired(format!("{error:#}")));
+                    results.push(MessageDeletionResult {
+                        proof: request.proof,
+                        outcome,
+                    });
+                }
+                Ok(results)
+            }
+            DeletionProvider::None => Ok(Vec::new()),
+        }
+    }
+
     /// Export a single folder.
     ///
     /// Returns `(stats, decisions)` where `decisions` is the list of route proposals
@@ -1162,8 +1308,7 @@ impl ImapExporter {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
         let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
 
-        // Session borrow is scoped to a block so it ends before the gmail expunge dispatch,
-        // which needs to re-borrow self.session via expunge_gmail_all_mail().
+        // Keep the session borrow scoped to the folder traversal.
         let stats_and_decisions = {
             let session = self.session.as_mut().context("Not connected")?;
 
@@ -1180,7 +1325,7 @@ impl ImapExporter {
             let uids_vec: Vec<_> = uids.into_iter().collect();
 
             // Pre-filter: batch fetch headers, skip already-exported without downloading body
-            let (filtered_uids, pre_skipped, already_exported_uids) = if self.account.skip_existing && !uids_vec.is_empty() {
+            let (filtered_uids, pre_skipped, _already_exported_uids) = if self.account.skip_existing && !uids_vec.is_empty() {
                 let seq_set = uids_vec.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
                 match session.fetch(&seq_set, "RFC822.HEADER") {
                     Ok(headers) => {
@@ -1310,28 +1455,14 @@ impl ImapExporter {
                     }
                 }
 
-                // Delete after export if requested.
-                // IMAP flag is set here (server-side); local `.md` files remain in staging
-                // until route decisions are applied in the caller — the deferred move (D6)
-                // ensures routing always precedes any local file removal.
-                if self.account.delete_after_export {
-                    session.store(uid.to_string(), "+FLAGS (\\Deleted)")?;
-                }
-
                 // [3] Update progress
                 progress.inc();
             }
 
-            // Mark already-exported (skipped) messages for deletion too.
-            // They were safely archived in a previous run; with delete_after_export
-            // the intent is to clean up the server, not just newly exported messages.
-            if self.account.delete_after_export && !already_exported_uids.is_empty() {
-                let seq_set = already_exported_uids
-                    .iter()
-                    .map(|u| u.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                session.store(&seq_set, "+FLAGS (\\Deleted)")?;
+            if self.account.delete_after_export {
+                eprintln!(
+                    "warning: legacy global export keeps server messages because it has no stable source proof; use contextual export to delete safely"
+                );
             }
 
             // [3] Finish progress indicator
@@ -1345,16 +1476,6 @@ impl ImapExporter {
         };
 
         let (stats, folder_decisions) = stats_and_decisions;
-
-        // Expunge deleted messages
-        if self.account.delete_after_export {
-            if self.is_gmail {
-                self.expunge_gmail_all_mail().context("gmail all mail expunge")?;
-            } else {
-                let session = self.session.as_mut().context("Not connected")?;
-                session.expunge().context("expunge folder")?;
-            }
-        }
 
         Ok((stats, folder_decisions))
     }
