@@ -2985,7 +2985,7 @@ mod destinations_tests {
 }
 
 mod dest_cmd_tests {
-    use email_to_markdown::dest_cmd::{add_entry, detect_anomalies};
+    use email_to_markdown::dest_cmd::{add_entry, detect_anomalies, orphaned_entries};
     use email_to_markdown::destinations::{
         load_yaml, DestinationEntry, DestinationRule, DestinationsConfig,
     };
@@ -3109,6 +3109,41 @@ mod dest_cmd_tests {
         assert!(format!("{err:#}").contains("invalid"));
         // Exclusive: no file created.
         assert!(!dest_file.exists(), "rejected add must not create the file");
+    }
+
+    /// An entry whose directory is missing under `notes_dir` is reported orphaned.
+    #[test]
+    fn test_orphaned_entries_missing_dir() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("Perso/Existing")).unwrap();
+        let cfg = DestinationsConfig {
+            destinations: vec![
+                DestinationEntry {
+                    path: "Perso/Existing".into(),
+                    ..Default::default()
+                },
+                DestinationEntry {
+                    path: "Perso/Deleted".into(),
+                    ..Default::default()
+                },
+            ],
+        };
+        let orphans = orphaned_entries(temp.path(), &cfg);
+        assert_eq!(orphans, vec!["Perso/Deleted".to_string()]);
+    }
+
+    /// No orphans when every entry's directory exists.
+    #[test]
+    fn test_orphaned_entries_none_when_all_present() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("Perso/Banque")).unwrap();
+        let cfg = DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: "Perso/Banque".into(),
+                ..Default::default()
+            }],
+        };
+        assert!(orphaned_entries(temp.path(), &cfg).is_empty());
     }
 }
 

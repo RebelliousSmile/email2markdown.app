@@ -219,19 +219,20 @@
     border-radius: 6px;
     padding: 20px 24px;
     width: 480px;
-    max-height: 70vh;
+    max-height: 80vh;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 12px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.18);
   }
   #scan-dialog h2 { font-size: 14px; font-weight: 600; }
-  #scan-list { overflow-y: auto; max-height: 320px; border: 1px solid #eee; border-radius: 3px; padding: 4px 0; }
-  #scan-list label { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
-  #scan-list label:hover { background: #f5f5f5; }
+  #scan-list, #scan-orphans-list { overflow-y: auto; max-height: 200px; border: 1px solid #eee; border-radius: 3px; padding: 4px 0; }
+  #scan-list label, #scan-orphans-list label { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  #scan-list label:hover, #scan-orphans-list label:hover { background: #f5f5f5; }
   #scan-status { font-size: 12px; color: #666; font-style: italic; }
-  #scan-sel-actions { display: flex; gap: 8px; }
-  #scan-sel-actions button { font-size: 11px; padding: 2px 8px; }
+  #scan-sel-actions, #scan-sel-actions-orphans { display: flex; gap: 8px; }
+  #scan-sel-actions button, #scan-sel-actions-orphans button { font-size: 11px; padding: 2px 8px; }
 
   /* ── Suggest overlay ── */
   #suggest-overlay {
@@ -373,8 +374,18 @@
       <button class="btn" id="btn-scan-none">Tout désélectionner</button>
     </div>
     <div id="scan-list" style="display:none"></div>
+    <div id="scan-orphans-block" style="display:none">
+      <h2 style="margin-top:4px">Chemins orphelins</h2>
+      <p id="scan-orphans-status" style="font-size:12px;color:#666"></p>
+      <div id="scan-sel-actions-orphans" style="display:none">
+        <button class="btn" id="btn-scan-orphans-all">Tout sélectionner</button>
+        <button class="btn" id="btn-scan-orphans-none">Tout désélectionner</button>
+      </div>
+      <div id="scan-orphans-list" style="display:none"></div>
+    </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn" id="btn-scan-cancel">Annuler</button>
+      <button class="btn" id="btn-scan-remove-orphans" style="display:none;background:#e53935;color:#fff;border-color:#e53935">Supprimer</button>
       <button class="btn btn-primary" id="btn-scan-confirm" style="display:none">Ajouter</button>
     </div>
   </div>
@@ -430,6 +441,7 @@
     }
     if (data.type === 'folder_suggestions') {
       renderFolderScan(data.paths || []);
+      renderOrphanScan(data.orphans || []);
       return;
     }
     if (data.type === 'error') {
@@ -641,6 +653,11 @@
     document.getElementById('scan-list').style.display = 'none';
     document.getElementById('scan-sel-actions').style.display = 'none';
     document.getElementById('btn-scan-confirm').style.display = 'none';
+    document.getElementById('scan-orphans-block').style.display = 'none';
+    document.getElementById('scan-orphans-status').textContent = '';
+    document.getElementById('scan-orphans-list').style.display = 'none';
+    document.getElementById('scan-sel-actions-orphans').style.display = 'none';
+    document.getElementById('btn-scan-remove-orphans').style.display = 'none';
     document.getElementById('scan-overlay').classList.add('active');
     send('scan_folders');
   });
@@ -665,6 +682,27 @@
       entries.push({ path: cb.value });
     });
     if (entries.length > 0) send('add_entries', entries);
+    document.getElementById('scan-overlay').classList.remove('active');
+  });
+
+  document.getElementById('btn-scan-orphans-all').addEventListener('click', function () {
+    document.querySelectorAll('#scan-orphans-list input[type=checkbox]').forEach(function (cb) { cb.checked = true; });
+    updateOrphansConfirm();
+  });
+
+  document.getElementById('btn-scan-orphans-none').addEventListener('click', function () {
+    document.querySelectorAll('#scan-orphans-list input[type=checkbox]').forEach(function (cb) { cb.checked = false; });
+    updateOrphansConfirm();
+  });
+
+  document.getElementById('btn-scan-remove-orphans').addEventListener('click', function () {
+    var entries = [];
+    document.querySelectorAll('#scan-orphans-list input:checked').forEach(function (cb) {
+      entries.push({ path: cb.value });
+    });
+    if (entries.length === 0) return;
+    if (!confirm('Supprimer ' + entries.length + ' destination(s) orpheline(s) de la liste ?')) return;
+    send('remove_entries', entries);
     document.getElementById('scan-overlay').classList.remove('active');
   });
   document.getElementById('btn-add-entry-confirm').addEventListener('click', function () {
@@ -742,6 +780,42 @@
     var btn = document.getElementById('btn-scan-confirm');
     btn.style.display = checked > 0 ? '' : 'none';
     btn.textContent = checked > 1 ? 'Ajouter (' + checked + ')' : 'Ajouter';
+  }
+
+  function renderOrphanScan(paths) {
+    var block = document.getElementById('scan-orphans-block');
+    var list = document.getElementById('scan-orphans-list');
+    var status = document.getElementById('scan-orphans-status');
+    var selActions = document.getElementById('scan-sel-actions-orphans');
+    var removeBtn = document.getElementById('btn-scan-remove-orphans');
+    list.innerHTML = '';
+    if (paths.length === 0) {
+      block.style.display = 'none';
+      return;
+    }
+    block.style.display = 'block';
+    status.textContent = paths.length + ' destination(s) dont le répertoire n\'existe plus :';
+    paths.forEach(function (p, i) {
+      var lbl = document.createElement('label');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = p;
+      cb.id = 'scan-orphan-cb-' + i;
+      cb.addEventListener('change', updateOrphansConfirm);
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(p));
+      list.appendChild(lbl);
+    });
+    list.style.display = 'block';
+    selActions.style.display = 'flex';
+    removeBtn.style.display = 'none';
+  }
+
+  function updateOrphansConfirm() {
+    var checked = document.querySelectorAll('#scan-orphans-list input:checked').length;
+    var btn = document.getElementById('btn-scan-remove-orphans');
+    btn.style.display = checked > 0 ? '' : 'none';
+    btn.textContent = checked > 1 ? 'Supprimer (' + checked + ')' : 'Supprimer';
   }
 
   function renderSuggestions(items) {

@@ -337,10 +337,17 @@ pub(super) fn build_dest_gui_window(
                     json: items_json,
                 });
             }
-            super::ipc::DestGuiIpcResult::FolderSuggestions(paths) => {
+            super::ipc::DestGuiIpcResult::FolderSuggestions {
+                new_folders,
+                orphans,
+            } => {
                 drop(cfg_guard);
-                let json = serde_json::json!({"type": "folder_suggestions", "paths": paths})
-                    .to_string();
+                let json = serde_json::json!({
+                    "type": "folder_suggestions",
+                    "paths": new_folders,
+                    "orphans": orphans,
+                })
+                .to_string();
                 let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
             }
             super::ipc::DestGuiIpcResult::Saved => {

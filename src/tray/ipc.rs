@@ -27,7 +27,10 @@ pub(super) enum DestGuiIpcResult {
     StateChanged,
     Error(String),
     Suggestions(Vec<(String, usize)>),
-    FolderSuggestions(Vec<String>),
+    FolderSuggestions {
+        new_folders: Vec<String>,
+        orphans: Vec<String>,
+    },
     Saved,
     Close,
     Noop,
@@ -281,7 +284,10 @@ fn handle_scan(cfg: &crate::destinations::DestinationsConfig, action: &str) -> D
         return if action == "scan_suggest" {
             DestGuiIpcResult::Suggestions(vec![])
         } else {
-            DestGuiIpcResult::FolderSuggestions(vec![])
+            DestGuiIpcResult::FolderSuggestions {
+                new_folders: vec![],
+                orphans: vec![],
+            }
         };
     };
     let notes_dir = std::path::PathBuf::from(notes_dir_str);
@@ -292,7 +298,10 @@ fn handle_scan(cfg: &crate::destinations::DestinationsConfig, action: &str) -> D
             return if action == "scan_suggest" {
                 DestGuiIpcResult::Suggestions(vec![])
             } else {
-                DestGuiIpcResult::FolderSuggestions(vec![])
+                DestGuiIpcResult::FolderSuggestions {
+                    new_folders: vec![],
+                    orphans: vec![],
+                }
             };
         }
     };
@@ -305,13 +314,17 @@ fn handle_scan(cfg: &crate::destinations::DestinationsConfig, action: &str) -> D
             .iter()
             .map(|e| e.path.to_lowercase())
             .collect();
-        let folders = scan
+        let new_folders = scan
             .folders
             .into_iter()
             .filter(|f| f.chars().filter(|&c| c == '/').count() < 3)
             .filter(|f| !existing.contains(&f.to_lowercase()))
             .collect();
-        DestGuiIpcResult::FolderSuggestions(folders)
+        let orphans = crate::dest_cmd::orphaned_entries(&notes_dir, cfg);
+        DestGuiIpcResult::FolderSuggestions {
+            new_folders,
+            orphans,
+        }
     }
 }
 

@@ -642,6 +642,17 @@ pub fn uncovered_domains(
     out
 }
 
+/// Destination-list entries whose target directory no longer exists under `notes_dir`.
+///
+/// Returns the raw `path` field of each orphaned entry, in list order.
+pub fn orphaned_entries(notes_dir: &Path, cfg: &DestinationsConfig) -> Vec<String> {
+    cfg.destinations
+        .iter()
+        .filter(|e| !notes_dir.join(&e.path).is_dir())
+        .map(|e| e.path.clone())
+        .collect()
+}
+
 /// Strip a trailing `<Year>/<Month>` from a user-typed path (the router re-appends it).
 pub fn strip_trailing_year_month(path: &str) -> String {
     let trimmed = path.trim_end_matches('/');
