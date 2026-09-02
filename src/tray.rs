@@ -905,7 +905,9 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                 }
             }
             Event::UserEvent(AppCommand::ContextualOpenConfig) => {
-                let _ = open::that(config::accounts_yaml_path());
+                if let Err(e) = open::that(config::accounts_yaml_path()) {
+                    eprintln!("Ouverture accounts.yaml: {:#}", e);
+                }
             }
             Event::UserEvent(AppCommand::CloseWindow { window_id }) => {
                 if state.as_ref().map(ContextualStandaloneState::window_id) == Some(window_id) {
@@ -2266,7 +2268,9 @@ fn create_menu() -> Result<Menu> {
     let export_submenu = Submenu::new("Export compte", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::EXPORT_PREFIX, account);
-        let _ = export_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone()));
+        if let Err(e) = export_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone())) {
+            eprintln!("Menu export compte: {:#}", e);
+        }
     }
     menu.append(&export_submenu)?;
 
@@ -2275,7 +2279,9 @@ fn create_menu() -> Result<Menu> {
     let resume_submenu = Submenu::new("Reprendre le tri", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::RESUME_SORT_PREFIX, account);
-        let _ = resume_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone()));
+        if let Err(e) = resume_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone())) {
+            eprintln!("Menu reprendre le tri: {:#}", e);
+        }
     }
     menu.append(&resume_submenu)?;
 
@@ -2284,62 +2290,84 @@ fn create_menu() -> Result<Menu> {
     let fixhtml_submenu = Submenu::new("Fix HTML→Markdown", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::FIXHTML_PREFIX, account);
-        let _ = fixhtml_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone()));
+        if let Err(e) = fixhtml_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone())) {
+            eprintln!("Menu Fix HTML→Markdown: {:#}", e);
+        }
     }
-    let _ = outils_submenu.append(&fixhtml_submenu);
+    if let Err(e) = outils_submenu.append(&fixhtml_submenu) {
+        eprintln!("Menu Outils (Fix HTML→Markdown): {:#}", e);
+    }
 
-    let _ = outils_submenu.append(&PredefinedMenuItem::separator());
+    if let Err(e) = outils_submenu.append(&PredefinedMenuItem::separator()) {
+        eprintln!("Menu Outils (séparateur): {:#}", e);
+    }
 
-    let _ = outils_submenu.append(&MenuItem::with_id(
+    if let Err(e) = outils_submenu.append(&MenuItem::with_id(
         menu_ids::IMPORT_THUNDERBIRD,
         "Import Thunderbird",
         true,
         no_accel.clone(),
-    ));
+    )) {
+        eprintln!("Menu Outils (Import Thunderbird): {:#}", e);
+    }
 
-    let _ = outils_submenu.append(&MenuItem::with_id(
+    if let Err(e) = outils_submenu.append(&MenuItem::with_id(
         menu_ids::CHOOSE_EXPORT_DIR,
         "Choisir répertoire d'export…",
         true,
         no_accel.clone(),
-    ));
+    )) {
+        eprintln!("Menu Outils (Choisir répertoire d'export): {:#}", e);
+    }
 
-    let _ = outils_submenu.append(&MenuItem::with_id(
+    if let Err(e) = outils_submenu.append(&MenuItem::with_id(
         menu_ids::CHOOSE_NOTES_DIR,
         "Choisir répertoire de notes…",
         true,
         no_accel.clone(),
-    ));
+    )) {
+        eprintln!("Menu Outils (Choisir répertoire de notes): {:#}", e);
+    }
 
-    let _ = outils_submenu.append(&MenuItem::with_id(
+    if let Err(e) = outils_submenu.append(&MenuItem::with_id(
         menu_ids::MANAGE_DESTINATIONS,
         "Gérer les destinations…",
         true,
         no_accel.clone(),
-    ));
+    )) {
+        eprintln!("Menu Outils (Gérer les destinations): {:#}", e);
+    }
 
-    let _ = outils_submenu.append(&MenuItem::with_id(
+    if let Err(e) = outils_submenu.append(&MenuItem::with_id(
         menu_ids::OPEN_CONFIG,
         "Paramètres…",
         true,
         no_accel.clone(),
-    ));
+    )) {
+        eprintln!("Menu Outils (Paramètres): {:#}", e);
+    }
 
-    let _ = outils_submenu.append(&PredefinedMenuItem::separator());
+    if let Err(e) = outils_submenu.append(&PredefinedMenuItem::separator()) {
+        eprintln!("Menu Outils (séparateur): {:#}", e);
+    }
 
-    let _ = outils_submenu.append(&MenuItem::with_id(
+    if let Err(e) = outils_submenu.append(&MenuItem::with_id(
         menu_ids::UPDATE,
         "Mise à jour…",
         true,
         no_accel.clone(),
-    ));
+    )) {
+        eprintln!("Menu Outils (Mise à jour): {:#}", e);
+    }
 
-    let _ = outils_submenu.append(&MenuItem::with_id(
+    if let Err(e) = outils_submenu.append(&MenuItem::with_id(
         menu_ids::OPEN_DOCUMENTATION,
         "Documentation",
         true,
         no_accel.clone(),
-    ));
+    )) {
+        eprintln!("Menu Outils (Documentation): {:#}", e);
+    }
 
     menu.append(&outils_submenu)?;
 
