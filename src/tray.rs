@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::thread;
 
 use anyhow::{Context, Result};
@@ -202,17 +202,55 @@ enum WState {
     DestGui(DestGuiState),
 }
 
-/// Prevents duplicate config windows from opening simultaneously.
-static CONFIG_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+/// Identifies each single-instance GUI window kind tracked by [`WINDOW_REGISTRY`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum WindowKind {
+    #[allow(dead_code)]
+    Contextual,
+    #[allow(dead_code)]
+    Progress,
+    Config,
+    Update,
+    DestGui,
+    Route,
+}
 
-/// Prevents duplicate update windows from opening simultaneously.
-static UPDATE_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+/// Tracks which single-instance windows are currently open, keyed by [`WindowKind`].
+/// Only ever accessed from the `tao` event loop thread (single-threaded — no
+/// `store`/`load` happens outside `run_tray`), so a plain `Mutex` is used purely
+/// as the simplest container for shared named state, not for cross-thread safety.
+static WINDOW_REGISTRY: LazyLock<Mutex<HashMap<WindowKind, bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Prevents duplicate route review windows from opening simultaneously.
-static ROUTE_REVIEW_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+/// Atomically claims `kind` if it is not already open. Returns `false` (and leaves
+/// the registry unchanged) when a window of that kind is already open — mirrors the
+/// previous `AtomicBool::compare_exchange(false, true, ...)` single-instance guard.
+fn try_claim_window(kind: WindowKind) -> bool {
+    match WINDOW_REGISTRY.lock() {
+        Ok(mut registry) => {
+            if registry.get(&kind).copied().unwrap_or(false) {
+                false
+            } else {
+                registry.insert(kind, true);
+                true
+            }
+        }
+        Err(_) => {
+            eprintln!("Registre des fenêtres : mutex empoisonné");
+            false
+        }
+    }
+}
 
-/// Prevents duplicate destinations GUI windows from opening simultaneously.
-static DEST_GUI_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+/// Marks `kind` as closed, freeing its registry entry without affecting any other kind.
+fn close_window_kind(kind: WindowKind) {
+    match WINDOW_REGISTRY.lock() {
+        Ok(mut registry) => {
+            registry.insert(kind, false);
+        }
+        Err(_) => eprintln!("Registre des fenêtres : mutex empoisonné"),
+    }
+}
 
 static APP_PROXY: OnceLock<EventLoopProxy<AppCommand>> = OnceLock::new();
 
@@ -340,10 +378,7 @@ pub fn run_tray() -> Result<()> {
                 }
             },
             Event::UserEvent(AppCommand::OpenConfig { sender }) => {
-                if CONFIG_WINDOW_OPEN
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-                {
+                if !try_claim_window(WindowKind::Config) {
                     // Already open — ignore.
                 } else {
                     match build_config_window(target, &proxy, sender.clone()) {
@@ -352,7 +387,7 @@ pub fn run_tray() -> Result<()> {
                                 .insert(window_id, WState::Config(ConfigState { webview, window }));
                         }
                         Err(e) => {
-                            CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
+                            close_window_kind(WindowKind::Config);
                             let _ = sender.send(ActionResult::Error(format!(
                                 "Fenêtre de paramètres : {:#}",
                                 e
@@ -362,10 +397,7 @@ pub fn run_tray() -> Result<()> {
                 }
             }
             Event::UserEvent(AppCommand::OpenUpdate) => {
-                if UPDATE_WINDOW_OPEN
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-                {
+                if !try_claim_window(WindowKind::Update) {
                     // Already open — ignore.
                 } else {
                     match build_update_window(target, &proxy) {
@@ -374,7 +406,7 @@ pub fn run_tray() -> Result<()> {
                                 .insert(window_id, WState::Update(UpdateState { webview, window }));
                         }
                         Err(e) => {
-                            UPDATE_WINDOW_OPEN.store(false, Ordering::Release);
+                            close_window_kind(WindowKind::Update);
                             eprintln!("Fenêtre de mise à jour : {:#}", e);
                         }
                     }
@@ -463,10 +495,7 @@ pub fn run_tray() -> Result<()> {
                 }
             }
             Event::UserEvent(AppCommand::OpenRouteReview(decisions)) => {
-                if ROUTE_REVIEW_WINDOW_OPEN
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-                {
+                if !try_claim_window(WindowKind::Route) {
                     // Already open — ignore. The previous window should be closed first.
                 } else {
                     match build_route_window(target, &proxy, decisions) {
@@ -475,17 +504,14 @@ pub fn run_tray() -> Result<()> {
                                 .insert(window_id, WState::Route(RouteState { webview, window }));
                         }
                         Err(e) => {
-                            ROUTE_REVIEW_WINDOW_OPEN.store(false, Ordering::Release);
+                            close_window_kind(WindowKind::Route);
                             eprintln!("Fenêtre de revue de routage : {:#}", e);
                         }
                     }
                 }
             }
             Event::UserEvent(AppCommand::OpenDestGui { dest_file }) => {
-                if DEST_GUI_WINDOW_OPEN
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-                {
+                if !try_claim_window(WindowKind::DestGui) {
                     // Already open — ignore.
                 } else {
                     match build_dest_gui_window(target, &proxy, &dest_file, None, false) {
@@ -501,7 +527,7 @@ pub fn run_tray() -> Result<()> {
                             );
                         }
                         Err(e) => {
-                            DEST_GUI_WINDOW_OPEN.store(false, Ordering::Release);
+                            close_window_kind(WindowKind::DestGui);
                             eprintln!("Fenêtre destinations : {:#}", e);
                         }
                     }
@@ -519,7 +545,7 @@ pub fn run_tray() -> Result<()> {
                 // This command is only emitted by the standalone contextual
                 // editor. Keep the regular tray loop defensive if received.
                 if let Some(WState::DestGui(_)) = windows.remove(&window_id) {
-                    DEST_GUI_WINDOW_OPEN.store(false, Ordering::Release);
+                    close_window_kind(WindowKind::DestGui);
                 }
             }
             Event::UserEvent(AppCommand::ActionRequested { window_id }) => {
@@ -531,18 +557,10 @@ pub fn run_tray() -> Result<()> {
             }
             Event::UserEvent(AppCommand::CloseWindow { window_id }) => {
                 match windows.remove(&window_id) {
-                    Some(WState::Config(_)) => {
-                        CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
-                    }
-                    Some(WState::Update(_)) => {
-                        UPDATE_WINDOW_OPEN.store(false, Ordering::Release);
-                    }
-                    Some(WState::Route(_)) => {
-                        ROUTE_REVIEW_WINDOW_OPEN.store(false, Ordering::Release);
-                    }
-                    Some(WState::DestGui(_)) => {
-                        DEST_GUI_WINDOW_OPEN.store(false, Ordering::Release);
-                    }
+                    Some(WState::Config(_)) => close_window_kind(WindowKind::Config),
+                    Some(WState::Update(_)) => close_window_kind(WindowKind::Update),
+                    Some(WState::Route(_)) => close_window_kind(WindowKind::Route),
+                    Some(WState::DestGui(_)) => close_window_kind(WindowKind::DestGui),
                     _ => {}
                 }
             }
@@ -556,18 +574,10 @@ pub fn run_tray() -> Result<()> {
                         f();
                     }
                 }
-                Some(WState::Config(_)) => {
-                    CONFIG_WINDOW_OPEN.store(false, Ordering::Release);
-                }
-                Some(WState::Update(_)) => {
-                    UPDATE_WINDOW_OPEN.store(false, Ordering::Release);
-                }
-                Some(WState::Route(_)) => {
-                    ROUTE_REVIEW_WINDOW_OPEN.store(false, Ordering::Release);
-                }
-                Some(WState::DestGui(_)) => {
-                    DEST_GUI_WINDOW_OPEN.store(false, Ordering::Release);
-                }
+                Some(WState::Config(_)) => close_window_kind(WindowKind::Config),
+                Some(WState::Update(_)) => close_window_kind(WindowKind::Update),
+                Some(WState::Route(_)) => close_window_kind(WindowKind::Route),
+                Some(WState::DestGui(_)) => close_window_kind(WindowKind::DestGui),
                 None => {}
             },
             Event::UserEvent(AppCommand::MenuEventReceived(id)) => {
@@ -962,6 +972,39 @@ struct ContextualIpcMessage {
     keys: Vec<String>,
 }
 
+/// Build a GUI window on the main event loop thread, focus it, and return its id.
+fn build_gui_window(
+    target: &EventLoopWindowTarget<AppCommand>,
+    title: &str,
+    size: (f64, f64),
+) -> Result<(Window, WindowId)> {
+    let window = WindowBuilder::new()
+        .with_title(title)
+        .with_inner_size(LogicalSize::new(size.0, size.1))
+        .build(target)
+        .with_context(|| format!("failed to create window {title:?}"))?;
+    window.set_focus();
+    let window_id = window.id();
+    Ok((window, window_id))
+}
+
+/// Attach a webview to an already-built window.
+fn attach_webview(
+    window: &Window,
+    html: impl Into<std::borrow::Cow<'static, str>>,
+    init_script: Option<&str>,
+    ipc_handler: impl Fn(wry::http::Request<String>) + 'static,
+) -> Result<WebView> {
+    let html: std::borrow::Cow<'static, str> = html.into();
+    let mut builder = WebViewBuilder::new(window)
+        .with_html(html.into_owned())
+        .with_ipc_handler(ipc_handler);
+    if let Some(script) = init_script {
+        builder = builder.with_initialization_script(script);
+    }
+    builder.build().context("failed to create webview")
+}
+
 fn build_contextual_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
@@ -972,18 +1015,17 @@ fn build_contextual_window(
         "window.__CONTEXTUAL_LAUNCH__={};",
         escape_json_for_script(&json)
     );
-    let window = WindowBuilder::new()
-        .with_title("Email to Markdown — Export contextuel")
-        .with_inner_size(LogicalSize::new(980.0f64, 700.0f64))
-        .build(target)
-        .context("failed to create contextual window")?;
-    window.set_focus();
-    let window_id = window.id();
+    let (window, window_id) = build_gui_window(
+        target,
+        "Email to Markdown — Export contextuel",
+        (980.0, 700.0),
+    )?;
     let proxy_ipc = proxy.clone();
-    let webview = WebViewBuilder::new(&window)
-        .with_html(include_str!("../assets/contextual_export.html"))
-        .with_initialization_script(&init_script)
-        .with_ipc_handler(move |request: wry::http::Request<String>| {
+    let webview = attach_webview(
+        &window,
+        include_str!("../assets/contextual_export.html"),
+        Some(&init_script),
+        move |request: wry::http::Request<String>| {
             let Ok(message) = serde_json::from_str::<ContextualIpcMessage>(request.body()) else {
                 return;
             };
@@ -1014,9 +1056,8 @@ fn build_contextual_window(
                 }
                 _ => {}
             }
-        })
-        .build()
-        .context("failed to create contextual webview")?;
+        },
+    )?;
     Ok((window, webview, window_id))
 }
 
@@ -1043,18 +1084,12 @@ fn build_progress_window(
         .replace("__WARNING__", &warning_html)
         .replace("__HAS_CANCEL__", cancel_html);
 
-    let window = WindowBuilder::new()
-        .with_title(format!("En cours — {}", action_name))
-        .with_inner_size(LogicalSize::new(500.0f64, 220.0f64))
-        .build(target)
-        .context("failed to create progress window")?;
-    window.set_focus();
-    let window_id = window.id();
+    let (window, window_id) =
+        build_gui_window(target, &format!("En cours — {}", action_name), (500.0, 220.0))?;
 
     let proxy_ipc = proxy.clone();
-    let webview = WebViewBuilder::new(&window)
-        .with_html(html)
-        .with_ipc_handler(move |msg| match msg.body().as_str() {
+    let webview = attach_webview(&window, html, None, move |msg: wry::http::Request<String>| {
+        match msg.body().as_str() {
             "action" => {
                 let _ = proxy_ipc.send_event(AppCommand::ActionRequested { window_id });
             }
@@ -1068,9 +1103,8 @@ fn build_progress_window(
                 let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
             }
             _ => {}
-        })
-        .build()
-        .context("failed to create progress webview")?;
+        }
+    })?;
 
     Ok((window, webview, window_id))
 }
@@ -1140,18 +1174,18 @@ fn build_config_window(
         .replace("__SETTINGS_JSON__", &settings_json)
         .replace("__ACCOUNTS_JSON__", &accounts_json);
 
-    let window = WindowBuilder::new()
-        .with_title("Email to Markdown \u{2014} Param\u{00e8}tres")
-        .with_inner_size(LogicalSize::new(700.0f64, 500.0f64))
-        .build(target)
-        .context("failed to create config window")?;
-    window.set_focus();
-    let window_id = window.id();
+    let (window, window_id) = build_gui_window(
+        target,
+        "Email to Markdown \u{2014} Param\u{00e8}tres",
+        (700.0, 500.0),
+    )?;
 
     let proxy_ipc = proxy.clone();
-    let webview = WebViewBuilder::new(&window)
-        .with_html(html)
-        .with_ipc_handler(move |req: wry::http::Request<String>| {
+    let webview = attach_webview(
+        &window,
+        html,
+        None,
+        move |req: wry::http::Request<String>| {
             let body = req.body().clone();
             let (result, should_close) = handle_config_ipc(&body);
             if let Some(r) = result {
@@ -1160,9 +1194,8 @@ fn build_config_window(
             if should_close {
                 let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
             }
-        })
-        .build()
-        .context("failed to create config webview")?;
+        },
+    )?;
 
     Ok((window, webview, window_id))
 }
@@ -1176,18 +1209,18 @@ fn build_update_window(
 ) -> Result<(Window, WebView, WindowId)> {
     let html = include_str!("../assets/update_window.html");
 
-    let window = WindowBuilder::new()
-        .with_title("Email to Markdown \u{2014} Mise \u{00e0} jour")
-        .with_inner_size(LogicalSize::new(700.0f64, 500.0f64))
-        .build(target)
-        .context("failed to create update window")?;
-    window.set_focus();
-    let window_id = window.id();
+    let (window, window_id) = build_gui_window(
+        target,
+        "Email to Markdown \u{2014} Mise \u{00e0} jour",
+        (700.0, 500.0),
+    )?;
 
     let proxy_ipc = proxy.clone();
-    let webview = WebViewBuilder::new(&window)
-        .with_html(html)
-        .with_ipc_handler(move |req: wry::http::Request<String>| {
+    let webview = attach_webview(
+        &window,
+        html,
+        None,
+        move |req: wry::http::Request<String>| {
             let body = req.body().clone();
             let parsed: serde_json::Value = match serde_json::from_str(&body) {
                 Ok(v) => v,
@@ -1225,9 +1258,8 @@ fn build_update_window(
                     });
                 }
             }
-        })
-        .build()
-        .context("failed to create update webview")?;
+        },
+    )?;
 
     let proxy_check = proxy.clone();
     let current_version = env!("CARGO_PKG_VERSION").to_string();
@@ -1580,21 +1612,17 @@ fn build_dest_gui_window(
             if contextual_on_save { "true" } else { "false" },
         );
 
-    let window = WindowBuilder::new()
-        .with_title("Email to Markdown \u{2014} Destinations")
-        .with_inner_size(LogicalSize::new(820.0f64, 560.0f64))
-        .build(target)
-        .context("failed to create destinations window")?;
-    window.set_focus();
-    let window_id = window.id();
+    let (window, window_id) = build_gui_window(
+        target,
+        "Email to Markdown \u{2014} Destinations",
+        (820.0, 560.0),
+    )?;
 
     let proxy_ipc = proxy.clone();
     let cfg_ipc = Arc::clone(&cfg_arc);
     let dest_file_ipc = dest_file.to_path_buf();
 
-    let webview = WebViewBuilder::new(&window)
-        .with_html(html)
-        .with_ipc_handler(move |req: wry::http::Request<String>| {
+    let webview = attach_webview(&window, html, None, move |req: wry::http::Request<String>| {
             let body = req.body();
             let mut cfg_guard = match cfg_ipc.lock() {
                 Ok(g) => g,
@@ -1650,9 +1678,8 @@ fn build_dest_gui_window(
                 }
                 DestGuiIpcResult::Noop => {}
             }
-        })
-        .build()
-        .context("failed to create destinations webview")?;
+        },
+    )?;
 
     Ok((window, webview, window_id, cfg_arc))
 }
@@ -1840,19 +1867,18 @@ fn build_route_window(
 
     let html_template = include_str!("../assets/route_review.html");
 
-    let window = WindowBuilder::new()
-        .with_title("Email to Markdown \u{2014} Revue du routage")
-        .with_inner_size(LogicalSize::new(900.0f64, 600.0f64))
-        .build(target)
-        .context("failed to create route review window")?;
-    window.set_focus();
-    let window_id = window.id();
+    let (window, window_id) = build_gui_window(
+        target,
+        "Email to Markdown \u{2014} Revue du routage",
+        (900.0, 600.0),
+    )?;
 
     let proxy_ipc = proxy.clone();
-    let webview = WebViewBuilder::new(&window)
-        .with_html(html_template)
-        .with_initialization_script(&init_script)
-        .with_ipc_handler(move |req: wry::http::Request<String>| {
+    let webview = attach_webview(
+        &window,
+        html_template,
+        Some(&init_script),
+        move |req: wry::http::Request<String>| {
             let body = req.body().clone();
 
             // 1. Raw "cancel" string (not JSON) — close immediately.
@@ -1933,9 +1959,8 @@ fn build_route_window(
                     }
                 }
             }
-        })
-        .build()
-        .context("failed to create route review webview")?;
+        },
+    )?;
 
     Ok((window, webview, window_id))
 }
