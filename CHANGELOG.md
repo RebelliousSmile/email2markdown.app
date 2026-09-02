@@ -7,18 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-02
+
 ### Added
 
+- **Export contextuel des emails (menu clic-droit)** : un email individuel peut désormais être converti en Markdown directement depuis le menu contextuel de l'explorateur de fichiers (Explorer Windows via `IExplorerCommand`, Finder macOS via un Automator Quick Action, Nautilus/Dolphin sur Linux), sans passer par une synchronisation IMAP complète du compte. La recherche identifie l'email par UID IMAP stable (frontmatter `imap_uid`), la conversion est committée atomiquement (le `.md` et ses pièces jointes n'apparaissent qu'une fois l'écriture terminée, jamais en état partiel), et l'email source n'est supprimé du serveur qu'une fois sa conversion prouvée sur disque. Une fenêtre autonome (`assets/contextual_export.html`, indépendante de la fenêtre tray) affiche la progression et le résultat. Les règles de destination (`destinations.yaml`) s'appliquent au routage, avec ajout à la volée d'un nouveau dossier de notes si besoin. Installateurs et scripts mis à jour (Windows : manifeste, `.iss`, package sparse, DLL shell-extension ; Linux : `.desktop` Dolphin, action Nautilus ; macOS : workflow Finder).
 - **Installation Windows visible, active et désinstallable** : l'installateur crée désormais un raccourci « Email to Markdown » dans le menu Démarrer, lance directement l'application dans la zone de notification à la fin de l'installation et déclare explicitement son entrée de désinstallation par utilisateur dans les Applications installées de Windows. Le résidu d'icône du menu contextuel est également supprimé à la désinstallation.
 - **Icône d'application DRY** : le systray, les menus contextuels Explorer, le raccourci du menu Démarrer et l'entrée des Applications installées utilisent désormais le même rendu d'enveloppe généré par `app_icon`, au lieu de trois sources visuelles indépendantes.
-- **Initialisation depuis n’importe quel dossier de notes** : le menu contextuel accepte désormais tout dossier existant sous `notes_dir`. Si son chemin n’existe pas encore dans `destinations.yaml`, l’application l’ajoute automatiquement, ouvre cette nouvelle destination dans l’éditeur et invite à créer immédiatement sa première règle avant la recherche.
+- **Initialisation depuis n'importe quel dossier de notes** : le menu contextuel accepte désormais tout dossier existant sous `notes_dir`. Si son chemin n'existe pas encore dans `destinations.yaml`, l'application l'ajoute automatiquement, ouvre cette nouvelle destination dans l'éditeur et invite à créer immédiatement sa première règle avant la recherche.
 
-- **`dest --gui` — fenêtre modale de gestion des destinations** : accessible depuis le tray (Outils → Gérer les destinations…) ou via `email-to-markdown dest --gui`. Panneau gauche : liste triée avec boutons ↑↓ (réordonner), ✕ (supprimer), ★ (définir défaut). Panneau droit : chemin (lecture seule), note éditable, liste de règles avec suppression individuelle et ajout inline (domain/from/subject/account). Bouton Suggest : scanne le dossier de notes par défaut, détecte les domaines non encore couverts, ouvre un overlay de confirmation par lots. Toutes les mutations sont en mémoire jusqu'au clic sur Enregistrer (discard silencieux à la fermeture). Architecture : `AppCommand::PushDestState` via proxy garantit que `evaluate_script` est toujours appelé depuis la boucle d'événement tray (jamais depuis la closure IPC). Nouveaux mutateurs purs `destinations::add_rule` et `destinations::reorder_destinations` ; 9 tests unitaires.
+### Changed
+
+- **Nettoyage interne (sans changement de comportement)** : classification d'artefact Linux/macOS (Installed/Stale/Missing) partagée dans `shell_integration::classify_artifact` au lieu d'être dupliquée par plateforme ; compteur de références COM de la DLL Explorer factorisé dans `RefCountGuard` ; `src/tray.rs` (2589 lignes) scindé en `src/tray/{mod,event_loop,windows,menu,ipc}.rs` ; CLSID de la commande Explorer partagé via une crate `shell-extension-contract` dédiée pour éliminer le risque de dérive entre le binaire et la DLL.
 
 ### Fixed
 
 - **Boucle d'événements tray sans busy-poll** : `menu_channel` et `result_receiver` ne sont plus sondés par `try_recv()` à chaque tick. Deux threads-pont bloquent désormais sur `recv()` et relaient chaque événement via `EventLoopProxy::send_event`, ce qui permet à la boucle de tourner sous `ControlFlow::Wait` au lieu de `ControlFlow::Poll`. Le process `tray` reste proche de 0% CPU au repos et ne gèle plus la fenêtre de terminal (Windows Terminal) qui l'a lancé.
 - **Détachement de la console hôte en mode tray** : au démarrage de `email-to-markdown tray` sur Windows, la sortie standard et d'erreur sont redirigées vers `NUL` puis le process se détache de sa console d'origine (`FreeConsole`). La fenêtre de terminal qui a lancé la commande n'est donc plus rattachée au process tray et reste immédiatement réutilisable.
+- **Chemins Explorer avec préfixes Windows verbatim** : `current_binary()` pouvait retourner un chemin `\\?\C:\...` ou `\\?\UNC\...` après canonicalisation, un format que le shell Windows ne reconnaît pas pour l'enregistrement du menu contextuel. Ces préfixes sont désormais retirés avant tout usage shell.
+- **Version de la DLL shell-extension désynchronisable** : le nom du DLL copié (`MODERN_DLL_NAME`) et les lignes version-dépendantes de `email-to-markdown.iss` (`AppVersion`, nom du DLL) sont désormais dérivés de `Cargo.toml` à chaque build `-Features tray`, au lieu d'un littéral codé en dur qu'il fallait éditer manuellement à chaque release.
+
+## [0.16.0] - 2026-06-26
+
+### Added
+
+- **`dest --gui` — fenêtre modale de gestion des destinations** : accessible depuis le tray (Outils → Gérer les destinations…) ou via `email-to-markdown dest --gui`. Panneau gauche : liste triée avec boutons ↑↓ (réordonner), ✕ (supprimer), ★ (définir défaut). Panneau droit : chemin (lecture seule), note éditable, liste de règles avec suppression individuelle et ajout inline (domain/from/subject/account). Bouton Suggest : scanne le dossier de notes par défaut, détecte les domaines non encore couverts, ouvre un overlay de confirmation par lots. Toutes les mutations sont en mémoire jusqu'au clic sur Enregistrer (discard silencieux à la fermeture). Architecture : `AppCommand::PushDestState` via proxy garantit que `evaluate_script` est toujours appelé depuis la boucle d'événement tray (jamais depuis la closure IPC). Nouveaux mutateurs purs `destinations::add_rule` et `destinations::reorder_destinations` ; 9 tests unitaires.
 
 ## [0.15.1] - 2026-06-26
 
