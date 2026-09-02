@@ -10,7 +10,8 @@ const BACKGROUND_KEY: &str =
     r"Software\Classes\Directory\Background\shell\EmailToMarkdownContextual";
 const COMMAND_CLSID: &str = "{A18325B7-1289-4856-A8BD-69F6D633DA13}";
 const CLSID_KEY: &str = r"Software\Classes\CLSID\{A18325B7-1289-4856-A8BD-69F6D633DA13}";
-const MODERN_DLL_NAME: &str = "email-to-markdown-shell-extension-0.16.0.dll";
+const MODERN_DLL_NAME: &str =
+    concat!("email-to-markdown-shell-extension-", env!("CARGO_PKG_VERSION"), ".dll");
 const MAIL_ICON_NAME: &str = "email-to-markdown-mail.ico";
 const IDENTITY_PACKAGE_NAME: &str = "FXGuillois.EmailToMarkdown";
 const IDENTITY_PACKAGE_FILE: &str = "email-to-markdown-identity.msix";
@@ -278,7 +279,9 @@ pub fn uninstall() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{command, identity_package_path, modern_extension_path, powershell_quote};
+    use super::{
+        command, identity_package_path, modern_extension_path, powershell_quote, MODERN_DLL_NAME,
+    };
     use std::path::Path;
 
     #[test]
@@ -296,7 +299,7 @@ mod tests {
     fn modern_extension_lives_beside_the_portable_executable() {
         assert_eq!(
             modern_extension_path(Path::new(r"C:\Apps\email-to-markdown.exe")),
-            Path::new(r"C:\Apps\email-to-markdown-shell-extension-0.16.0.dll")
+            Path::new(r"C:\Apps").join(MODERN_DLL_NAME)
         );
     }
 
