@@ -535,9 +535,15 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Contextual { directory } => run_contextual_or_bail(directory)?,
+        Commands::Contextual { directory } => {
+            #[cfg(all(windows, feature = "tray"))]
+            detach_console();
+            run_contextual_or_bail(directory)?
+        }
 
         Commands::ContextualUri { uri } => {
+            #[cfg(all(windows, feature = "tray"))]
+            detach_console();
             let directory = email_to_markdown::shell_integration::local_path_from_uri(&uri)?;
             run_contextual_or_bail(directory)?;
         }

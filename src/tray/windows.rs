@@ -52,7 +52,7 @@ pub(super) fn build_contextual_window(
     proxy: &EventLoopProxy<AppCommand>,
     launch: &tray_actions::ContextualLaunch,
 ) -> Result<(Window, WebView, WindowId)> {
-    let (window, window_id) = build_gui_window(target, "Export contextuel", (720.0, 560.0))?;
+    let (window, window_id) = build_gui_window(target, "Export contextuel", (900.0, 640.0))?;
     let html = include_str!("../../assets/contextual_export.html");
     let launch_json = serde_json::to_string(launch).unwrap_or_else(|_| "null".to_string());
     let init_script = format!(
@@ -86,6 +86,15 @@ pub(super) fn build_contextual_window(
             }
             "open_config" => {
                 let _ = ipc_proxy.send_event(AppCommand::ContextualOpenConfig);
+            }
+            "create_rule" => {
+                if let (Some(attr_kind), Some(attr_value)) = (msg.attr_kind, msg.attr_value) {
+                    let _ = ipc_proxy.send_event(AppCommand::ContextualCreateRuleRequested {
+                        window_id,
+                        attr_kind,
+                        attr_value,
+                    });
+                }
             }
             "cancel" => {
                 let _ = ipc_proxy.send_event(AppCommand::CloseWindow { window_id });

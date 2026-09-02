@@ -57,6 +57,13 @@ pub enum AppCommand {
         result: std::result::Result<tray_actions::ContextualBatchSummary, String>,
     },
     ContextualOpenConfig,
+    /// Persist a new routing rule for the contextual export destination and
+    /// re-inject the refreshed rule labels into the webview.
+    ContextualCreateRuleRequested {
+        window_id: WindowId,
+        attr_kind: String,
+        attr_value: String,
+    },
     OpenProgress {
         action_name: String,
         warning: Option<String>,
@@ -532,6 +539,52 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                     eprintln!("Ouverture accounts.yaml: {:#}", e);
                 }
             }
+            Event::UserEvent(AppCommand::ContextualCreateRuleRequested {
+                window_id,
+                attr_kind,
+                attr_value,
+            }) => {
+                let Some(ContextualStandaloneState::Export(current)) = state.as_mut() else {
+                    return;
+                };
+                if current.window.id() != window_id {
+                    return;
+                }
+                let rule = match attr_kind.as_str() {
+                    "domain" => Some(crate::route::MatchRule::Domain(attr_value.clone())),
+                    "from" => Some(crate::route::MatchRule::From(attr_value.clone())),
+                    _ => None,
+                };
+                let Some(rule) = rule else {
+                    contextual_eval_error(
+                        &current.webview,
+                        "rule",
+                        &format!("type de règle non pris en charge : {attr_kind}"),
+                    );
+                    return;
+                };
+                let dest_file = crate::route::destinations_path();
+                if let Err(error) =
+                    crate::route::upsert_rule(&dest_file, &current.launch.relative_path, rule)
+                {
+                    contextual_eval_error(&current.webview, "rule", &format!("{error:#}"));
+                    return;
+                }
+                match tray_actions::prepare_contextual_launch(&current.launch.target) {
+                    Ok(refreshed) => {
+                        current.launch = refreshed;
+                        if let Ok(json) = serde_json::to_string(&current.launch.rule_labels) {
+                            let _ = current.webview.evaluate_script(&format!(
+                                "contextual_rules_updated({})",
+                                windows::escape_json_for_script(&json)
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        contextual_eval_error(&current.webview, "rule", &format!("{error:#}"));
+                    }
+                }
+            }
             Event::UserEvent(AppCommand::CloseWindow { window_id }) => {
                 if state.as_ref().map(ContextualStandaloneState::window_id) == Some(window_id) {
                     state = None;
@@ -583,4 +636,6 @@ struct ContextualIpcMessage {
     account: Option<String>,
     #[serde(default)]
     keys: Vec<String>,
+    attr_kind: Option<String>,
+    attr_value: Option<String>,
 }
