@@ -97,6 +97,7 @@ open = "5.3"
 dirs = "5.0"
 
 [target.'cfg(windows)'.dependencies]
+email-to-markdown-shell-extension-contract = { path = "packaging/windows/shell-extension-contract" }
 winreg = "0.52"
 windows-sys = { version = "0.59", optional = true, features = [
     "Win32_System_Console",

@@ -2,6 +2,8 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::fs;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -84,6 +86,32 @@ pub fn local_path_from_uri(value: &str) -> Result<PathBuf> {
     parsed
         .to_file_path()
         .map_err(|_| anyhow::anyhow!("URI cannot be represented as a local native path"))
+}
+
+/// Shared classification for a managed artifact file whose content is fully
+/// regenerated on install: read it, compare to the expected rendered content,
+/// and derive the Installed/Stale/Missing state. `stale_fallback` names the
+/// state description used when no `contextual` line can be located in a
+/// mismatched file.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn classify_artifact(
+    path: &Path,
+    expected: &str,
+    stale_fallback: &str,
+) -> Result<ArtifactState> {
+    match fs::read_to_string(path) {
+        Ok(content) if content == expected => Ok(ArtifactState::Installed),
+        Ok(content) => Ok(ArtifactState::Stale {
+            configured_binary: content
+                .lines()
+                .find(|line| line.contains("contextual"))
+                .unwrap_or(stale_fallback)
+                .trim()
+                .into(),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ArtifactState::Missing),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
 }
 
 pub fn format_status(statuses: &[ArtifactStatus]) -> String {

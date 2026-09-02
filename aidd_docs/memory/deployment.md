@@ -30,6 +30,14 @@ email-to-markdown shell status
 email-to-markdown shell uninstall
 ```
 
+### Windows installer version sync
+
+`scripts/build.ps1` (build `-Features tray`) régénère `packaging/windows/email-to-markdown.iss` à
+chaque build : `AppVersion` et le nom du DLL `email-to-markdown-shell-extension-<version>.dll` sont
+réécrits depuis `Cargo.toml`, source unique de vérité. Aucun script du dépôt n'invoque `ISCC`
+(packaging manuel) et Inno Setup n'a pas de lecteur TOML fiable — `build.ps1` reste le point
+d'intégration le plus proche de `Cargo.toml`, déjà responsable du nom du DLL copié.
+
 L’installation est strictement utilisateur : HKCU sous Windows,
 `~/Library/Services` sous macOS et `~/.local/share` sous Linux. Les artefacts
 incorporent le chemin absolu du binaire ; `status` détecte un chemin périmé et

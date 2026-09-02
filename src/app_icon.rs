@@ -39,22 +39,29 @@ pub fn rgba(size: u32) -> Vec<u8> {
     pixels
 }
 
+/// Size of the ICONDIR + ICONDIRENTRY header preceding the image data.
+#[cfg(windows)]
+const ICO_HEADER_SIZE: u32 = 22;
+/// Size of the BITMAPINFOHEADER preceding the XOR/AND pixel masks.
+#[cfg(windows)]
+const BITMAPINFOHEADER_SIZE: u32 = 40;
+
 #[cfg(windows)]
 pub fn windows_ico() -> Vec<u8> {
     let size = WINDOWS_ICON_SIZE as usize;
     let rgba = rgba(WINDOWS_ICON_SIZE);
     let xor_size = size * size * 4;
     let and_size = size * size / 8;
-    let image_size = 40 + xor_size + and_size;
-    let mut bytes = Vec::with_capacity(22 + image_size);
+    let image_size = BITMAPINFOHEADER_SIZE + xor_size as u32 + and_size as u32;
+    let mut bytes = Vec::with_capacity((ICO_HEADER_SIZE + image_size) as usize);
 
     bytes.extend_from_slice(&[0, 0, 1, 0, 1, 0]);
     bytes.extend_from_slice(&[size as u8, size as u8, 0, 0]);
     bytes.extend_from_slice(&1u16.to_le_bytes());
     bytes.extend_from_slice(&32u16.to_le_bytes());
-    bytes.extend_from_slice(&(image_size as u32).to_le_bytes());
-    bytes.extend_from_slice(&22u32.to_le_bytes());
-    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&image_size.to_le_bytes());
+    bytes.extend_from_slice(&ICO_HEADER_SIZE.to_le_bytes());
+    bytes.extend_from_slice(&BITMAPINFOHEADER_SIZE.to_le_bytes());
     bytes.extend_from_slice(&(size as i32).to_le_bytes());
     bytes.extend_from_slice(&((size * 2) as i32).to_le_bytes());
     bytes.extend_from_slice(&1u16.to_le_bytes());
@@ -72,7 +79,7 @@ pub fn windows_ico() -> Vec<u8> {
             bytes.extend_from_slice(&[blue, green, red, alpha]);
         }
     }
-    bytes.resize(22 + image_size, 0);
+    bytes.resize((ICO_HEADER_SIZE + image_size) as usize, 0);
     bytes
 }
 

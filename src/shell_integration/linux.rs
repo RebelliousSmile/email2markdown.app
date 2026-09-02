@@ -78,19 +78,7 @@ fn install_at(home: &Path, binary: &Path, managers: &[Manager]) -> Result<()> {
 }
 
 fn artifact(path: PathBuf, name: &str, expected: String) -> Result<ArtifactStatus> {
-    let state = match fs::read_to_string(&path) {
-        Ok(content) if content == expected => ArtifactState::Installed,
-        Ok(content) => ArtifactState::Stale {
-            configured_binary: content
-                .lines()
-                .find(|line| line.contains("contextual"))
-                .unwrap_or("artefact différent")
-                .trim()
-                .into(),
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => ArtifactState::Missing,
-        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
-    };
+    let state = super::classify_artifact(&path, &expected, "artefact différent")?;
     Ok(ArtifactStatus {
         name: name.into(),
         location: path.display().to_string(),

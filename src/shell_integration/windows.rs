@@ -8,9 +8,12 @@ use winreg::RegKey;
 const SELECTED_KEY: &str = r"Software\Classes\Directory\shell\EmailToMarkdownContextual";
 const BACKGROUND_KEY: &str =
     r"Software\Classes\Directory\Background\shell\EmailToMarkdownContextual";
-const COMMAND_CLSID: &str = "{A18325B7-1289-4856-A8BD-69F6D633DA13}";
-const CLSID_KEY: &str = r"Software\Classes\CLSID\{A18325B7-1289-4856-A8BD-69F6D633DA13}";
-const MODERN_DLL_NAME: &str = "email-to-markdown-shell-extension-0.16.0.dll";
+const COMMAND_CLSID: &str = email_to_markdown_shell_extension_contract::COMMAND_CLSID_BRACED;
+static CLSID_KEY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(r"Software\Classes\CLSID\{COMMAND_CLSID}")
+});
+const MODERN_DLL_NAME: &str =
+    concat!("email-to-markdown-shell-extension-", env!("CARGO_PKG_VERSION"), ".dll");
 const MAIL_ICON_NAME: &str = "email-to-markdown-mail.ico";
 const IDENTITY_PACKAGE_NAME: &str = "FXGuillois.EmailToMarkdown";
 const IDENTITY_PACKAGE_FILE: &str = "email-to-markdown-identity.msix";
@@ -149,7 +152,7 @@ fn install_modern_verb(root: &RegKey, binary: &Path, icon: &Path) -> Result<bool
     if !extension.is_file() {
         return Ok(false);
     }
-    let (class, _) = root.create_subkey(CLSID_KEY)?;
+    let (class, _) = root.create_subkey(CLSID_KEY.as_str())?;
     class.set_value("", &"Email to Markdown Explorer command")?;
     let (server, _) = class.create_subkey("InprocServer32")?;
     server.set_value("", &extension.to_string_lossy().as_ref())?;
@@ -182,7 +185,7 @@ pub fn install(binary: &Path) -> Result<Vec<ArtifactStatus>> {
 fn modern_status(root: &RegKey, binary: &Path) -> ArtifactStatus {
     let extension = modern_extension_path(binary);
     let registered_server = root
-        .open_subkey(format!(r"{}\InprocServer32", CLSID_KEY))
+        .open_subkey(format!(r"{}\InprocServer32", CLSID_KEY.as_str()))
         .and_then(|key| key.get_value::<String, _>(""));
     let registered_handler = root
         .open_subkey(SELECTED_KEY)
@@ -209,7 +212,7 @@ fn modern_status(root: &RegKey, binary: &Path) -> ArtifactStatus {
     };
     ArtifactStatus {
         name: "Explorer Windows 11 — menu principal".into(),
-        location: format!(r"HKCU\{}", CLSID_KEY),
+        location: format!(r"HKCU\{}", CLSID_KEY.as_str()),
         state,
     }
 }
@@ -263,7 +266,7 @@ pub fn status(binary: &Path) -> Result<Vec<ArtifactStatus>> {
 pub fn uninstall() -> Result<()> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
     unregister_identity_package()?;
-    for key in [SELECTED_KEY, BACKGROUND_KEY, CLSID_KEY] {
+    for key in [SELECTED_KEY, BACKGROUND_KEY, CLSID_KEY.as_str()] {
         match root.delete_subkey_all(key) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -278,7 +281,9 @@ pub fn uninstall() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{command, identity_package_path, modern_extension_path, powershell_quote};
+    use super::{
+        command, identity_package_path, modern_extension_path, powershell_quote, MODERN_DLL_NAME,
+    };
     use std::path::Path;
 
     #[test]
@@ -296,7 +301,7 @@ mod tests {
     fn modern_extension_lives_beside_the_portable_executable() {
         assert_eq!(
             modern_extension_path(Path::new(r"C:\Apps\email-to-markdown.exe")),
-            Path::new(r"C:\Apps\email-to-markdown-shell-extension-0.16.0.dll")
+            Path::new(r"C:\Apps").join(MODERN_DLL_NAME)
         );
     }
 

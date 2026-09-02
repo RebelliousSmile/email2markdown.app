@@ -111,7 +111,9 @@ pub fn build_search_batches(rules: &[MatchRule]) -> Result<Vec<String>> {
         .map(|chunk| {
             let mut atoms = Vec::new();
             for key in chunk {
-                let (kind, value) = key.split_once(':').expect("internal rule key");
+                let Some((kind, value)) = key.split_once(':') else {
+                    continue;
+                };
                 let quoted = quote_imap(value)?;
                 match kind {
                     "correspondent" => {
@@ -694,7 +696,7 @@ fn install_staged(
             if destination.file_name() != Some(name.as_os_str()) {
                 markdown_content = markdown_content.replace(
                     name.to_string_lossy().as_ref(),
-                    destination.file_name().unwrap().to_string_lossy().as_ref(),
+                    destination.file_name().unwrap_or(name.as_os_str()).to_string_lossy().as_ref(),
                 );
             }
             fs::rename(&path, &destination)

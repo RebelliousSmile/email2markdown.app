@@ -675,11 +675,7 @@ fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
 
     // Frontmatter dates are written as RFC3339; epoch fallback on parse failure
     // (same fallback the export path uses for an unparseable Date header).
-    let date = chrono::DateTime::parse_from_rfc3339(date_raw.trim()).unwrap_or_else(|_| {
-        chrono::DateTime::from_timestamp(0, 0)
-            .expect("epoch is valid")
-            .fixed_offset()
-    });
+    let date = chrono::DateTime::parse_from_rfc3339(date_raw.trim()).unwrap_or_default();
 
     EmailMeta {
         from: sender_addr,

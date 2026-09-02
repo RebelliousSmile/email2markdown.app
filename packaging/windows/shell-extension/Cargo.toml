@@ -8,6 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+email-to-markdown-shell-extension-contract = { path = "../shell-extension-contract" }
 windows = { version = "0.54", features = [
     "implement",
     "Win32_Foundation",

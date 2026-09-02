@@ -1,0 +1,7 @@
+[package]
+name = "email-to-markdown-shell-extension-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]

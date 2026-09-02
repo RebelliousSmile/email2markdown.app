@@ -56,6 +56,18 @@ fn detach_console() {
     }
 }
 
+fn run_contextual_or_bail(directory: PathBuf) -> Result<()> {
+    #[cfg(feature = "tray")]
+    {
+        tray::run_contextual(directory).context("Failed to run contextual email export")
+    }
+    #[cfg(not(feature = "tray"))]
+    {
+        let _ = directory;
+        anyhow::bail!("the contextual window requires a build with the 'tray' GUI feature")
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "email-to-markdown")]
 #[command(author = "FX Guillois")]
@@ -523,29 +535,11 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Contextual { directory } => {
-            #[cfg(feature = "tray")]
-            {
-                tray::run_contextual(directory).context("Failed to run contextual email export")?;
-            }
-            #[cfg(not(feature = "tray"))]
-            {
-                let _ = directory;
-                anyhow::bail!("the contextual window requires a build with the 'tray' GUI feature");
-            }
-        }
+        Commands::Contextual { directory } => run_contextual_or_bail(directory)?,
 
         Commands::ContextualUri { uri } => {
             let directory = email_to_markdown::shell_integration::local_path_from_uri(&uri)?;
-            #[cfg(feature = "tray")]
-            {
-                tray::run_contextual(directory).context("Failed to run contextual email export")?;
-            }
-            #[cfg(not(feature = "tray"))]
-            {
-                let _ = directory;
-                anyhow::bail!("the contextual window requires a build with the 'tray' GUI feature");
-            }
+            run_contextual_or_bail(directory)?;
         }
 
         Commands::Shell { action } => {
