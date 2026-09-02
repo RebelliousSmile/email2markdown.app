@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Boucle d'événements tray sans busy-poll** : `menu_channel` et `result_receiver` ne sont plus sondés par `try_recv()` à chaque tick. Deux threads-pont bloquent désormais sur `recv()` et relaient chaque événement via `EventLoopProxy::send_event`, ce qui permet à la boucle de tourner sous `ControlFlow::Wait` au lieu de `ControlFlow::Poll`. Le process `tray` reste proche de 0% CPU au repos et ne gèle plus la fenêtre de terminal (Windows Terminal) qui l'a lancé.
+- **Détachement de la console hôte en mode tray** : au démarrage de `email-to-markdown tray` sur Windows, la sortie standard et d'erreur sont redirigées vers `NUL` puis le process se détache de sa console d'origine (`FreeConsole`). La fenêtre de terminal qui a lancé la commande n'est donc plus rattachée au process tray et reste immédiatement réutilisable.
 
 ## [0.15.1] - 2026-06-26
 

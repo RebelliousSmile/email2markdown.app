@@ -98,10 +98,16 @@ dirs = "5.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+windows-sys = { version = "0.59", optional = true, features = [
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_Security",
+] }
 
 [features]
 default = []
-tray = ["tray-icon", "tao", "wry", "rfd", "dep:ureq", "dep:self-replace"]
+tray = ["tray-icon", "tao", "wry", "rfd", "dep:ureq", "dep:self-replace", "dep:windows-sys"]
 
 [dev-dependencies]
 
