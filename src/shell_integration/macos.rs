@@ -48,19 +48,7 @@ pub fn install(binary: &Path) -> Result<Vec<ArtifactStatus>> {
 
 pub fn status(binary: &Path) -> Result<Vec<ArtifactStatus>> {
     let path = workflow_root()?.join("Contents/document.wflow");
-    let state = match fs::read_to_string(&path) {
-        Ok(content) if content == render(binary) => ArtifactState::Installed,
-        Ok(content) => ArtifactState::Stale {
-            configured_binary: content
-                .lines()
-                .find(|line| line.contains("contextual"))
-                .unwrap_or("workflow différent")
-                .trim()
-                .into(),
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => ArtifactState::Missing,
-        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
-    };
+    let state = super::classify_artifact(&path, &render(binary), "workflow différent")?;
     Ok(vec![ArtifactStatus {
         name: "Finder — Action rapide".into(),
         location: path.display().to_string(),

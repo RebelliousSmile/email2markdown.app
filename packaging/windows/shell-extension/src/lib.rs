@@ -26,6 +26,24 @@ pub const COMMAND_CLSID: GUID =
     GUID::from_u128(email_to_markdown_shell_extension_contract::COMMAND_CLSID_U128);
 static OBJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+/// Increments `OBJECT_COUNT` on construction and decrements it on `Drop`.
+/// Shared by every COM object that must keep the DLL alive while it exists,
+/// so `DllCanUnloadNow` reflects the true outstanding-instance count.
+struct RefCountGuard;
+
+impl RefCountGuard {
+    fn new() -> Self {
+        OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for RefCountGuard {
+    fn drop(&mut self) {
+        OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn quote_command_line_argument(value: &str) -> String {
     if !value
         .chars()
@@ -89,6 +107,9 @@ fn module_path() -> windows::core::Result<PathBuf> {
     Ok(PathBuf::from(String::from_utf16_lossy(&buffer[..length])))
 }
 
+/// "email-to-markdown.exe" and "email-to-markdown-mail.ico" below are manually
+/// kept in sync with the main crate's binary name and `MAIL_ICON_NAME`
+/// constant. No shared crate: two stable literals do not justify the coupling.
 fn executable_path() -> windows::core::Result<PathBuf> {
     Ok(module_path()?
         .parent()
@@ -132,18 +153,15 @@ fn launch_for_path(path: &str) -> windows::core::Result<()> {
 }
 
 #[implement(IExplorerCommand)]
-struct ExplorerCommand;
+struct ExplorerCommand {
+    _ref_count: RefCountGuard,
+}
 
 impl ExplorerCommand {
     fn new() -> Self {
-        OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
-        Self
-    }
-}
-
-impl Drop for ExplorerCommand {
-    fn drop(&mut self) {
-        OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+        Self {
+            _ref_count: RefCountGuard::new(),
+        }
     }
 }
 
@@ -199,18 +217,15 @@ impl IExplorerCommand_Impl for ExplorerCommand {
 }
 
 #[implement(IClassFactory)]
-struct CommandClassFactory;
+struct CommandClassFactory {
+    _ref_count: RefCountGuard,
+}
 
 impl CommandClassFactory {
     fn new() -> Self {
-        OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
-        Self
-    }
-}
-
-impl Drop for CommandClassFactory {
-    fn drop(&mut self) {
-        OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+        Self {
+            _ref_count: RefCountGuard::new(),
+        }
     }
 }
 
