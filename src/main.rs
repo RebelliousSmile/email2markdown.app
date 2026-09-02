@@ -11,6 +11,51 @@ use email_to_markdown::thunderbird; // [1] Import Thunderbird
 #[cfg(feature = "tray")]
 use email_to_markdown::tray;
 
+/// Detach the tray process from a hosting console (e.g. Windows Terminal),
+/// best-effort. Redirects stdout/stderr to `NUL` first so any later
+/// `println!`/`eprintln!` in `tray.rs` writes silently instead of panicking
+/// on the now-invalid inherited console handle.
+#[cfg(all(windows, feature = "tray"))]
+fn detach_console() {
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Console::{
+        FreeConsole, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    let nul: Vec<u16> = std::ffi::OsStr::new("NUL")
+        .encode_wide()
+        .chain(once(0))
+        .collect();
+
+    let handle = unsafe {
+        CreateFileW(
+            nul.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+
+    if handle != INVALID_HANDLE_VALUE {
+        unsafe {
+            SetStdHandle(STD_OUTPUT_HANDLE, handle);
+            SetStdHandle(STD_ERROR_HANDLE, handle);
+        }
+    }
+
+    unsafe {
+        FreeConsole();
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "email-to-markdown")]
 #[command(author = "FX Guillois")]
@@ -516,6 +561,8 @@ fn main() -> Result<()> {
         #[cfg(feature = "tray")]
         Commands::Tray => {
             println!("Starting system tray application...");
+            #[cfg(windows)]
+            detach_console();
             tray::run_tray().context("Failed to run system tray")?;
         }
     }

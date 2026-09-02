@@ -117,6 +117,10 @@ pub enum AppCommand {
     ContextualDestinationSaved {
         window_id: WindowId,
     },
+    /// Forwarded by the bridge thread blocking on `MenuEvent::receiver()`.
+    MenuEventReceived(String),
+    /// Forwarded by the bridge thread blocking on `result_receiver`.
+    ActionResultReceived(ActionResult),
 }
 
 /// Per-progress-window state. Fields declared in drop order:
@@ -247,11 +251,28 @@ pub fn run_tray() -> Result<()> {
     let (result_sender, result_receiver) = mpsc::channel::<ActionResult>();
     let menu_channel = MenuEvent::receiver();
 
+    // Bridge threads: block on the external channels and push their payload
+    // through the proxy so the event loop can run under `ControlFlow::Wait`
+    // instead of busy-polling both channels every tick.
+    let menu_bridge_proxy = proxy.clone();
+    thread::spawn(move || {
+        while let Ok(menu_event) = menu_channel.recv() {
+            let _ = menu_bridge_proxy.send_event(AppCommand::MenuEventReceived(menu_event.id.0));
+        }
+    });
+
+    let result_bridge_proxy = proxy.clone();
+    thread::spawn(move || {
+        while let Ok(result) = result_receiver.recv() {
+            let _ = result_bridge_proxy.send_event(AppCommand::ActionResultReceived(result));
+        }
+    });
+
     let mut tray_icon: Option<TrayIcon> = None;
     let mut windows: HashMap<WindowId, WState> = HashMap::new();
 
     event_loop.run(move |event, target, control_flow| {
-        *control_flow = ControlFlow::Poll;
+        *control_flow = ControlFlow::Wait;
 
         if let Event::NewEvents(StartCause::Init) = event {
             match create_tray_icon() {
@@ -261,26 +282,6 @@ pub fn run_tray() -> Result<()> {
                 }
                 Err(e) => {
                     eprintln!("Failed to create tray icon: {}", e);
-                }
-            }
-        }
-
-        if let Ok(menu_event) = menu_channel.try_recv() {
-            handle_menu_event(&menu_event.id.0, result_sender.clone());
-        }
-
-        if let Ok(result) = result_receiver.try_recv() {
-            match &result {
-                ActionResult::Imported(_) => {
-                    if let Some(ref icon) = tray_icon {
-                        match create_menu() {
-                            Ok(new_menu) => icon.set_menu(Some(Box::new(new_menu))),
-                            Err(e) => eprintln!("Failed to rebuild menu: {}", e),
-                        }
-                    }
-                }
-                _ => {
-                    show_notification(&result);
                 }
             }
         }
@@ -568,6 +569,22 @@ pub fn run_tray() -> Result<()> {
                     DEST_GUI_WINDOW_OPEN.store(false, Ordering::Release);
                 }
                 None => {}
+            },
+            Event::UserEvent(AppCommand::MenuEventReceived(id)) => {
+                handle_menu_event(&id, result_sender.clone());
+            }
+            Event::UserEvent(AppCommand::ActionResultReceived(result)) => match &result {
+                ActionResult::Imported(_) => {
+                    if let Some(ref icon) = tray_icon {
+                        match create_menu() {
+                            Ok(new_menu) => icon.set_menu(Some(Box::new(new_menu))),
+                            Err(e) => eprintln!("Failed to rebuild menu: {}", e),
+                        }
+                    }
+                }
+                _ => {
+                    show_notification(&result);
+                }
             },
             _ => {}
         }
