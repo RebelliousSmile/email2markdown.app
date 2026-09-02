@@ -1,3 +1,4 @@
+pub mod app_icon;
 pub mod cleaner; // Email body cleaner pipeline
 pub mod config;
 pub mod contextual_export;

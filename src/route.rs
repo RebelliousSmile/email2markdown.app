@@ -920,14 +920,8 @@ pub enum ContextualDestinationError {
     MissingAddressRule { path: String },
 }
 
-/// Resolve an existing local directory to the one configured destination that owns it.
-/// The comparison uses canonical filesystem identity, never a case-folded path string.
-pub fn resolve_contextual_destination(
-    notes_dir: &Path,
-    target: &Path,
-    destinations: &[Destination],
-    configured_accounts: &[String],
-) -> Result<ContextualDestination> {
+/// Validate a contextual target and return its portable path relative to `notes_dir`.
+pub fn contextual_relative_path(notes_dir: &Path, target: &Path) -> Result<String> {
     reject_symlink_path(notes_dir, target)?;
     let notes_real = notes_dir
         .canonicalize()
@@ -941,6 +935,38 @@ pub fn resolve_contextual_destination(
             target.display()
         );
     }
+
+    let relative = target_real
+        .strip_prefix(&notes_real)
+        .context("failed to make contextual target relative to notes_dir")?;
+    if relative.as_os_str().is_empty() {
+        anyhow::bail!("notes_dir itself cannot be a routing destination");
+    }
+    relative
+        .components()
+        .map(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .map(str::to_owned)
+                .context("destination path is not valid Unicode")
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|segments| segments.join("/"))
+}
+
+/// Resolve an existing local directory to the one configured destination that owns it.
+/// The comparison uses canonical filesystem identity, never a case-folded path string.
+pub fn resolve_contextual_destination(
+    notes_dir: &Path,
+    target: &Path,
+    destinations: &[Destination],
+    configured_accounts: &[String],
+) -> Result<ContextualDestination> {
+    contextual_relative_path(notes_dir, target)?;
+    let target_real = target
+        .canonicalize()
+        .with_context(|| format!("target directory does not exist: {}", target.display()))?;
 
     for destination in destinations {
         let configured = join_safe_segments(notes_dir, &destination.path)?;

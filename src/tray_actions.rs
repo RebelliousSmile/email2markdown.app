@@ -89,6 +89,8 @@ pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualL
         .as_deref()
         .map(std::path::Path::new)
         .context("notes_dir is not configured")?;
+    let destinations_file = route::destinations_path();
+    ensure_contextual_destination(notes_dir, target, &destinations_file)?;
     let destinations = route::load_destinations();
     let configured_names: Vec<String> = cfg
         .accounts
@@ -141,6 +143,72 @@ pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualL
         rule_labels,
         accounts,
     })
+}
+
+fn ensure_contextual_destination(
+    notes_dir: &std::path::Path,
+    target: &std::path::Path,
+    destinations_file: &std::path::Path,
+) -> Result<String> {
+    let relative_path = route::contextual_relative_path(notes_dir, target)?;
+    let mut config = crate::destinations::load_yaml(destinations_file)?;
+    if !config
+        .destinations
+        .iter()
+        .any(|entry| entry.path.eq_ignore_ascii_case(&relative_path))
+    {
+        crate::destinations::upsert_entry(&mut config, &relative_path, &[]);
+        crate::destinations::save_yaml(destinations_file, &config)?;
+    }
+    Ok(relative_path)
+}
+
+#[cfg(test)]
+mod contextual_setup_tests {
+    use super::ensure_contextual_destination;
+    use crate::destinations::{load_yaml, save_yaml, DestinationEntry, DestinationsConfig};
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn missing_contextual_folder_is_added_as_a_bare_destination() {
+        let temp = TempDir::new().unwrap();
+        let notes = temp.path().join("notes");
+        let target = notes.join("Perso").join("Activism");
+        let file = temp.path().join("destinations.yaml");
+        fs::create_dir_all(&target).unwrap();
+
+        let relative = ensure_contextual_destination(&notes, &target, &file).unwrap();
+
+        assert_eq!(relative, "Perso/Activism");
+        let config = load_yaml(&file).unwrap();
+        assert_eq!(config.destinations.len(), 1);
+        assert_eq!(config.destinations[0].path, "Perso/Activism");
+        assert!(config.destinations[0].rules.is_empty());
+    }
+
+    #[test]
+    fn existing_contextual_destination_is_not_duplicated() {
+        let temp = TempDir::new().unwrap();
+        let notes = temp.path().join("notes");
+        let target = notes.join("Perso").join("Activism");
+        let file = temp.path().join("destinations.yaml");
+        fs::create_dir_all(&target).unwrap();
+        save_yaml(
+            &file,
+            &DestinationsConfig {
+                destinations: vec![DestinationEntry {
+                    path: "perso/activism".into(),
+                    ..Default::default()
+                }],
+            },
+        )
+        .unwrap();
+
+        ensure_contextual_destination(&notes, &target, &file).unwrap();
+
+        assert_eq!(load_yaml(&file).unwrap().destinations.len(), 1);
+    }
 }
 
 pub fn run_contextual_search(

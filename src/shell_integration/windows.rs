@@ -1,4 +1,5 @@
 use super::{ArtifactState, ArtifactStatus};
+use crate::app_icon;
 use anyhow::{Context, Result};
 use std::path::Path;
 use winreg::enums::HKEY_CURRENT_USER;
@@ -41,10 +42,16 @@ fn command(binary: &Path, placeholder: &str) -> String {
     format!("\"{}\" contextual \"{}\"", binary.display(), placeholder)
 }
 
-fn write_verb(root: &RegKey, key_path: &str, binary: &Path, placeholder: &str) -> Result<()> {
+fn write_verb(
+    root: &RegKey,
+    key_path: &str,
+    binary: &Path,
+    icon: &Path,
+    placeholder: &str,
+) -> Result<()> {
     let (verb, _) = root.create_subkey(key_path)?;
     verb.set_value("", &"Convertir les emails associés en Markdown")?;
-    verb.set_value("Icon", &binary.to_string_lossy().as_ref())?;
+    verb.set_value("Icon", &icon.to_string_lossy().as_ref())?;
     let (command_key, _) = verb.create_subkey("command")?;
     command_key.set_value("", &command(binary, placeholder))?;
     Ok(())
@@ -137,59 +144,11 @@ fn unregister_identity_package() -> Result<()> {
     Ok(())
 }
 
-fn mail_icon_bytes() -> Vec<u8> {
-    const SIZE: usize = 32;
-    let xor_size = SIZE * SIZE * 4;
-    let and_size = SIZE * SIZE / 8;
-    let image_size = 40 + xor_size + and_size;
-    let mut bytes = Vec::with_capacity(22 + image_size);
-    bytes.extend_from_slice(&[0, 0, 1, 0, 1, 0]);
-    bytes.extend_from_slice(&[SIZE as u8, SIZE as u8, 0, 0]);
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&32u16.to_le_bytes());
-    bytes.extend_from_slice(&(image_size as u32).to_le_bytes());
-    bytes.extend_from_slice(&22u32.to_le_bytes());
-    bytes.extend_from_slice(&40u32.to_le_bytes());
-    bytes.extend_from_slice(&(SIZE as i32).to_le_bytes());
-    bytes.extend_from_slice(&((SIZE * 2) as i32).to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&32u16.to_le_bytes());
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes.extend_from_slice(&(xor_size as u32).to_le_bytes());
-    bytes.extend_from_slice(&[0; 16]);
-
-    for stored_y in 0..SIZE {
-        let y = SIZE - 1 - stored_y;
-        for x in 0..SIZE {
-            let inside = (3..=28).contains(&x) && (6..=25).contains(&y);
-            let border = inside && (x == 3 || x == 28 || y == 6 || y == 25);
-            let diagonal = inside
-                && y >= 8
-                && y <= 18
-                && (x.abs_diff(3 + (y - 7)) <= 1 || x.abs_diff(28 - (y - 7)) <= 1);
-            let (red, green, blue, alpha) = if border || diagonal {
-                (255, 255, 255, 255)
-            } else if inside {
-                (30, 136, 229, 255)
-            } else {
-                (0, 0, 0, 0)
-            };
-            bytes.extend_from_slice(&[blue, green, red, alpha]);
-        }
-    }
-    bytes.resize(22 + image_size, 0);
-    bytes
-}
-
-fn install_modern_verb(root: &RegKey, binary: &Path) -> Result<bool> {
+fn install_modern_verb(root: &RegKey, binary: &Path, icon: &Path) -> Result<bool> {
     let extension = modern_extension_path(binary);
     if !extension.is_file() {
         return Ok(false);
     }
-    let icon = mail_icon_path(binary);
-    std::fs::write(&icon, mail_icon_bytes())
-        .with_context(|| format!("write Windows mail icon {}", icon.display()))?;
-
     let (class, _) = root.create_subkey(CLSID_KEY)?;
     class.set_value("", &"Email to Markdown Explorer command")?;
     let (server, _) = class.create_subkey("InprocServer32")?;
@@ -210,9 +169,12 @@ pub fn install(binary: &Path) -> Result<Vec<ArtifactStatus>> {
     // Register the identity first: if Windows rejects the signed package, do
     // not leave a legacy-only integration that looks like a successful install.
     register_identity_package(binary)?;
-    write_verb(&root, SELECTED_KEY, binary, "%1")?;
-    write_verb(&root, BACKGROUND_KEY, binary, "%V")?;
-    install_modern_verb(&root, binary)?;
+    let icon = mail_icon_path(binary);
+    std::fs::write(&icon, app_icon::windows_ico())
+        .with_context(|| format!("write Windows application icon {}", icon.display()))?;
+    write_verb(&root, SELECTED_KEY, binary, &icon, "%1")?;
+    write_verb(&root, BACKGROUND_KEY, binary, &icon, "%V")?;
+    install_modern_verb(&root, binary, &icon)?;
     refresh_explorer_associations();
     status(binary)
 }
@@ -316,9 +278,7 @@ pub fn uninstall() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        command, identity_package_path, mail_icon_bytes, modern_extension_path, powershell_quote,
-    };
+    use super::{command, identity_package_path, modern_extension_path, powershell_quote};
     use std::path::Path;
 
     #[test]
@@ -338,13 +298,6 @@ mod tests {
             modern_extension_path(Path::new(r"C:\Apps\email-to-markdown.exe")),
             Path::new(r"C:\Apps\email-to-markdown-shell-extension-0.16.0.dll")
         );
-    }
-
-    #[test]
-    fn generated_mail_icon_is_a_complete_32_bit_ico() {
-        let icon = mail_icon_bytes();
-        assert_eq!(&icon[..6], &[0, 0, 1, 0, 1, 0]);
-        assert_eq!(icon.len(), 22 + 40 + 32 * 32 * 4 + 32 * 32 / 8);
     }
 
     #[test]

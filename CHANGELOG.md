@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Installation Windows visible, active et désinstallable** : l'installateur crée désormais un raccourci « Email to Markdown » dans le menu Démarrer, lance directement l'application dans la zone de notification à la fin de l'installation et déclare explicitement son entrée de désinstallation par utilisateur dans les Applications installées de Windows. Le résidu d'icône du menu contextuel est également supprimé à la désinstallation.
+- **Icône d'application DRY** : le systray, les menus contextuels Explorer, le raccourci du menu Démarrer et l'entrée des Applications installées utilisent désormais le même rendu d'enveloppe généré par `app_icon`, au lieu de trois sources visuelles indépendantes.
+- **Initialisation depuis n’importe quel dossier de notes** : le menu contextuel accepte désormais tout dossier existant sous `notes_dir`. Si son chemin n’existe pas encore dans `destinations.yaml`, l’application l’ajoute automatiquement, ouvre cette nouvelle destination dans l’éditeur et invite à créer immédiatement sa première règle avant la recherche.
+
 - **`dest --gui` — fenêtre modale de gestion des destinations** : accessible depuis le tray (Outils → Gérer les destinations…) ou via `email-to-markdown dest --gui`. Panneau gauche : liste triée avec boutons ↑↓ (réordonner), ✕ (supprimer), ★ (définir défaut). Panneau droit : chemin (lecture seule), note éditable, liste de règles avec suppression individuelle et ajout inline (domain/from/subject/account). Bouton Suggest : scanne le dossier de notes par défaut, détecte les domaines non encore couverts, ouvre un overlay de confirmation par lots. Toutes les mutations sont en mémoire jusqu'au clic sur Enregistrer (discard silencieux à la fermeture). Architecture : `AppCommand::PushDestState` via proxy garantit que `evaluate_script` est toujours appelé depuis la boucle d'événement tray (jamais depuis la closure IPC). Nouveaux mutateurs purs `destinations::add_rule` et `destinations::reorder_destinations` ; 9 tests unitaires.
 
 ## [0.15.1] - 2026-06-26

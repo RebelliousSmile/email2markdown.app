@@ -185,6 +185,15 @@
   #add-rule-form select, #add-rule-form input {
     border: 1px solid #ddd; border-radius: 3px; padding: 4px 8px; font-size: 12px;
   }
+  #first-rule-prompt {
+    display: none;
+    margin-bottom: 10px;
+    padding: 9px 10px;
+    border-radius: 3px;
+    background: #e3f2fd;
+    color: #0d47a1;
+    line-height: 1.4;
+  }
   /* ── Add-entry form ── */
   #add-entry-form {
     background: #fff;
@@ -323,6 +332,7 @@
 
       <div class="detail-section">
         <h3>Règles de routage</h3>
+        <p id="first-rule-prompt">Cette destination vient d’être ajoutée. Créez sa première règle pour indiquer quels emails rechercher.</p>
         <ul id="rules-list"></ul>
         <div id="add-rule-form">
           <select id="rule-kind">
@@ -391,6 +401,8 @@
   // ── State ──────────────────────────────────────────────────────────────────
   var state = { destinations: [] };
   var selectedPath = __INITIAL_PATH_JSON__;
+  var contextualSetup = __CONTEXTUAL_SETUP_JSON__;
+  var firstRuleFocused = false;
   var selectionMode = false;
   var multiSelected = new Set();
 
@@ -498,7 +510,15 @@
 
     var ul = document.getElementById('rules-list');
     ul.innerHTML = '';
-    (entry.rules || []).forEach(function (rule) {
+    var rules = entry.rules || [];
+    var prompt = document.getElementById('first-rule-prompt');
+    var needsFirstRule = contextualSetup && rules.length === 0;
+    prompt.style.display = needsFirstRule ? 'block' : 'none';
+    if (needsFirstRule && !firstRuleFocused) {
+      firstRuleFocused = true;
+      setTimeout(function () { document.getElementById('rule-value').focus(); }, 0);
+    }
+    rules.forEach(function (rule) {
       var li = document.createElement('li');
       var label = document.createElement('span');
       label.className = 'rule-label';

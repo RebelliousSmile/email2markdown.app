@@ -18,7 +18,10 @@ OutputBaseFilename=email-to-markdown-{#AppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\{#AppExeName}
+Uninstallable=yes
+CreateUninstallRegKey=yes
+UninstallDisplayName={#AppName}
+UninstallDisplayIcon={app}\email-to-markdown-mail.ico
 
 [Files]
 Source: "..\..\target\release\email-to-markdown.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -26,8 +29,15 @@ Source: "..\..\target\release\email-to-markdown-shell-extension-0.16.0.dll"; Des
 Source: "..\..\target\release\email-to-markdown-identity.msix"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\target\release\Assets\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[Icons]
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "tray"; WorkingDir: "{app}"; IconFilename: "{app}\email-to-markdown-mail.ico"; Comment: "Lancer Email to Markdown dans la zone de notification"
+
 [Run]
 Filename: "{app}\{#AppExeName}"; Parameters: "shell install"; Flags: runhidden waituntilterminated; StatusMsg: "Intégration à l’Explorateur Windows…"
+Filename: "{app}\{#AppExeName}"; Parameters: "tray"; Flags: runhidden nowait; StatusMsg: "Démarrage d’Email to Markdown…"
 
 [UninstallRun]
 Filename: "{app}\{#AppExeName}"; Parameters: "shell uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveExplorerIntegration"
+
+[UninstallDelete]
+Type: files; Name: "{app}\email-to-markdown-mail.ico"

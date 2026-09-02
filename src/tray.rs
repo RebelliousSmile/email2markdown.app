@@ -1555,7 +1555,11 @@ fn build_dest_gui_window(
 
     let initial_path_json = serde_json::to_string(&initial_path).unwrap_or_else(|_| "null".into());
     let html = include_str!("../assets/destinations_window.html")
-        .replace("__INITIAL_PATH_JSON__", &initial_path_json);
+        .replace("__INITIAL_PATH_JSON__", &initial_path_json)
+        .replace(
+            "__CONTEXTUAL_SETUP_JSON__",
+            if contextual_on_save { "true" } else { "false" },
+        );
 
     let window = WindowBuilder::new()
         .with_title("Email to Markdown \u{2014} Destinations")
@@ -2396,58 +2400,9 @@ fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
 
 /// Load the tray icon.
 fn load_icon() -> Result<tray_icon::Icon> {
-    let icon_paths = ["assets/icon.ico", "assets/icon.png"];
-
-    for path in &icon_paths {
-        if std::path::Path::new(path).exists() {
-            if let Ok(icon) = load_icon_from_file(path) {
-                return Ok(icon);
-            }
-        }
-    }
-
-    create_default_icon()
-}
-
-fn load_icon_from_file(path: &str) -> Result<tray_icon::Icon> {
-    let img = image::open(path).context("Failed to load icon image")?;
-    let rgba = img.to_rgba8();
-    let (width, height) = rgba.dimensions();
-
-    tray_icon::Icon::from_rgba(rgba.into_raw(), width, height)
-        .context("Failed to create icon from image")
-}
-
-fn create_default_icon() -> Result<tray_icon::Icon> {
-    let size = 16u32;
-    let mut rgba = vec![0u8; (size * size * 4) as usize];
-
-    for chunk in rgba.chunks_exact_mut(4) {
-        chunk.copy_from_slice(&[30u8, 136, 229, 255]);
-    }
-
-    let set = |buf: &mut Vec<u8>, x: u32, y: u32| {
-        if x < size && y < size {
-            let i = ((y * size + x) * 4) as usize;
-            buf[i..i + 4].copy_from_slice(&[255u8, 255, 255, 255]);
-        }
-    };
-
-    for x in 1u32..15 {
-        set(&mut rgba, x, 2);
-        set(&mut rgba, x, 13);
-    }
-    for y in 3u32..13 {
-        set(&mut rgba, 1, y);
-        set(&mut rgba, 14, y);
-    }
-
-    for i in 0u32..6 {
-        set(&mut rgba, 2 + i, 3 + i);
-        set(&mut rgba, 13 - i, 3 + i);
-    }
-
-    tray_icon::Icon::from_rgba(rgba, size, size).context("Failed to create default icon")
+    let size = crate::app_icon::WINDOWS_ICON_SIZE;
+    tray_icon::Icon::from_rgba(crate::app_icon::rgba(size), size, size)
+        .context("Failed to create application icon")
 }
 
 /// Show a notification to the user (spawns a thread to avoid blocking the event loop).
