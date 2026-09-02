@@ -373,22 +373,33 @@ pub(super) fn apply_route_decisions(
     let payload: RouteApplyPayload =
         serde_json::from_str(body).context("failed to parse route review IPC payload")?;
 
+    let organize_by_date =
+        crate::config::Settings::load(&crate::config::settings_path())
+            .unwrap_or_default()
+            .organize_by_date;
+
     for row in &payload.decisions {
         let staging_md = PathBuf::from(&row.file);
         // Normalize the destination to carry the email's <Year>/<Month>. The auto
         // proposal already ends with it; a manually reassigned path (cascade / free
         // entry / bulk) comes bare from destinations.txt — append it from the email
         // date so files always land under <dest>/<Year>/<Month> (no double suffix).
-        let dest_path = match read_frontmatter_field(&staging_md, "date")
-            .and_then(|d| chrono::DateTime::parse_from_rfc3339(d.trim()).ok())
-        {
-            Some(dt) => crate::route::ensure_year_month(
-                &row.dest_path,
-                &dt.format("%Y").to_string(),
-                &dt.format("%m").to_string(),
-            ),
-            // Date unreadable/unparseable → keep the path as-is (no guess).
-            None => row.dest_path.clone(),
+        // Skipped entirely when the "organize by date" preference is off, so a bare
+        // manual path stays flat instead of being silently re-dated.
+        let dest_path = if !organize_by_date {
+            row.dest_path.clone()
+        } else {
+            match read_frontmatter_field(&staging_md, "date")
+                .and_then(|d| chrono::DateTime::parse_from_rfc3339(d.trim()).ok())
+            {
+                Some(dt) => crate::route::ensure_year_month(
+                    &row.dest_path,
+                    &dt.format("%Y").to_string(),
+                    &dt.format("%m").to_string(),
+                ),
+                // Date unreadable/unparseable → keep the path as-is (no guess).
+                None => row.dest_path.clone(),
+            }
         };
         // Anti-traversal validation — rejects "..", "\", absolute paths.
         let dest_dir =
@@ -467,7 +478,13 @@ struct ConfigIpcMessage {
 #[derive(serde::Deserialize)]
 struct SettingsData {
     export_base_dir: Option<String>,
+    #[serde(default = "default_organize_by_date_field")]
+    organize_by_date: bool,
     defaults: DefaultsData,
+}
+
+fn default_organize_by_date_field() -> bool {
+    true
 }
 
 #[derive(serde::Deserialize)]
@@ -529,6 +546,7 @@ pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
                 let path = config::settings_path();
                 let mut settings = Settings::load(&path).unwrap_or_default();
                 settings.export_base_dir = data.export_base_dir;
+                settings.organize_by_date = data.organize_by_date;
                 settings.defaults = AccountBehavior {
                     folder_name: settings.defaults.folder_name,
                     quote_depth: data.defaults.quote_depth,

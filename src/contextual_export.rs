@@ -581,10 +581,35 @@ pub fn read_source_proof(path: &Path) -> Result<Option<LocalSourceProof>> {
         .and_then(|head| head.source))
 }
 
+/// Resolves the effective on-disk folder for `candidate` under `target`, mirroring
+/// `route::route_email`'s dating so contextual export and the deterministic router
+/// place converted emails identically regardless of which flow produced the file.
+///
+/// Returns `target` unchanged when `organize_by_date` is `false` or `candidate.date`
+/// is unknown (no date to derive a subfolder from).
+pub fn candidate_target(
+    target: &Path,
+    candidate: &ContextualCandidate,
+    organize_by_date: bool,
+) -> PathBuf {
+    if !organize_by_date {
+        return target.to_path_buf();
+    }
+    match candidate.date {
+        Some(date) => target
+            .join(date.format("%Y").to_string())
+            .join(date.format("%m").to_string()),
+        None => target.to_path_buf(),
+    }
+}
+
 pub fn find_existing_proof(
     target: &Path,
     candidate: &ContextualCandidate,
 ) -> Result<Option<(PathBuf, LocalSourceProof)>> {
+    if !target.exists() {
+        return Ok(None);
+    }
     for entry in fs::read_dir(target)? {
         let entry = entry?;
         let metadata = entry.file_type()?;
@@ -612,9 +637,17 @@ pub fn convert_raw_contextual(
     candidate: &ContextualCandidate,
     location: &MessageLocation,
     raw_email: &[u8],
+    organize_by_date: bool,
 ) -> Result<ConversionStatus> {
     let _lock = ContextualLock::acquire(target, &account.name)?;
-    convert_raw_contextual_unlocked(target, account, candidate, location, raw_email)
+    convert_raw_contextual_unlocked(
+        target,
+        account,
+        candidate,
+        location,
+        raw_email,
+        organize_by_date,
+    )
 }
 
 pub(crate) fn convert_raw_contextual_unlocked(
@@ -623,8 +656,10 @@ pub(crate) fn convert_raw_contextual_unlocked(
     candidate: &ContextualCandidate,
     location: &MessageLocation,
     raw_email: &[u8],
+    organize_by_date: bool,
 ) -> Result<ConversionStatus> {
-    if let Some((markdown, proof)) = find_existing_proof(target, candidate)? {
+    let effective_target = candidate_target(target, candidate, organize_by_date);
+    if let Some((markdown, proof)) = find_existing_proof(&effective_target, candidate)? {
         return Ok(ConversionStatus::AlreadyPresent { markdown, proof });
     }
     if !candidate.locations.iter().any(|known| known == location) {
@@ -634,7 +669,8 @@ pub(crate) fn convert_raw_contextual_unlocked(
         identity: candidate.source.clone(),
         location: location.clone(),
     };
-    let staging = target.join(format!(
+    fs::create_dir_all(&effective_target)?;
+    let staging = effective_target.join(format!(
         ".email-to-markdown-tmp-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -655,6 +691,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
             debug_mode: false,
             dests: &[],
             source_proof: Some(&proof),
+            organize_by_date,
         };
         let (markdown, _) = crate::email_export::export_to_markdown(
             raw_email,
@@ -663,7 +700,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
             &mut context,
         )?
         .context("contextual converter skipped a selected message")?;
-        install_staged(target, &staging, &markdown, candidate, &proof)
+        install_staged(&effective_target, &staging, &markdown, candidate, &proof)
     })();
     let _ = fs::remove_dir_all(&staging);
     result

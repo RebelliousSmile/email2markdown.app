@@ -46,6 +46,7 @@ pub struct ContextualCandidateRow {
     pub key: String,
     pub date: Option<chrono::DateTime<chrono::FixedOffset>>,
     pub correspondent: String,
+    pub sender_email: String,
     pub subject: String,
     pub folder: String,
     pub already_present: bool,
@@ -232,6 +233,9 @@ pub fn run_contextual_search(
     if account.password.is_none() {
         anyhow::bail!("No password found for {}", account.name);
     }
+    let organize_by_date = Settings::load(&config::settings_path())
+        .unwrap_or_default()
+        .organize_by_date;
     let mut exporter = ImapExporter::new(account, false);
     exporter
         .connect()
@@ -241,23 +245,27 @@ pub fn run_contextual_search(
     let rows = candidates
         .iter()
         .map(|candidate| -> Result<ContextualCandidateRow> {
+            let sender_email = candidate.from.first().cloned().unwrap_or_default();
             let correspondent = candidate
                 .from
                 .first()
                 .or_else(|| candidate.to.first())
                 .cloned()
                 .unwrap_or_default();
+            let effective_target =
+                crate::contextual_export::candidate_target(&launch.target, candidate, organize_by_date);
             Ok(ContextualCandidateRow {
                 key: candidate.logical_key(),
                 date: candidate.date,
                 correspondent,
+                sender_email,
                 subject: candidate.subject.clone(),
                 folder: candidate
                     .locations
                     .first()
                     .map(|location| location.folder_display.clone())
                     .unwrap_or_default(),
-                already_present: find_existing_proof(&launch.target, candidate)?.is_some(),
+                already_present: find_existing_proof(&effective_target, candidate)?.is_some(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -282,11 +290,14 @@ pub fn run_contextual_batch(
         .with_context(|| format!("Account '{}' not found", account_name))?
         .clone();
     let delete_after_export = account.delete_after_export;
+    let organize_by_date = Settings::load(&config::settings_path())
+        .unwrap_or_default()
+        .organize_by_date;
     let mut exporter = ImapExporter::new(account, false);
     exporter
         .connect()
         .context("Failed to connect to IMAP server")?;
-    let conversions = exporter.convert_contextual_selection(target, selected)?;
+    let conversions = exporter.convert_contextual_selection(target, selected, organize_by_date)?;
     let converted = conversions
         .iter()
         .filter(|result| {
@@ -614,6 +625,9 @@ fn scan_staged_decisions(account_name: &str) -> Result<Vec<(PathBuf, RouteDecisi
     }
 
     let dests = route::load_destinations();
+    let organize_by_date = Settings::load(&config::settings_path())
+        .unwrap_or_default()
+        .organize_by_date;
     let mut decisions = Vec::new();
 
     let walker = WalkDir::new(&base)
@@ -633,7 +647,7 @@ fn scan_staged_decisions(account_name: &str) -> Result<Vec<(PathBuf, RouteDecisi
             Err(_) => continue,
         };
         let meta = meta_from_frontmatter(&content, account_name);
-        let decision = route::route_email(&meta, &dests);
+        let decision = route::route_email(&meta, &dests, organize_by_date);
         decisions.push((path.to_path_buf(), decision));
     }
 

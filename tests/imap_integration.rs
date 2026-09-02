@@ -54,7 +54,7 @@ fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
 
     let target = tempfile::TempDir::new().unwrap();
     let converted = exporter
-        .convert_contextual_selection(target.path(), &candidates[..1])
+        .convert_contextual_selection(target.path(), &candidates[..1], false)
         .unwrap();
     assert_eq!(converted.len(), 1);
     assert!(matches!(
@@ -162,7 +162,7 @@ fn gmail_targeted_deletion_fixture() {
     assert!(selected[0].source.provider_id.is_some());
     let target = tempfile::TempDir::new().unwrap();
     let conversions = exporter
-        .convert_contextual_selection(target.path(), &selected)
+        .convert_contextual_selection(target.path(), &selected, false)
         .unwrap();
     let requests = build_deletion_batch(&conversions);
     assert_eq!(requests.len(), 1);

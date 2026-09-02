@@ -316,6 +316,8 @@ pub struct ExportContext<'a> {
     pub dests: &'a [Destination],
     /// Optional source proof used by contextual exports.
     pub source_proof: Option<&'a crate::contextual_export::LocalSourceProof>,
+    /// Whether `route_email` should nest the destination under `<Year>/<Month>`.
+    pub organize_by_date: bool,
 }
 
 /// Export a single email to Markdown with frontmatter.
@@ -491,7 +493,7 @@ pub fn export_to_markdown(
         }),
     };
 
-    let decision = route_email(&meta, dests);
+    let decision = route_email(&meta, dests, ctx.organize_by_date);
 
     Ok(Some((filepath, decision)))
 }
@@ -1063,10 +1065,12 @@ impl ImapExporter {
         &mut self,
         target: &Path,
         selected: &[crate::contextual_export::ContextualCandidate],
+        organize_by_date: bool,
     ) -> Result<Vec<crate::contextual_export::MessageConversionResult>> {
         use crate::contextual_export::{
-            convert_raw_contextual_unlocked, find_existing_proof, parse_uid_fetch_response,
-            validate_uidvalidity, ContextualLock, ConversionStatus, MessageConversionResult,
+            candidate_target, convert_raw_contextual_unlocked, find_existing_proof,
+            parse_uid_fetch_response, validate_uidvalidity, ContextualLock, ConversionStatus,
+            MessageConversionResult,
         };
         use std::collections::{BTreeMap, HashMap};
 
@@ -1084,7 +1088,8 @@ impl ImapExporter {
         let mut pending = Vec::new();
         for candidate in selected {
             let key = candidate.logical_key();
-            if let Some((markdown, proof)) = find_existing_proof(target, candidate)? {
+            let effective_target = candidate_target(target, candidate, organize_by_date);
+            if let Some((markdown, proof)) = find_existing_proof(&effective_target, candidate)? {
                 results.push(MessageConversionResult {
                     candidate_key: key,
                     status: Some(ConversionStatus::AlreadyPresent { markdown, proof }),
@@ -1164,7 +1169,12 @@ impl ImapExporter {
                         continue;
                     };
                     match convert_raw_contextual_unlocked(
-                        target, &account, candidate, location, body,
+                        target,
+                        &account,
+                        candidate,
+                        location,
+                        body,
+                        organize_by_date,
                     ) {
                         Ok(status) => results.push(MessageConversionResult {
                             candidate_key: candidate.logical_key(),
@@ -1343,6 +1353,7 @@ impl ImapExporter {
         mut contacts_collector: Option<&mut ContactsCollector>,
         cancel_token: Option<&AtomicBool>,
         dests: &[Destination],
+        organize_by_date: bool,
     ) -> Result<(ExportStats, Vec<(PathBuf, RouteDecision)>)> {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
         let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
@@ -1455,6 +1466,7 @@ impl ImapExporter {
                             debug_mode: self.debug_mode,
                             dests,
                             source_proof: None,
+                            organize_by_date,
                         };
                         let result = export_to_markdown(
                             body,
@@ -1549,6 +1561,9 @@ impl ImapExporter {
         // ── Parse destinations.txt ONCE (before the folder loop) ──────────────
         // Shared with the tray "Reprendre le tri" scan via `route::load_destinations`.
         let dests: Vec<Destination> = crate::route::load_destinations();
+        let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
+            .unwrap_or_default()
+            .organize_by_date;
 
         // Run the existing body in an IIFE so cleanup can run on every exit path.
         let run_result: Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> =
@@ -1584,6 +1599,7 @@ impl ImapExporter {
                         contacts_collector.as_mut(),
                         cancel_token,
                         &dests,
+                        organize_by_date,
                     )?;
                     if let Some(s) = on_status {
                         s(&format!(
@@ -1923,6 +1939,7 @@ mod tests {
             debug_mode: false,
             dests: &[],
             source_proof: None,
+            organize_by_date: true,
         };
         let result = export_to_markdown(&raw, vec!["INBOX".to_string()], None, &mut ctx);
 
@@ -1977,6 +1994,7 @@ mod tests {
             debug_mode: false,
             dests: &[],
             source_proof: None,
+            organize_by_date: true,
         };
         let (md_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
@@ -2028,6 +2046,7 @@ mod tests {
             debug_mode: false,
             dests: &[],
             source_proof: None,
+            organize_by_date: true,
         };
         let (first_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()

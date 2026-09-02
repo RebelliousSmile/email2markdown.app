@@ -782,17 +782,25 @@ pub const DEFAULT_BASE: &str = "Perso/Messy/Emails";
 /// `Subject`, `Account`). There is no priority hierarchy between rule types.
 ///
 /// If no rule matches, the `default`-tagged entry is used; if none exists, the
-/// hard-coded fallback `Perso/Messy/Emails/<Year>/<Month>` is returned.
+/// hard-coded fallback `Perso/Messy/Emails` is returned.
 ///
-/// The returned `rel_path` already includes `<Year>/<Month>` derived from `meta.date`.
+/// The returned `rel_path` includes `<Year>/<Month>` derived from `meta.date` when
+/// `organize_by_date` is `true`; otherwise it is the bare destination path.
 ///
 /// # No Regex in this function
 /// Subject matching uses `str::contains()` (case-insensitive substring). The keyword
 /// `k` is dynamic (read from `destinations.txt`), so `static LazyLock<Regex>` is
 /// inapplicable. `contains()` is correct and sufficient here.
-pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
-    let year = meta.date.format("%Y").to_string();
-    let month = meta.date.format("%m").to_string();
+pub fn route_email(meta: &EmailMeta, dests: &[Destination], organize_by_date: bool) -> RouteDecision {
+    let dated = |base: &str| -> String {
+        if organize_by_date {
+            let year = meta.date.format("%Y").to_string();
+            let month = meta.date.format("%m").to_string();
+            format!("{}/{}/{}", base, year, month)
+        } else {
+            base.to_string()
+        }
+    };
 
     // Evaluate destinations in file order; within each destination, evaluate rules in
     // declaration order. First match wins — no priority hierarchy between rule types.
@@ -816,9 +824,8 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
 
             if matched {
                 let rule_desc = format!("{:?}", rule);
-                let rel_path = format!("{}/{}/{}", dest.path, year, month);
                 return RouteDecision {
-                    rel_path,
+                    rel_path: dated(&dest.path),
                     matched_rule: Some(rule_desc),
                     is_default: false,
                 };
@@ -828,9 +835,8 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
 
     // No deterministic rule matched — look for a `default`-tagged entry.
     if let Some(default_dest) = dests.iter().find(|d| d.is_default) {
-        let rel_path = format!("{}/{}/{}", default_dest.path, year, month);
         return RouteDecision {
-            rel_path,
+            rel_path: dated(&default_dest.path),
             matched_rule: None,
             is_default: true,
         };
@@ -838,7 +844,7 @@ pub fn route_email(meta: &EmailMeta, dests: &[Destination]) -> RouteDecision {
 
     // Hard-coded fallback.
     RouteDecision {
-        rel_path: format!("{}/{}/{}", DEFAULT_BASE, year, month),
+        rel_path: dated(DEFAULT_BASE),
         matched_rule: None,
         is_default: true,
     }

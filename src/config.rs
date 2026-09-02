@@ -69,7 +69,7 @@ pub struct AccountBehavior {
     pub cleanup_empty_dirs: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Settings {
     /// Root directory where all account sub-folders will be created.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,6 +98,14 @@ pub struct Settings {
     #[serde(default = "default_ai_confidence_threshold")]
     pub ai_confidence_threshold: f32,
 
+    /// Whether converted emails land under `<dest>/<Year>/<Month>` (`true`) or flat
+    /// at `<dest>` (`false`). Applies uniformly to the deterministic router, manual
+    /// picks in the route-review window, and the contextual (right-click) export —
+    /// so the destination layout never depends on which flow produced the file.
+    /// Defaults to `true`, the router's historical behavior.
+    #[serde(default = "default_organize_by_date")]
+    pub organize_by_date: bool,
+
     /// Default behaviour applied to every account unless overridden.
     #[serde(default)]
     pub defaults: AccountBehavior,
@@ -105,6 +113,26 @@ pub struct Settings {
     /// Per-account overrides keyed by account name.
     #[serde(default)]
     pub accounts: HashMap<String, AccountBehavior>,
+}
+
+impl Default for Settings {
+    /// Mirrors each field's `#[serde(default = "...")]` — a `#[derive(Default)]`
+    /// would silently give `ai_confidence_threshold`/`organize_by_date` their
+    /// zero-value (`0.0`/`false`) instead of the intended defaults whenever
+    /// `settings.yaml` is missing (`Settings::load` returns `Settings::default()`
+    /// in that case, bypassing serde's per-field defaults entirely).
+    fn default() -> Self {
+        Self {
+            export_base_dir: None,
+            notes_dir: None,
+            destinations_file: None,
+            ai_routing_enabled: false,
+            ai_confidence_threshold: default_ai_confidence_threshold(),
+            organize_by_date: default_organize_by_date(),
+            defaults: AccountBehavior::default(),
+            accounts: HashMap::new(),
+        }
+    }
 }
 
 impl Settings {
@@ -361,6 +389,10 @@ impl Config {
 
 fn default_ai_confidence_threshold() -> f32 {
     0.7
+}
+
+fn default_organize_by_date() -> bool {
+    true
 }
 
 #[cfg(test)]

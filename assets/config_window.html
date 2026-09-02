@@ -356,6 +356,11 @@
         <label for="export-base-dir">Dossier de destination</label>
         <input type="text" id="export-base-dir" placeholder="Chemin vers le dossier d'export (vide = non défini)">
       </div>
+      <div class="field">
+        <label for="organize-by-date">Classer par année/mois</label>
+        <input type="checkbox" id="organize-by-date">
+        <span class="field-hint">Sinon, dépôt à la racine du dossier de destination</span>
+      </div>
     </div>
 
     <div class="section">
@@ -497,6 +502,9 @@
       ? data.export_base_dir
       : '';
 
+  document.getElementById('organize-by-date').checked =
+    data.organize_by_date !== undefined ? data.organize_by_date : true;
+
   document.getElementById('quote-depth').value =
     defaults.quote_depth !== undefined ? defaults.quote_depth : 1;
 
@@ -536,6 +544,7 @@
       action: 'save',
       data: {
         export_base_dir: exportDir.length > 0 ? exportDir : null,
+        organize_by_date: document.getElementById('organize-by-date').checked,
         defaults: {
           quote_depth: quoteDepth,
           skip_existing: document.getElementById('skip-existing').checked,

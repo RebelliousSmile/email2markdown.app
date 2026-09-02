@@ -1014,7 +1014,7 @@ mod route_tests {
                 2 => meta.cc.push("contact+project@example.com".into()),
                 _ => meta.bcc.push("contact+project@example.com".into()),
             }
-            assert!(!route_email(&meta, &dests).is_default);
+            assert!(!route_email(&meta, &dests, true).is_default);
         }
     }
 
@@ -1029,7 +1029,7 @@ mod route_tests {
             "2026-09-01T12:00:00+00:00",
         );
         meta.to.push("contact@example.com".into());
-        assert!(route_email(&meta, &dests).is_default);
+        assert!(route_email(&meta, &dests, true).is_default);
     }
 
     #[test]
@@ -1742,7 +1742,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-06-15T10:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: path starts with expected dir
         assert!(
             decision.rel_path.starts_with("Perso/Finance/Banque/"),
@@ -1765,7 +1765,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-06-15T10:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: subdomain "mail.acme.com" matches rule "acme.com"
         assert!(
             decision.rel_path.starts_with("Perso/Finance/Banque/"),
@@ -1787,7 +1787,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-06-15T10:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: falls to default
         assert!(
             decision.is_default,
@@ -1810,7 +1810,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "work",
             "2026-03-01T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: from rule matched despite case difference
         assert!(
             decision.rel_path.starts_with("Pro/Clients/X/"),
@@ -1835,7 +1835,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-01-05T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: substring "invoice" found case-insensitively in "Your Invoice #123"
         assert!(
             decision.rel_path.starts_with("Perso/Shopping/"),
@@ -1856,7 +1856,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-01-05T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: subject "Hello world" does not contain "invoice" → falls to default
         assert!(
             decision.is_default,
@@ -1879,7 +1879,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "work@corp.com",
             "2026-04-10T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: account rule matched
         assert!(
             decision.rel_path.starts_with("Pro/Work/"),
@@ -1896,7 +1896,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         // No rule matches → default → Perso
         let dests: Vec<Destination> = vec![];
         let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-05-20T00:00:00+00:00");
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: starts with Perso
         assert!(
             decision.rel_path.starts_with("Perso/"),
@@ -1917,7 +1917,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "work",
             "2026-02-14T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: first segment is Pro
         assert!(
             decision.rel_path.starts_with("Pro/"),
@@ -1942,7 +1942,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-03-15T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: ends with 2026/03
         assert!(
             decision.rel_path.ends_with("2026/03"),
@@ -1966,7 +1966,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     fn test_route_email_default_appends_year_month() {
         let dests: Vec<Destination> = vec![];
         let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-11-30T00:00:00+00:00");
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: path ends with 2026/11
         assert!(
             decision.rel_path.ends_with("2026/11"),
@@ -2031,7 +2031,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "acc",
             "2026-06-01T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
         // Inclusive: is_default flag set
         assert!(decision.is_default, "unknown domain must fall to default");
         // Exclusive: not routed to a known destination
@@ -2162,7 +2162,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "2026-06-01T00:00:00+00:00",
         );
 
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
 
         // Inclusive: first destination matched
         assert!(
@@ -2195,7 +2195,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "2026-06-01T00:00:00+00:00",
         );
 
-        let decision = route_email(&meta, &dests);
+        let decision = route_email(&meta, &dests, true);
 
         // Inclusive: the destination that is now first in file wins
         assert!(
@@ -2612,8 +2612,10 @@ mod contextual_export_tests {
         let location = location("INBOX", 42);
         let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
 
-        let first = convert_raw_contextual(&target, &account(&target), &candidate, &location, &raw)
-            .unwrap();
+        let first = convert_raw_contextual(
+            &target, &account(&target), &candidate, &location, &raw, false,
+        )
+        .unwrap();
         let (markdown, proof) = match first {
             ConversionStatus::Written { markdown, proof } => (markdown, proof),
             other => panic!("expected write, got {other:?}"),
@@ -2627,9 +2629,10 @@ mod contextual_export_tests {
             name.starts_with(".email-to-markdown-tmp-") || name.ends_with(".lock")
         }));
 
-        let second =
-            convert_raw_contextual(&target, &account(&target), &candidate, &location, &raw)
-                .unwrap();
+        let second = convert_raw_contextual(
+            &target, &account(&target), &candidate, &location, &raw, false,
+        )
+        .unwrap();
         assert!(matches!(second, ConversionStatus::AlreadyPresent { .. }));
         assert_eq!(
             fs::read_dir(&target)
@@ -2661,6 +2664,7 @@ mod contextual_export_tests {
             &candidate,
             &source_location,
             &raw,
+            false,
         )
         .unwrap();
         let valid = MessageConversionResult {
@@ -2693,8 +2697,10 @@ mod contextual_export_tests {
         let raw = multipart_raw("legacy@example.com");
         let location = location("INBOX", 5);
         let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
-        let first = convert_raw_contextual(&target, &account(&target), &candidate, &location, &raw)
-            .unwrap();
+        let first = convert_raw_contextual(
+            &target, &account(&target), &candidate, &location, &raw, false,
+        )
+        .unwrap();
         let original = match first {
             ConversionStatus::Written { markdown, .. } => markdown,
             _ => unreachable!(),
@@ -2713,9 +2719,10 @@ mod contextual_export_tests {
         )
         .unwrap();
 
-        let second =
-            convert_raw_contextual(&target, &account(&target), &candidate, &location, &raw)
-                .unwrap();
+        let second = convert_raw_contextual(
+            &target, &account(&target), &candidate, &location, &raw, false,
+        )
+        .unwrap();
         let second_path = match second {
             ConversionStatus::Written { markdown, .. } => markdown,
             other => panic!("legacy note must be reconverted, got {other:?}"),
@@ -2771,6 +2778,7 @@ mod contextual_export_tests {
             &candidate,
             &stale_location,
             &valid,
+            false,
         )
         .is_err());
         assert_eq!(
