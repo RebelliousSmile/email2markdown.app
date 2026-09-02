@@ -1,6 +1,7 @@
 # Rust
 /target/
 /packaging/windows/shell-extension/target/
+/packaging/windows/shell-extension-contract/target/
 Cargo.lock
 
 # IDE

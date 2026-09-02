@@ -22,7 +22,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-pub const COMMAND_CLSID: GUID = GUID::from_u128(0xa18325b7_1289_4856_a8bd_69f6d633da13);
+pub const COMMAND_CLSID: GUID =
+    GUID::from_u128(email_to_markdown_shell_extension_contract::COMMAND_CLSID_U128);
 static OBJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 fn quote_command_line_argument(value: &str) -> String {
