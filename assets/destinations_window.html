@@ -2,6 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Destinations</title>
 <style>
@@ -830,11 +831,26 @@
     items.forEach(function (item) {
       var tr = document.createElement('tr');
       tr.dataset.domain = item.domain;
-      var opts = '<option value="">— ignorer —</option>' +
-        state.destinations.map(function (e) {
-          return '<option value="' + e.path + '">' + e.path + '</option>';
-        }).join('');
-      tr.innerHTML = '<td>' + item.domain + '</td><td>' + item.count + '</td><td><select>' + opts + '</select></td>';
+      var tdDomain = document.createElement('td');
+      tdDomain.textContent = item.domain;
+      var tdCount = document.createElement('td');
+      tdCount.textContent = item.count;
+      var select = document.createElement('select');
+      var ignore = document.createElement('option');
+      ignore.value = '';
+      ignore.textContent = '— ignorer —';
+      select.appendChild(ignore);
+      state.destinations.forEach(function (e) {
+        var opt = document.createElement('option');
+        opt.value = e.path;
+        opt.textContent = e.path;
+        select.appendChild(opt);
+      });
+      var tdSelect = document.createElement('td');
+      tdSelect.appendChild(select);
+      tr.appendChild(tdDomain);
+      tr.appendChild(tdCount);
+      tr.appendChild(tdSelect);
       tbody.appendChild(tr);
     });
     document.getElementById('suggest-table').style.display = '';

@@ -31,6 +31,20 @@ fn build_gui_window(
     Ok((window, window_id))
 }
 
+/// Decide whether a webview may navigate to `url`.
+///
+/// Windows are loaded once from an HTML string and never navigate afterwards.
+/// `about:blank` is always allowed: it is the document a webview starts from,
+/// and on some platforms the URL reported for an HTML-string load. The first
+/// other navigation is the initial load itself (WebView2 reports it under its
+/// own URL); it claims `initial_load_seen` and every later one is refused.
+fn allow_navigation(url: &str, initial_load_seen: &AtomicBool) -> bool {
+    if url == "about:blank" {
+        return true;
+    }
+    !initial_load_seen.swap(true, Ordering::SeqCst)
+}
+
 fn attach_webview(
     window: &Window,
     html: impl Into<std::borrow::Cow<'static, str>>,
@@ -38,8 +52,18 @@ fn attach_webview(
     ipc_handler: impl Fn(wry::http::Request<String>) + 'static,
 ) -> Result<WebView> {
     let html: std::borrow::Cow<'static, str> = html.into();
+    let initial_load_seen = AtomicBool::new(false);
     let mut builder = WebViewBuilder::new(window)
         .with_html(html.into_owned())
+        .with_navigation_handler(move |url| {
+            let allowed = allow_navigation(&url, &initial_load_seen);
+            if !allowed {
+                // Only the scheme is logged: a refused URL may carry page data.
+                let scheme = url.split(':').next().unwrap_or_default();
+                eprintln!("navigation refusée (schéma {scheme})");
+            }
+            allowed
+        })
         .with_ipc_handler(ipc_handler);
     if let Some(script) = init_script {
         builder = builder.with_initialization_script(script);
@@ -105,6 +129,9 @@ pub(super) fn build_contextual_window(
     Ok((window, webview, window_id))
 }
 
+/// `action_name` and `warning` are inserted into the page body without HTML
+/// escaping. They must stay fixed labels chosen by the caller: never pass an
+/// account name, a folder name or any other external data.
 pub(super) fn build_progress_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
@@ -158,8 +185,8 @@ pub(super) fn build_config_window(
     let accounts_json =
         serde_json::to_string(&raw_accounts).context("failed to serialize accounts")?;
     let html = html_template
-        .replace("__SETTINGS_JSON__", &settings_json)
-        .replace("__ACCOUNTS_JSON__", &accounts_json);
+        .replace("__SETTINGS_JSON__", &escape_json_for_script(&settings_json))
+        .replace("__ACCOUNTS_JSON__", &escape_json_for_script(&accounts_json));
 
     let (window, window_id) = build_gui_window(
         target,
@@ -302,7 +329,10 @@ pub(super) fn build_dest_gui_window(
 
     let initial_path_json = serde_json::to_string(&initial_path).unwrap_or_else(|_| "null".into());
     let html = include_str!("../../assets/destinations_window.html")
-        .replace("__INITIAL_PATH_JSON__", &initial_path_json)
+        .replace(
+            "__INITIAL_PATH_JSON__",
+            &escape_json_for_script(&initial_path_json),
+        )
         .replace(
             "__CONTEXTUAL_SETUP_JSON__",
             if contextual_on_save { "true" } else { "false" },
@@ -633,8 +663,59 @@ pub(super) fn build_route_window(
 
 #[cfg(test)]
 mod tests {
-    use super::escape_json_for_script;
+    use super::{allow_navigation, escape_json_for_script};
+    use std::sync::atomic::AtomicBool;
     use std::time::Instant;
+
+    #[test]
+    fn test_escape_json_for_script_decodes_to_original() {
+        let original = serde_json::json!({
+            "name": "A & B <admin>",
+            "path": "C:/notes/</script><img src=x onerror=alert(1)>",
+        });
+        let escaped = escape_json_for_script(&original.to_string());
+        let decoded: serde_json::Value = serde_json::from_str(&escaped).expect("valid json");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_escape_json_for_script_no_markup_characters() {
+        let payload = serde_json::json!({ "v": "</script><b>a & b</b>" }).to_string();
+        let escaped = escape_json_for_script(&payload);
+        assert!(
+            !escaped.contains(['<', '>', '&']),
+            "no <, > or & may remain: {escaped}"
+        );
+    }
+
+    #[test]
+    fn test_allow_navigation_initial_load_then_refused() {
+        let seen = AtomicBool::new(false);
+        let decisions = [
+            allow_navigation("about:blank", &seen),
+            allow_navigation("data:text/html,initial", &seen),
+            allow_navigation("https://example.org/", &seen),
+            allow_navigation("about:blank", &seen),
+        ];
+        assert_eq!(decisions, [true, true, false, true]);
+    }
+
+    #[test]
+    fn test_templates_declare_content_security_policy() {
+        let templates = [
+            include_str!("../../assets/config_window.html"),
+            include_str!("../../assets/contextual_export.html"),
+            include_str!("../../assets/destinations_window.html"),
+            include_str!("../../assets/progress_window.html"),
+            include_str!("../../assets/route_review.html"),
+            include_str!("../../assets/update_window.html"),
+        ];
+        let with_policy = templates
+            .iter()
+            .filter(|html| html.contains("Content-Security-Policy\" content=\"default-src 'none'"))
+            .count();
+        assert_eq!(with_policy, templates.len());
+    }
 
     #[test]
     fn test_escape_json_for_script_script_tag_breakout() {
