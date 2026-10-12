@@ -211,7 +211,72 @@ pub fn analyze_email_type(mail: &ParsedMail) -> EmailAnalysis {
     }
 }
 
+/// Markdown files already present in one export directory, listed once.
+///
+/// Built with a single directory walk and then queried for every message,
+/// instead of walking the directory again for each of them. Only names and
+/// paths are kept: a file is read at query time, and only if its name matches.
+#[derive(Debug, Default)]
+pub struct ExportedIndex {
+    files: Vec<(String, PathBuf)>,
+}
+
+impl ExportedIndex {
+    /// List the `.md` files under `export_directory`. Symlinks are neither
+    /// followed nor listed. A missing directory yields an empty index.
+    pub fn build(export_directory: &Path) -> Self {
+        if !export_directory.exists() {
+            return Self::default();
+        }
+
+        let files = WalkDir::new(export_directory)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| !e.file_type().is_symlink())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+            .map(|e| (e.file_name().to_string_lossy().into_owned(), e.into_path()))
+            .collect();
+
+        Self { files }
+    }
+
+    /// Record a file written during the current pass.
+    pub fn insert(&mut self, path: &Path) {
+        if let Some(name) = path.file_name() {
+            self.files
+                .push((name.to_string_lossy().into_owned(), path.to_path_buf()));
+        }
+    }
+
+    /// Check if an email has already been exported: a file name matches the
+    /// date and correspondents, and that file contains the subject hash.
+    pub fn contains(
+        &self,
+        date_str: &str,
+        sender_short: &str,
+        recipient_short: &str,
+        subject_hash: &str,
+    ) -> bool {
+        let search_pattern = format!(
+            "email_{}_{}*to_{}*.md",
+            date_str, sender_short, recipient_short
+        );
+        let Ok(pattern) = glob::Pattern::new(&search_pattern) else {
+            return false;
+        };
+
+        self.files.iter().any(|(name, path)| {
+            pattern.matches(name)
+                && fs::read_to_string(path).is_ok_and(|content| content.contains(subject_hash))
+        })
+    }
+}
+
 /// Check if an email has already been exported.
+///
+/// Walks `export_directory` on every call: to check several emails, build one
+/// [`ExportedIndex`] and query it instead.
 pub fn email_already_exported(
     date_str: &str,
     sender_short: &str,
@@ -219,42 +284,19 @@ pub fn email_already_exported(
     subject_hash: &str,
     export_directory: &Path,
 ) -> bool {
-    if !export_directory.exists() {
-        return false;
-    }
-
-    let search_pattern = format!(
-        "email_{}_{}*to_{}*.md",
-        date_str, sender_short, recipient_short
-    );
-
-    for entry in WalkDir::new(export_directory)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-    {
-        let filename = entry.file_name().to_string_lossy();
-        if glob::Pattern::new(&search_pattern)
-            .map(|p| p.matches(filename.as_ref()))
-            .unwrap_or(false)
-        {
-            if let Ok(content) = fs::read_to_string(entry.path()) {
-                if content.contains(subject_hash) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    false
+    ExportedIndex::build(export_directory).contains(
+        date_str,
+        sender_short,
+        recipient_short,
+        subject_hash,
+    )
 }
 
 /// Check if an email should be skipped based on its raw headers alone.
 /// Also returns the email analysis so callers can collect contacts without re-parsing.
 fn should_skip_from_headers(
     raw_headers: &[u8],
-    export_dir: &Path,
+    exported: &ExportedIndex,
 ) -> (bool, Option<EmailAnalysis>) {
     if raw_headers.is_empty() {
         return (false, None);
@@ -280,13 +322,7 @@ fn should_skip_from_headers(
         "no-subject".to_string()
     };
 
-    let skip = email_already_exported(
-        &date_str,
-        &sender_short,
-        &recipient_short,
-        &subject_hash,
-        export_dir,
-    );
+    let skip = exported.contains(&date_str, &sender_short, &recipient_short, &subject_hash);
     let analysis = analyze_email_type(&mail);
     (skip, Some(analysis))
 }
@@ -318,6 +354,9 @@ pub struct ExportContext<'a> {
     pub source_proof: Option<&'a crate::contextual_export::LocalSourceProof>,
     /// Whether `route_email` should nest the destination under `<Year>/<Month>`.
     pub organize_by_date: bool,
+    /// Files already present in `export_directory`, shared by the whole pass.
+    /// `None` makes each duplicate check walk the directory again.
+    pub exported: Option<&'a mut ExportedIndex>,
 }
 
 /// Export a single email to Markdown with frontmatter.
@@ -361,16 +400,22 @@ pub fn export_to_markdown(
     };
 
     // Check if email already exported
-    if account.skip_existing
-        && email_already_exported(
-            &date_str,
-            &sender_short,
-            &recipient_short,
-            &subject_hash,
-            export_directory,
-        )
-    {
-        return Ok(None); // skipped — no (PathBuf, RouteDecision) to return
+    if account.skip_existing {
+        let already_exported = match ctx.exported.as_deref() {
+            Some(index) => {
+                index.contains(&date_str, &sender_short, &recipient_short, &subject_hash)
+            }
+            None => email_already_exported(
+                &date_str,
+                &sender_short,
+                &recipient_short,
+                &subject_hash,
+                export_directory,
+            ),
+        };
+        if already_exported {
+            return Ok(None); // skipped — no (PathBuf, RouteDecision) to return
+        }
     }
 
     // Analyze email type and collect contacts if enabled
@@ -467,6 +512,11 @@ pub fn export_to_markdown(
     write!(file, "{}", yaml)?;
     writeln!(file, "---\n")?;
     write!(file, "{}", normalized_body)?;
+
+    // A later duplicate in the same pass must find this file.
+    if let Some(index) = ctx.exported.as_deref_mut() {
+        index.insert(&filepath);
+    }
 
     // Route the email — extract domain from the From address for matching.
     // Uses the first email address found; falls back to empty string on parse failure.
@@ -1357,6 +1407,12 @@ impl ImapExporter {
     ) -> Result<(ExportStats, Vec<(PathBuf, RouteDecision)>)> {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
         let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
+        // One walk of the export directory for the whole folder.
+        let mut exported = if self.account.skip_existing {
+            ExportedIndex::build(&export_directory)
+        } else {
+            ExportedIndex::default()
+        };
 
         // Keep the session borrow scoped to the folder traversal.
         let stats_and_decisions = {
@@ -1391,7 +1447,7 @@ impl ImapExporter {
                                 }
                                 let (skip, analysis) = should_skip_from_headers(
                                     message.header().unwrap_or(&[]),
-                                    &export_directory,
+                                    &exported,
                                 );
                                 if skip {
                                     skip_set.insert(message.message);
@@ -1467,6 +1523,7 @@ impl ImapExporter {
                             dests,
                             source_proof: None,
                             organize_by_date,
+                            exported: Some(&mut exported),
                         };
                         let result = export_to_markdown(
                             body,
@@ -1749,6 +1806,117 @@ mod tests {
         ));
     }
 
+    /// Export directory holding one email from alice to bob, subject hash `abc123`.
+    fn make_exported_dir() -> tempfile::TempDir {
+        let temp = tempfile::TempDir::new().unwrap();
+        let subfolder = temp.path().join("direct");
+        fs::create_dir_all(&subfolder).unwrap();
+        fs::write(
+            subfolder.join("email_2024-01-15_alice_hello_to_bob.md"),
+            "---\nsubject_hash: abc123\ndate: 2024-01-15\n---\nBody",
+        )
+        .unwrap();
+        temp
+    }
+
+    #[test]
+    fn test_exported_index_contains_with_exported_email() {
+        let temp = make_exported_dir();
+        let index = ExportedIndex::build(temp.path());
+
+        assert!(index.contains("2024-01-15", "alice", "bob", "abc123"));
+    }
+
+    #[test]
+    fn test_exported_index_contains_with_new_email() {
+        let temp = make_exported_dir();
+        let index = ExportedIndex::build(temp.path());
+
+        assert!(!index.contains("2024-01-16", "carol", "bob", "abc123"));
+    }
+
+    #[test]
+    fn test_exported_index_contains_with_same_name_other_subject() {
+        let temp = make_exported_dir();
+        let index = ExportedIndex::build(temp.path());
+
+        assert!(!index.contains("2024-01-15", "alice", "bob", "ffffff"));
+    }
+
+    #[test]
+    fn test_exported_index_insert_with_file_written_during_pass() {
+        let temp = make_exported_dir();
+        let mut index = ExportedIndex::build(temp.path());
+        let written = temp.path().join("email_2024-02-01_carol_news_to_bob.md");
+        fs::write(&written, "---\nsubject_hash: 0d0d0d\n---\nBody").unwrap();
+
+        index.insert(&written);
+
+        assert!(index.contains("2024-02-01", "carol", "bob", "0d0d0d"));
+    }
+
+    #[test]
+    fn test_exported_index_build_with_missing_directory() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let index = ExportedIndex::build(&temp.path().join("absent"));
+
+        assert!(!index.contains("2024-01-15", "alice", "bob", "abc123"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_exported_index_build_with_symlinked_file() {
+        let temp = make_exported_dir();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target = outside.path().join("target.md");
+        fs::write(&target, "---\nsubject_hash: 5e5e5e\n---\nBody").unwrap();
+        std::os::unix::fs::symlink(
+            &target,
+            temp.path().join("email_2024-03-01_dave_link_to_bob.md"),
+        )
+        .unwrap();
+
+        let index = ExportedIndex::build(temp.path());
+
+        assert!(!index.contains("2024-03-01", "dave", "bob", "5e5e5e"));
+    }
+
+    #[test]
+    fn test_export_to_markdown_skip_existing_with_shared_index() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let export_dir = temp.path().join("out");
+        let mut account = make_account(&export_dir.to_string_lossy());
+        account.skip_existing = true;
+        let raw = make_raw_email(
+            "alice@example.com",
+            "bob@example.com",
+            "Duplicate Subject",
+            "text/plain; charset=utf-8",
+            "Body text",
+        );
+        // Built before anything is exported: only `insert` can make it see the file.
+        let mut index = ExportedIndex::build(&export_dir);
+        let mut ctx = ExportContext {
+            export_directory: &export_dir,
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+            source_proof: None,
+            organize_by_date: true,
+            exported: Some(&mut index),
+        };
+        export_to_markdown(&raw, vec![], None, &mut ctx)
+            .unwrap()
+            .expect("first export should produce a file");
+
+        let second = export_to_markdown(&raw, vec![], None, &mut ctx).unwrap();
+
+        assert!(second.is_none());
+    }
+
     #[test]
     fn test_contacts_collector() {
         let mut collector = ContactsCollector::new();
@@ -1940,6 +2108,7 @@ mod tests {
             dests: &[],
             source_proof: None,
             organize_by_date: true,
+            exported: None,
         };
         let result = export_to_markdown(&raw, vec!["INBOX".to_string()], None, &mut ctx);
 
@@ -1995,6 +2164,7 @@ mod tests {
             dests: &[],
             source_proof: None,
             organize_by_date: true,
+            exported: None,
         };
         let (md_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
@@ -2047,6 +2217,7 @@ mod tests {
             dests: &[],
             source_proof: None,
             organize_by_date: true,
+            exported: None,
         };
         let (first_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()

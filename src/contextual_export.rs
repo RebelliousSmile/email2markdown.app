@@ -692,6 +692,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
             dests: &[],
             source_proof: Some(&proof),
             organize_by_date,
+            exported: None,
         };
         let (markdown, _) = crate::email_export::export_to_markdown(
             raw_email,

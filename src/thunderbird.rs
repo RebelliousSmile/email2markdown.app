@@ -9,6 +9,7 @@ use std::ffi::CString;
 use std::fs;
 use std::os::raw::{c_char, c_void};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::config::Account;
 
@@ -178,14 +179,18 @@ pub fn extract_accounts(profile: &ThunderbirdProfile) -> Result<Vec<Account>> {
     parse_prefs_js(&content)
 }
 
+static SERVER_PREF_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"user_pref\("mail\.server\.([^.]+)\.([^"]+)",\s*"?([^")]+)"?\);"#)
+        .expect("static regex")
+});
+
 /// Parse prefs.js and extract IMAP account configurations
 fn parse_prefs_js(content: &str) -> Result<Vec<Account>> {
     let mut servers: HashMap<String, HashMap<String, String>> = HashMap::new();
 
     // Pattern: user_pref("mail.server.server1.property", "value");
-    let re = Regex::new(r#"user_pref\("mail\.server\.([^.]+)\.([^"]+)",\s*"?([^")]+)"?\);"#)?;
 
-    for cap in re.captures_iter(content) {
+    for cap in SERVER_PREF_RE.captures_iter(content) {
         let server_id = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let property = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         let value = cap.get(3).map(|m| m.as_str()).unwrap_or("");
@@ -244,10 +249,12 @@ fn parse_prefs_js(content: &str) -> Result<Vec<Account>> {
     Ok(accounts)
 }
 
+static UNSAFE_NAME_CHARS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9_-]").expect("static regex"));
+
 /// Sanitize account name for use as directory name
 fn sanitize_name(name: &str) -> String {
-    let re = Regex::new(r"[^a-zA-Z0-9_-]").unwrap();
-    re.replace_all(name, "_").to_string()
+    UNSAFE_NAME_CHARS_RE.replace_all(name, "_").to_string()
 }
 
 /// Get default ignored folders based on account name
