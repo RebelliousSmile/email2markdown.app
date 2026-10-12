@@ -61,6 +61,10 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true
+      # Read by the updater to verify the binary it downloads.
+      - name: Generate SHA256SUMS
+        working-directory: release-assets
+        run: sha256sum email-to-markdown-* > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*

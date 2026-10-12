@@ -69,6 +69,9 @@ ureq = { version = "2", features = ["json"], optional = true }
 # In-place binary self-replacement (for auto-update, tray only)
 self-replace = { version = "1", optional = true }
 
+# SHA-256 of the downloaded binary (for auto-update, tray only)
+sha2 = { version = "0.10", optional = true }
+
 # Temporary files (used by updater for atomic binary download)
 tempfile = "3"
 
@@ -108,7 +111,7 @@ windows-sys = { version = "0.59", optional = true, features = [
 
 [features]
 default = []
-tray = ["tray-icon", "tao", "wry", "rfd", "dep:ureq", "dep:self-replace", "dep:windows-sys"]
+tray = ["tray-icon", "tao", "wry", "rfd", "dep:ureq", "dep:self-replace", "dep:sha2", "dep:windows-sys"]
 
 [dev-dependencies]
 

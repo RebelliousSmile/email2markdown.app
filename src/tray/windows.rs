@@ -229,7 +229,12 @@ pub(super) fn build_update_window(
         (700.0, 500.0),
     )?;
 
+    // The release found by the check stays on the host side: the page only
+    // confirms, it never chooses what gets downloaded.
+    let pending_release: Arc<Mutex<Option<updater::Release>>> = Arc::new(Mutex::new(None));
+
     let proxy_ipc = proxy.clone();
+    let pending_ipc = Arc::clone(&pending_release);
     let webview = attach_webview(
         &window,
         html,
@@ -241,11 +246,12 @@ pub(super) fn build_update_window(
                 Err(_) => return,
             };
             if parsed.get("action").and_then(|v| v.as_str()) == Some("update-confirm") {
-                if let Some(asset_url) = parsed.get("asset_url").and_then(|v| v.as_str()) {
-                    let asset_url = asset_url.to_string();
+                // Any other field of the message is ignored.
+                let release = pending_ipc.lock().ok().and_then(|guard| guard.clone());
+                if let Some(release) = release {
                     let proxy_dl = proxy_ipc.clone();
                     thread::spawn(move || {
-                        let result = updater::download_and_apply(&asset_url, |msg| {
+                        let result = updater::download_and_apply(&release, |msg| {
                             let json = serde_json::json!({ "type": "msg", "text": msg }).to_string();
                             let _ = proxy_dl.send_event(AppCommand::UpdateMsg(json));
                         });
@@ -262,7 +268,7 @@ pub(super) fn build_update_window(
                             }
                             Err(e) => {
                                 let json = serde_json::json!({
-                                    "type": "msg",
+                                    "type": "error",
                                     "text": format!("Erreur : {:#}", e)
                                 })
                                 .to_string();
@@ -292,15 +298,19 @@ pub(super) fn build_update_window(
                 "type": "check_result",
                 "current": current_version,
                 "latest": release.tag_name,
-                "body": release.body,
-                "asset_url": release.asset_url
+                "body": release.body
             })
             .to_string();
+            // Stored before the page learns about it, so a confirmation always
+            // finds the release.
+            if let Ok(mut pending) = pending_release.lock() {
+                *pending = Some(release);
+            }
             let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
         }
         Err(e) => {
             let json = serde_json::json!({
-                "type": "msg",
+                "type": "error",
                 "text": format!("Erreur : {:#}", e)
             })
             .to_string();
