@@ -1,0 +1,4 @@
+# Keep in sync with `rust-version` in Cargo.toml and `toolchain:` in .github/workflows/.
+[toolchain]
+channel = "1.93.0"
+components = ["clippy"]

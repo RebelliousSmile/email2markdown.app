@@ -2,6 +2,9 @@
 name = "email-to-markdown"
 version = "0.16.0"
 edition = "2021"
+# Toolchain the project is built and tested with (see rust-toolchain.toml);
+# no lower version has been tried.
+rust-version = "1.93.0"
 exclude = [".pytest_cache", "packaging/windows/shell-extension/target"]
 authors = ["FX Guillois"]
 repository = "https://github.com/fxguillois/email-to-markdown"
