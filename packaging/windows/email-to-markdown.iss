@@ -1,5 +1,5 @@
 #define AppName "Email to Markdown"
-#define AppVersion "0.16.0"
+#define AppVersion "0.18.0"
 #define AppPublisher "FX Guillois"
 #define AppExeName "email-to-markdown.exe"
 
@@ -25,7 +25,7 @@ UninstallDisplayIcon={app}\email-to-markdown-mail.ico
 
 [Files]
 Source: "..\..\target\release\email-to-markdown.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\target\release\email-to-markdown-shell-extension-0.16.0.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
+Source: "..\..\target\release\email-to-markdown-shell-extension-0.18.0.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
 Source: "..\..\target\release\email-to-markdown-identity.msix"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\target\release\Assets\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 

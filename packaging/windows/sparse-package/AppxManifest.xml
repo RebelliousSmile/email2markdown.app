@@ -12,7 +12,7 @@
   <Identity
     Name="FXGuillois.EmailToMarkdown"
     Publisher="CN=FXGuillois"
-    Version="0.16.0.0"
+    Version="0.18.0.0"
     ProcessorArchitecture="neutral" />
 
   <Properties>
@@ -53,7 +53,7 @@
             <com:SurrogateServer DisplayName="Email to Markdown commands">
               <com:Class
                 Id="A18325B7-1289-4856-A8BD-69F6D633DA13"
-                Path="email-to-markdown-shell-extension-0.16.0.dll"
+                Path="email-to-markdown-shell-extension-0.18.0.dll"
                 ThreadingModel="STA" />
             </com:SurrogateServer>
           </com:ComServer>

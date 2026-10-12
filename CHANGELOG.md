@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-12
+
+### Added
+
+- **Préférence `organize_by_date`** : le classement des emails en sous-dossiers `<destination>/<Année>/<Mois>` devient une option désactivable (activée par défaut). Elle s'applique de la même manière au routage déterministe, à la fenêtre de revue du routage et à l'export contextuel : l'arborescence d'une destination ne dépend plus du flux qui a produit le fichier.
+- **Suppression des chemins orphelins depuis le Scanner** : le scan des destinations signale désormais les entrées dont le dossier cible n'existe plus sur le disque et permet de les sélectionner puis de les retirer depuis la même fenêtre.
+- **Création d'une règle de routage depuis la fenêtre d'export contextuel** : chaque email candidat propose un bouton ouvrant un court formulaire de règle (expéditeur ou domaine), enregistrée sans quitter la fenêtre, dont les libellés de règles se mettent à jour aussitôt. La fenêtre est élargie (900×640) et les lancements contextuels se détachent de la console hôte, comme le mode tray.
+
+### Changed
+
+- **Export plus rapide** : les fichiers déjà exportés sont indexés une seule fois par dossier et les expressions régulières ne sont compilées qu'une fois, au lieu d'être recalculées pour chaque email.
+- **Builds reproductibles** : `Cargo.lock` est désormais suivi et toutes les commandes `cargo` de la CI et de la release utilisent `--locked` ; la toolchain Rust est fixée par `rust-toolchain.toml` et les GitHub Actions sont épinglées par SHA de commit. La CI gagne un contrôle des avis de sécurité des dépendances et une tâche de tests pour les outils Python.
+
+### Fixed
+
+- **Fichiers de configuration écrasés après un chargement en échec** : un fichier de paramètres, de comptes ou de destinations au YAML invalide n'est plus remplacé par les valeurs par défaut lors de l'enregistrement suivant. Une fenêtre de destinations qui ne peut pas s'ouvrir signale désormais l'erreur.
+- **Déplacement par lot dans la revue du routage** : le lot entier est validé avant le premier déplacement, et le résultat est rapporté fichier par fichier.
+- **Résultats réels affichés dans les fenêtres** : la fenêtre de progression propose un vrai bouton d'annulation, la page de paramètres n'annonce un enregistrement qu'après confirmation par l'application, le scan des notes explique pourquoi il ne peut pas s'exécuter, et tout échec d'ouverture de fenêtre est signalé.
+
+### Security
+
+- **Vérification de la mise à jour téléchargée** : l'auto-updater contrôle le binaire téléchargé contre le fichier `SHA256SUMS` de la release avant de remplacer l'exécutable, et refuse une release sans somme de contrôle correspondante. La release publie désormais ce fichier avec les binaires.
+- **Durcissement des fenêtres WebView** : les suggestions de destinations sont construites par les API DOM au lieu de `innerHTML`, les données JSON injectées dans les pages sont échappées, chaque page déclare une Content-Security-Policy et les webviews refusent toute navigation après leur chargement initial.
+
 ## [0.17.0] - 2026-09-02
 
 ### Added
