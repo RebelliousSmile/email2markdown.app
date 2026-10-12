@@ -312,7 +312,7 @@ impl Config {
         let content = fs::read_to_string(accounts_path)?;
         let raw_file: RawAccountsFile = serde_yaml::from_str(&content)?;
 
-        let settings = Settings::load(settings_file).unwrap_or_default();
+        let settings = Settings::load(settings_file)?;
 
         let mut accounts: Vec<Account> = raw_file
             .accounts

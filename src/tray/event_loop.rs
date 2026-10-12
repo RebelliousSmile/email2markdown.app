@@ -162,7 +162,7 @@ pub(super) fn run() -> Result<()> {
                 handle_open_route_review(target, &proxy, &mut windows, decisions)
             }
             Event::UserEvent(AppCommand::OpenDestGui { dest_file }) => {
-                handle_open_dest_gui(target, &proxy, &mut windows, dest_file)
+                handle_open_dest_gui(target, &proxy, &mut windows, dest_file, result_sender.clone())
             }
             Event::UserEvent(AppCommand::PushDestState { window_id, json }) => {
                 handle_push_dest_state(&windows, window_id, json)
@@ -413,6 +413,7 @@ fn handle_open_dest_gui(
     proxy: &EventLoopProxy<AppCommand>,
     windows: &mut HashMap<WindowId, WState>,
     dest_file: std::path::PathBuf,
+    sender: Sender<ActionResult>,
 ) {
     if !try_claim_window(WindowKind::DestGui) {
         // Already open — ignore.
@@ -432,7 +433,10 @@ fn handle_open_dest_gui(
         }
         Err(e) => {
             close_window_kind(WindowKind::DestGui);
-            eprintln!("Fenêtre destinations : {:#}", e);
+            let _ = sender.send(ActionResult::Error(format!(
+                "Fenêtre destinations : {:#}",
+                e
+            )));
         }
     }
 }

@@ -147,9 +147,11 @@ pub(super) fn build_config_window(
     sender: Sender<ActionResult>,
 ) -> Result<(Window, WebView, WindowId)> {
     let settings_path = crate::config::settings_path();
-    let settings = crate::config::Settings::load(&settings_path).unwrap_or_default();
+    let settings = crate::config::Settings::load(&settings_path)
+        .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
     let accounts_path = crate::config::accounts_yaml_path();
-    let raw_accounts = crate::config::load_raw_accounts(&accounts_path).unwrap_or_default();
+    let raw_accounts = crate::config::load_raw_accounts(&accounts_path)
+        .with_context(|| format!("failed to load accounts from {}", accounts_path.display()))?;
 
     let html_template = include_str!("../../assets/config_window.html");
     let settings_json = serde_json::to_string(&settings).context("failed to serialize settings")?;
@@ -294,7 +296,8 @@ pub(super) fn build_dest_gui_window(
     WindowId,
     Arc<Mutex<crate::destinations::DestinationsConfig>>,
 )> {
-    let cfg = crate::destinations::load_yaml(dest_file).unwrap_or_default();
+    let cfg = crate::destinations::load_yaml(dest_file)
+        .with_context(|| format!("failed to load destinations from {}", dest_file.display()))?;
     let cfg_arc = Arc::new(Mutex::new(cfg));
 
     let initial_path_json = serde_json::to_string(&initial_path).unwrap_or_else(|_| "null".into());

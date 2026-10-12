@@ -532,6 +532,100 @@ struct AccountData {
     quote_depth: Option<usize>,
 }
 
+/// Write the general settings to `settings_path`, keeping every field the form does not edit.
+fn save_settings(data: SettingsData, settings_path: &Path) -> anyhow::Result<()> {
+    let mut settings = Settings::load(settings_path)
+        .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
+    settings.export_base_dir = data.export_base_dir;
+    settings.organize_by_date = data.organize_by_date;
+    settings.defaults = AccountBehavior {
+        folder_name: settings.defaults.folder_name,
+        quote_depth: data.defaults.quote_depth,
+        skip_existing: data.defaults.skip_existing,
+        collect_contacts: data.defaults.collect_contacts,
+        skip_signature_images: data.defaults.skip_signature_images,
+        delete_after_export: data.defaults.delete_after_export,
+        cleanup_empty_dirs: data.defaults.cleanup_empty_dirs,
+    };
+    settings
+        .save(settings_path)
+        .with_context(|| format!("failed to save settings to {}", settings_path.display()))?;
+    Ok(())
+}
+
+/// Write one account: connection info to `accounts_path`, behaviour to `settings_path`.
+///
+/// Both files are loaded before the first write, so an unreadable `settings.yaml`
+/// never leaves `accounts.yaml` half-updated.
+fn save_account(
+    data: AccountData,
+    accounts_path: &Path,
+    settings_path: &Path,
+) -> anyhow::Result<()> {
+    let mut accounts = config::load_raw_accounts(accounts_path)
+        .with_context(|| format!("failed to load accounts from {}", accounts_path.display()))?;
+    let mut settings = Settings::load(settings_path)
+        .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
+
+    let mut found = false;
+    for acct in accounts.iter_mut() {
+        if acct.name.eq_ignore_ascii_case(&data.account_name) {
+            acct.server = data.server.clone();
+            acct.port = data.port;
+            acct.username = data.username.clone();
+            acct.ignored_folders = data.ignored_folders.clone();
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        accounts.push(RawAccount {
+            name: data.account_name.clone(),
+            server: data.server.clone(),
+            port: data.port,
+            username: data.username.clone(),
+            ignored_folders: data.ignored_folders.clone(),
+        });
+    }
+
+    let canonical_key = settings
+        .accounts
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case(&data.account_name))
+        .cloned()
+        .unwrap_or_else(|| data.account_name.clone());
+
+    let mut behavior = settings
+        .accounts
+        .get(&canonical_key)
+        .cloned()
+        .unwrap_or_default();
+    behavior.delete_after_export = data.delete_after_export;
+    behavior.cleanup_empty_dirs = data.cleanup_empty_dirs;
+    behavior.skip_existing = data.skip_existing;
+    behavior.collect_contacts = data.collect_contacts;
+    behavior.skip_signature_images = data.skip_signature_images;
+    behavior.quote_depth = data.quote_depth;
+
+    let is_empty = serde_json::to_value(&behavior)
+        .map(|v| v.as_object().map(|o| o.is_empty()).unwrap_or(false))
+        .unwrap_or(false);
+
+    if is_empty {
+        settings.accounts.remove(&canonical_key);
+    } else {
+        settings.accounts.insert(canonical_key, behavior);
+    }
+
+    config::save_accounts(&accounts, accounts_path)
+        .with_context(|| format!("failed to save accounts to {}", accounts_path.display()))?;
+    settings
+        .save(settings_path)
+        .with_context(|| format!("failed to save settings to {}", settings_path.display()))?;
+
+    Ok(())
+}
+
 /// Decode and dispatch one settings-window IPC message.
 pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
     let msg: ConfigIpcMessage = match serde_json::from_str(body) {
@@ -555,23 +649,7 @@ pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
                     .ok_or_else(|| anyhow::anyhow!("save action missing data field"))?;
                 let data: SettingsData =
                     serde_json::from_value(raw_data).context("failed to parse settings data")?;
-
-                let path = config::settings_path();
-                let mut settings = Settings::load(&path).unwrap_or_default();
-                settings.export_base_dir = data.export_base_dir;
-                settings.organize_by_date = data.organize_by_date;
-                settings.defaults = AccountBehavior {
-                    folder_name: settings.defaults.folder_name,
-                    quote_depth: data.defaults.quote_depth,
-                    skip_existing: data.defaults.skip_existing,
-                    collect_contacts: data.defaults.collect_contacts,
-                    skip_signature_images: data.defaults.skip_signature_images,
-                    delete_after_export: data.defaults.delete_after_export,
-                    cleanup_empty_dirs: data.defaults.cleanup_empty_dirs,
-                };
-                settings
-                    .save(&path)
-                    .with_context(|| format!("failed to save settings to {}", path.display()))?;
+                save_settings(data, &config::settings_path())?;
 
                 Ok(ActionResult::Success(
                     "Param\u{00e8}tres".to_string(),
@@ -596,72 +674,11 @@ pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
                     .ok_or_else(|| anyhow::anyhow!("save_account action missing data field"))?;
                 let data: AccountData =
                     serde_json::from_value(raw_data).context("failed to parse account data")?;
-
-                let accounts_path = config::accounts_yaml_path();
-                let mut accounts = config::load_raw_accounts(&accounts_path).unwrap_or_default();
-
-                let mut found = false;
-                for acct in accounts.iter_mut() {
-                    if acct.name.eq_ignore_ascii_case(&data.account_name) {
-                        acct.server = data.server.clone();
-                        acct.port = data.port;
-                        acct.username = data.username.clone();
-                        acct.ignored_folders = data.ignored_folders.clone();
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    accounts.push(RawAccount {
-                        name: data.account_name.clone(),
-                        server: data.server.clone(),
-                        port: data.port,
-                        username: data.username.clone(),
-                        ignored_folders: data.ignored_folders.clone(),
-                    });
-                }
-
-                config::save_accounts(&accounts, &accounts_path).with_context(|| {
-                    format!("failed to save accounts to {}", accounts_path.display())
-                })?;
-
-                let settings_path = config::settings_path();
-                let mut settings = Settings::load(&settings_path).unwrap_or_default();
-
-                let canonical_key = settings
-                    .accounts
-                    .keys()
-                    .find(|k| k.eq_ignore_ascii_case(&data.account_name))
-                    .cloned()
-                    .unwrap_or_else(|| data.account_name.clone());
-
-                let mut behavior = settings
-                    .accounts
-                    .get(&canonical_key)
-                    .cloned()
-                    .unwrap_or_default();
-                behavior.delete_after_export = data.delete_after_export;
-                behavior.cleanup_empty_dirs = data.cleanup_empty_dirs;
-                behavior.skip_existing = data.skip_existing;
-                behavior.collect_contacts = data.collect_contacts;
-                behavior.skip_signature_images = data.skip_signature_images;
-                behavior.quote_depth = data.quote_depth;
-
-                let is_empty = serde_json::to_value(&behavior)
-                    .map(|v| v.as_object().map(|o| o.is_empty()).unwrap_or(false))
-                    .unwrap_or(false);
-
-                if is_empty {
-                    settings.accounts.remove(&canonical_key);
-                } else {
-                    settings.accounts.insert(canonical_key, behavior);
-                }
-
-                settings.save(&settings_path).with_context(|| {
-                    format!("failed to save settings to {}", settings_path.display())
-                })?;
-
-                Ok(())
+                save_account(
+                    data,
+                    &config::accounts_yaml_path(),
+                    &config::settings_path(),
+                )
             })();
             match result {
                 Ok(()) => (None, false),
@@ -690,5 +707,123 @@ pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
             ))),
             true,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{save_account, save_settings, AccountData, SettingsData};
+    use crate::config::{load_raw_accounts, Settings};
+    use std::fs;
+    use tempfile::TempDir;
+
+    const INVALID_YAML: &str = "export_base_dir: [unclosed\naccounts: : :\n";
+    const VALID_ACCOUNTS: &str =
+        "accounts:\n  - name: Perso\n    server: imap.example.org\n    port: 993\n    username: perso@example.org\n";
+
+    fn settings_data(export_base_dir: &str) -> SettingsData {
+        serde_json::from_value(serde_json::json!({
+            "export_base_dir": export_base_dir,
+            "organize_by_date": true,
+            "defaults": {}
+        }))
+        .unwrap()
+    }
+
+    fn account_data(name: &str) -> AccountData {
+        serde_json::from_value(serde_json::json!({
+            "account_name": name,
+            "server": "imap.example.com",
+            "port": 993,
+            "username": "pro@example.com",
+            "quote_depth": 2
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn test_save_settings_valid_keeps_unedited_fields() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, "notes_dir: C:/notes\nexport_base_dir: C:/old\n").unwrap();
+
+        save_settings(settings_data("C:/new"), &path).unwrap();
+
+        let saved = Settings::load(&path).unwrap();
+        assert_eq!(
+            (saved.notes_dir.as_deref(), saved.export_base_dir.as_deref()),
+            (Some("C:/notes"), Some("C:/new"))
+        );
+    }
+
+    #[test]
+    fn test_save_settings_missing_file_creates_it() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+
+        save_settings(settings_data("C:/new"), &path).unwrap();
+
+        let saved = Settings::load(&path).unwrap();
+        assert_eq!(saved.export_base_dir.as_deref(), Some("C:/new"));
+    }
+
+    #[test]
+    fn test_save_settings_invalid_yaml_keeps_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, INVALID_YAML).unwrap();
+
+        let err = save_settings(settings_data("C:/new"), &path).unwrap_err();
+
+        assert!(format!("{:#}", err).contains("settings.yaml"));
+        assert_eq!(fs::read(&path).unwrap(), INVALID_YAML.as_bytes());
+    }
+
+    #[test]
+    fn test_save_account_valid_adds_account_and_keeps_others() {
+        let temp = TempDir::new().unwrap();
+        let accounts_path = temp.path().join("accounts.yaml");
+        let settings_path = temp.path().join("settings.yaml");
+        fs::write(&accounts_path, VALID_ACCOUNTS).unwrap();
+
+        save_account(account_data("Pro"), &accounts_path, &settings_path).unwrap();
+
+        let names: Vec<String> = load_raw_accounts(&accounts_path)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.name)
+            .collect();
+        assert_eq!(names, vec!["Perso".to_string(), "Pro".to_string()]);
+        let settings = Settings::load(&settings_path).unwrap();
+        assert_eq!(settings.accounts["Pro"].quote_depth, Some(2));
+    }
+
+    #[test]
+    fn test_save_account_invalid_accounts_yaml_keeps_file() {
+        let temp = TempDir::new().unwrap();
+        let accounts_path = temp.path().join("accounts.yaml");
+        let settings_path = temp.path().join("settings.yaml");
+        fs::write(&accounts_path, INVALID_YAML).unwrap();
+
+        let err = save_account(account_data("Pro"), &accounts_path, &settings_path).unwrap_err();
+
+        assert!(format!("{:#}", err).contains("accounts.yaml"));
+        assert_eq!(fs::read(&accounts_path).unwrap(), INVALID_YAML.as_bytes());
+        assert!(!settings_path.exists());
+    }
+
+    #[test]
+    fn test_save_account_invalid_settings_yaml_keeps_both_files() {
+        let temp = TempDir::new().unwrap();
+        let accounts_path = temp.path().join("accounts.yaml");
+        let settings_path = temp.path().join("settings.yaml");
+        fs::write(&accounts_path, VALID_ACCOUNTS).unwrap();
+        fs::write(&settings_path, INVALID_YAML).unwrap();
+
+        let err = save_account(account_data("Pro"), &accounts_path, &settings_path).unwrap_err();
+
+        assert!(format!("{:#}", err).contains("settings.yaml"));
+        assert_eq!(fs::read(&accounts_path).unwrap(), VALID_ACCOUNTS.as_bytes());
+        assert_eq!(fs::read(&settings_path).unwrap(), INVALID_YAML.as_bytes());
     }
 }
