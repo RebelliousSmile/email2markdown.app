@@ -274,35 +274,36 @@ fn handle_add_entries(
 }
 
 fn handle_scan(cfg: &crate::destinations::DestinationsConfig, action: &str) -> DestGuiIpcResult {
-    let settings =
-        crate::config::Settings::load(&crate::config::settings_path()).unwrap_or_default();
-    let Some(notes_dir_str) = settings.notes_dir.as_deref() else {
-        eprintln!("dest-gui: {}: notes_dir non configuré", action);
-        return if action == "scan_suggest" {
-            DestGuiIpcResult::Suggestions(vec![])
-        } else {
-            DestGuiIpcResult::FolderSuggestions {
-                new_folders: vec![],
-                orphans: vec![],
-            }
-        };
-    };
-    let notes_dir = std::path::PathBuf::from(notes_dir_str);
-    let scan = match crate::dest_cmd::scan_notes(&notes_dir) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("dest-gui: scan_notes: {:#}", e);
-            return if action == "scan_suggest" {
-                DestGuiIpcResult::Suggestions(vec![])
-            } else {
-                DestGuiIpcResult::FolderSuggestions {
-                    new_folders: vec![],
-                    orphans: vec![],
-                }
-            };
-        }
-    };
-    if action == "scan_suggest" {
+    let scanned = Settings::load(&config::settings_path())
+        .context("failed to load settings")
+        .and_then(|settings| {
+            scan_destinations(settings.notes_dir.as_deref().map(Path::new), cfg, action)
+        });
+    match scanned {
+        Ok(result) => result,
+        Err(e) => DestGuiIpcResult::Error(format!("Analyse impossible : {:#}", e)),
+    }
+}
+
+/// Scan `notes_dir` for the destinations window (`scan_suggest` or `scan_folders`).
+///
+/// Fails when the notes directory is not configured, does not exist or cannot be
+/// read: an empty list would be indistinguishable from "nothing to suggest".
+fn scan_destinations(
+    notes_dir: Option<&Path>,
+    cfg: &crate::destinations::DestinationsConfig,
+    action: &str,
+) -> anyhow::Result<DestGuiIpcResult> {
+    let notes_dir = notes_dir
+        .ok_or_else(|| anyhow::anyhow!("le dossier de notes n'est pas configur\u{00e9}"))?;
+    if !notes_dir.is_dir() {
+        anyhow::bail!(
+            "le dossier de notes est introuvable : {}",
+            notes_dir.display()
+        );
+    }
+    let scan = crate::dest_cmd::scan_notes(notes_dir).context("failed to scan notes directory")?;
+    Ok(if action == "scan_suggest" {
         let candidates = crate::dest_cmd::uncovered_domains(scan.domains, cfg);
         DestGuiIpcResult::Suggestions(candidates)
     } else {
@@ -317,12 +318,12 @@ fn handle_scan(cfg: &crate::destinations::DestinationsConfig, action: &str) -> D
             .filter(|f| f.chars().filter(|&c| c == '/').count() < 3)
             .filter(|f| !existing.contains(&f.to_lowercase()))
             .collect();
-        let orphans = crate::dest_cmd::orphaned_entries(&notes_dir, cfg);
+        let orphans = crate::dest_cmd::orphaned_entries(notes_dir, cfg);
         DestGuiIpcResult::FolderSuggestions {
             new_folders,
             orphans,
         }
-    }
+    })
 }
 
 fn handle_suggest_confirm(
@@ -705,12 +706,64 @@ fn save_account(
     Ok(())
 }
 
+/// What the settings window must do after one IPC message.
+pub(super) struct ConfigIpcOutcome {
+    /// Notification for the tray, if any.
+    pub(super) result: Option<ActionResult>,
+    pub(super) should_close: bool,
+    /// JSON answer for the page (`config_result`), sent for every save request.
+    pub(super) reply: Option<String>,
+}
+
+impl ConfigIpcOutcome {
+    fn new(result: Option<ActionResult>, should_close: bool) -> Self {
+        Self {
+            result,
+            should_close,
+            reply: None,
+        }
+    }
+}
+
+/// Decide what follows a save request (`save` or `save_account`) from its result.
+///
+/// No disk access. Only a successful `save` closes the window: a failed save keeps
+/// it open so the page can show the cause and keep what was typed.
+fn save_outcome(action: &str, saved: anyhow::Result<()>) -> ConfigIpcOutcome {
+    match saved {
+        Ok(()) => {
+            let closes = action == "save";
+            ConfigIpcOutcome {
+                result: closes.then(|| {
+                    ActionResult::Success(
+                        "Param\u{00e8}tres".to_string(),
+                        "Param\u{00e8}tres sauvegard\u{00e9}s".to_string(),
+                    )
+                }),
+                should_close: closes,
+                reply: Some(serde_json::json!({"action": action, "ok": true}).to_string()),
+            }
+        }
+        Err(e) => {
+            let message = format!("Erreur de sauvegarde : {:#}", e);
+            ConfigIpcOutcome {
+                result: Some(ActionResult::Error(message.clone())),
+                should_close: false,
+                reply: Some(
+                    serde_json::json!({"action": action, "ok": false, "message": message})
+                        .to_string(),
+                ),
+            }
+        }
+    }
+}
+
 /// Decode and dispatch one settings-window IPC message.
-pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
+pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
     let msg: ConfigIpcMessage = match serde_json::from_str(body) {
         Ok(m) => m,
         Err(e) => {
-            return (
+            return ConfigIpcOutcome::new(
                 Some(ActionResult::Error(format!(
                     "failed to parse IPC message: {}",
                     e
@@ -722,29 +775,15 @@ pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
 
     match msg.action.as_str() {
         "save" => {
-            let result = (|| -> anyhow::Result<ActionResult> {
+            let result = (|| -> anyhow::Result<()> {
                 let raw_data = msg
                     .data
                     .ok_or_else(|| anyhow::anyhow!("save action missing data field"))?;
                 let data: SettingsData =
                     serde_json::from_value(raw_data).context("failed to parse settings data")?;
-                save_settings(data, &config::settings_path())?;
-
-                Ok(ActionResult::Success(
-                    "Param\u{00e8}tres".to_string(),
-                    "Param\u{00e8}tres sauvegard\u{00e9}s".to_string(),
-                ))
+                save_settings(data, &config::settings_path())
             })();
-            match result {
-                Ok(r) => (Some(r), true),
-                Err(e) => (
-                    Some(ActionResult::Error(format!(
-                        "Erreur de sauvegarde : {:#}",
-                        e
-                    ))),
-                    true,
-                ),
-            }
+            save_outcome("save", result)
         }
         "save_account" => {
             let result = (|| -> anyhow::Result<()> {
@@ -759,27 +798,18 @@ pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
                     &config::settings_path(),
                 )
             })();
-            match result {
-                Ok(()) => (None, false),
-                Err(e) => (
-                    Some(ActionResult::Error(format!(
-                        "Erreur de sauvegarde : {:#}",
-                        e
-                    ))),
-                    false,
-                ),
-            }
+            save_outcome("save_account", result)
         }
         "open_raw" => {
             if let Err(e) = action_open_config().context("failed to open settings file in editor") {
-                return (
+                return ConfigIpcOutcome::new(
                     Some(ActionResult::Error(format!("Erreur : {:#}", e))),
                     false,
                 );
             }
-            (None, false)
+            ConfigIpcOutcome::new(None, false)
         }
-        other => (
+        other => ConfigIpcOutcome::new(
             Some(ActionResult::Error(format!(
                 "unknown IPC action '{}'",
                 other
@@ -792,14 +822,78 @@ pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_route_decisions, delete_staged_emails, save_account, save_settings, AccountData,
-        RouteApplyReport, RouteDecisionRow, SettingsData,
+        apply_route_decisions, delete_staged_emails, save_account, save_outcome, save_settings,
+        scan_destinations, AccountData, DestGuiIpcResult, RouteApplyReport, RouteDecisionRow,
+        SettingsData,
     };
     use crate::config::{load_raw_accounts, Settings};
+    use crate::destinations::DestinationsConfig;
     use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
+
+    #[test]
+    fn test_save_outcome_with_error() {
+        let outcome = save_outcome("save", Err(anyhow::anyhow!("disk full")));
+        assert!(!outcome.should_close);
+    }
+
+    #[test]
+    fn test_save_outcome_with_error_reply() {
+        let outcome = save_outcome("save", Err(anyhow::anyhow!("disk full")));
+        let reply: serde_json::Value =
+            serde_json::from_str(&outcome.reply.unwrap_or_default()).unwrap();
+        assert_eq!(
+            (reply["ok"].as_bool(), reply["message"].as_str()),
+            (Some(false), Some("Erreur de sauvegarde : disk full"))
+        );
+    }
+
+    #[test]
+    fn test_save_outcome_with_settings_saved() {
+        let outcome = save_outcome("save", Ok(()));
+        assert!(outcome.should_close);
+    }
+
+    #[test]
+    fn test_save_outcome_with_account_saved() {
+        let outcome = save_outcome("save_account", Ok(()));
+        assert!(!outcome.should_close);
+    }
+
+    #[test]
+    fn test_scan_destinations_with_unconfigured_notes_dir() {
+        let result = scan_destinations(None, &DestinationsConfig::default(), "scan_folders");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_scan_destinations_with_missing_notes_dir() {
+        let temp = TempDir::new().unwrap();
+        let missing = temp.path().join("absent");
+        let result = scan_destinations(
+            Some(&missing),
+            &DestinationsConfig::default(),
+            "scan_folders",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_scan_destinations_with_empty_notes_dir() {
+        let temp = TempDir::new().unwrap();
+        let result = scan_destinations(
+            Some(temp.path()),
+            &DestinationsConfig::default(),
+            "scan_folders",
+        );
+        assert!(matches!(
+            result,
+            Ok(DestGuiIpcResult::FolderSuggestions { new_folders, orphans })
+                if new_folders.is_empty() && orphans.is_empty()
+        ));
+    }
 
     /// Staging dir with three emails dated 2026-06, plus an empty notes dir.
     struct RouteFixture {

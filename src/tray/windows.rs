@@ -129,6 +129,9 @@ pub(super) fn build_contextual_window(
     Ok((window, webview, window_id))
 }
 
+/// Cancel button of the progress window, only present when the action can be cancelled.
+const CANCEL_BUTTON_HTML: &str = r#"<button id="cancel" onclick="this.disabled = true; window.ipc.postMessage('cancel')">Annuler</button>"#;
+
 /// `action_name` and `warning` are inserted into the page body without HTML
 /// escaping. They must stay fixed labels chosen by the caller: never pass an
 /// account name, a folder name or any other external data.
@@ -145,7 +148,11 @@ pub(super) fn build_progress_window(
         .replace("__WARNING__", warning.unwrap_or(""))
         .replace(
             "__HAS_CANCEL__",
-            if cancel_token.is_some() { "true" } else { "false" },
+            if cancel_token.is_some() {
+                CANCEL_BUTTON_HTML
+            } else {
+                ""
+            },
         );
     let ipc_proxy = proxy.clone();
     let webview = attach_webview(&window, html, None, move |req| {
@@ -201,11 +208,15 @@ pub(super) fn build_config_window(
         None,
         move |req: wry::http::Request<String>| {
             let body = req.body().clone();
-            let (result, should_close) = super::ipc::handle_config_ipc(&body);
-            if let Some(r) = result {
+            let outcome = super::ipc::handle_config_ipc(&body);
+            if let Some(r) = outcome.result {
                 let _ = sender.send(r);
             }
-            if should_close {
+            if let Some(reply) = outcome.reply {
+                let js = format!("config_result({})", escape_json_for_script(&reply));
+                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+            }
+            if outcome.should_close {
                 let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
             }
         },

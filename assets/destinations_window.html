@@ -446,7 +446,15 @@
       return;
     }
     if (data.type === 'error') {
-      alert(data.message || 'Règle invalide');
+      var message = data.message || 'Règle invalide';
+      // A scan in progress shows its failure where its result was expected.
+      if (document.getElementById('scan-overlay').classList.contains('active')) {
+        document.getElementById('scan-status').textContent = message;
+      } else if (document.getElementById('suggest-overlay').classList.contains('active')) {
+        document.getElementById('suggest-status').textContent = message;
+      } else {
+        alert(message);
+      }
       return;
     }
   };

@@ -143,7 +143,7 @@ pub(super) fn run() -> Result<()> {
                 handle_open_config(target, &proxy, &mut windows, sender)
             }
             Event::UserEvent(AppCommand::OpenUpdate) => {
-                handle_open_update(target, &proxy, &mut windows)
+                handle_open_update(target, &proxy, &mut windows, &result_sender)
             }
             Event::UserEvent(AppCommand::UpdateMsg(msg)) => handle_update_msg(&windows, msg),
             Event::UserEvent(AppCommand::ProgressUpdate { window_id, update }) => {
@@ -159,10 +159,10 @@ pub(super) fn run() -> Result<()> {
                 attr_value,
             }) => handle_persist_routing_rule(&windows, window_id, dest_path, attr_kind, attr_value),
             Event::UserEvent(AppCommand::OpenRouteReview(decisions)) => {
-                handle_open_route_review(target, &proxy, &mut windows, decisions)
+                handle_open_route_review(target, &proxy, &mut windows, decisions, &result_sender)
             }
             Event::UserEvent(AppCommand::OpenDestGui { dest_file }) => {
-                handle_open_dest_gui(target, &proxy, &mut windows, dest_file, result_sender.clone())
+                handle_open_dest_gui(target, &proxy, &mut windows, dest_file, &result_sender)
             }
             Event::UserEvent(AppCommand::PushDestState { window_id, json }) => {
                 handle_push_dest_state(&windows, window_id, json)
@@ -252,48 +252,67 @@ fn handle_open_progress(
     }
 }
 
+/// Opens the single window of `kind`: claims it, builds it and registers it.
+/// When the build fails, the claim is released and the cause is reported to the
+/// user through the tray result channel.
+fn open_single_window(
+    kind: WindowKind,
+    label: &str,
+    windows: &mut HashMap<WindowId, WState>,
+    sender: &Sender<ActionResult>,
+    build: impl FnOnce() -> Result<(WindowId, WState)>,
+) {
+    if !try_claim_window(kind) {
+        // Already open — ignore. The previous window should be closed first.
+        return;
+    }
+    match build() {
+        Ok((window_id, state)) => {
+            windows.insert(window_id, state);
+        }
+        Err(e) => {
+            close_window_kind(kind);
+            let _ = sender.send(ActionResult::Error(format!("{} : {:#}", label, e)));
+        }
+    }
+}
+
 fn handle_open_config(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
     windows: &mut HashMap<WindowId, WState>,
     sender: Sender<ActionResult>,
 ) {
-    if !try_claim_window(WindowKind::Config) {
-        // Already open — ignore.
-        return;
-    }
-    match super::windows::build_config_window(target, proxy, sender.clone()) {
-        Ok((window, webview, window_id)) => {
-            windows.insert(window_id, WState::Config(ConfigState { webview, window }));
-        }
-        Err(e) => {
-            close_window_kind(WindowKind::Config);
-            let _ = sender.send(ActionResult::Error(format!(
-                "Fenêtre de paramètres : {:#}",
-                e
-            )));
-        }
-    }
+    let ipc_sender = sender.clone();
+    open_single_window(
+        WindowKind::Config,
+        "Fenêtre de paramètres",
+        windows,
+        &sender,
+        || {
+            let (window, webview, window_id) =
+                super::windows::build_config_window(target, proxy, ipc_sender)?;
+            Ok((window_id, WState::Config(ConfigState { webview, window })))
+        },
+    );
 }
 
 fn handle_open_update(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
     windows: &mut HashMap<WindowId, WState>,
+    sender: &Sender<ActionResult>,
 ) {
-    if !try_claim_window(WindowKind::Update) {
-        // Already open — ignore.
-        return;
-    }
-    match super::windows::build_update_window(target, proxy) {
-        Ok((window, webview, window_id)) => {
-            windows.insert(window_id, WState::Update(UpdateState { webview, window }));
-        }
-        Err(e) => {
-            close_window_kind(WindowKind::Update);
-            eprintln!("Fenêtre de mise à jour : {:#}", e);
-        }
-    }
+    open_single_window(
+        WindowKind::Update,
+        "Fenêtre de mise à jour",
+        windows,
+        sender,
+        || {
+            let (window, webview, window_id) = super::windows::build_update_window(target, proxy)?;
+            Ok((window_id, WState::Update(UpdateState { webview, window })))
+        },
+    );
 }
 
 fn handle_update_msg(windows: &HashMap<WindowId, WState>, msg: String) {
@@ -321,9 +340,12 @@ fn handle_progress_update(
 }
 
 fn handle_eval_script(windows: &HashMap<WindowId, WState>, window_id: WindowId, js: String) {
-    if let Some(WState::Route(state)) = windows.get(&window_id) {
-        let _ = state.webview.evaluate_script(&js);
-    }
+    let webview = match windows.get(&window_id) {
+        Some(WState::Route(state)) => &state.webview,
+        Some(WState::Config(state)) => &state.webview,
+        _ => return,
+    };
+    let _ = webview.evaluate_script(&js);
 }
 
 fn handle_persist_routing_rule(
@@ -392,20 +414,19 @@ fn handle_open_route_review(
     proxy: &EventLoopProxy<AppCommand>,
     windows: &mut HashMap<WindowId, WState>,
     decisions: Vec<(std::path::PathBuf, RouteDecision)>,
+    sender: &Sender<ActionResult>,
 ) {
-    if !try_claim_window(WindowKind::Route) {
-        // Already open — ignore. The previous window should be closed first.
-        return;
-    }
-    match super::windows::build_route_window(target, proxy, decisions) {
-        Ok((window, webview, window_id)) => {
-            windows.insert(window_id, WState::Route(RouteState { webview, window }));
-        }
-        Err(e) => {
-            close_window_kind(WindowKind::Route);
-            eprintln!("Fenêtre de revue de routage : {:#}", e);
-        }
-    }
+    open_single_window(
+        WindowKind::Route,
+        "Fenêtre de revue de routage",
+        windows,
+        sender,
+        || {
+            let (window, webview, window_id) =
+                super::windows::build_route_window(target, proxy, decisions)?;
+            Ok((window_id, WState::Route(RouteState { webview, window })))
+        },
+    );
 }
 
 fn handle_open_dest_gui(
@@ -413,32 +434,25 @@ fn handle_open_dest_gui(
     proxy: &EventLoopProxy<AppCommand>,
     windows: &mut HashMap<WindowId, WState>,
     dest_file: std::path::PathBuf,
-    sender: Sender<ActionResult>,
+    sender: &Sender<ActionResult>,
 ) {
-    if !try_claim_window(WindowKind::DestGui) {
-        // Already open — ignore.
-        return;
-    }
-    match super::windows::build_dest_gui_window(target, proxy, &dest_file, None, false) {
-        Ok((window, webview, window_id, cfg)) => {
-            windows.insert(
-                window_id,
-                WState::DestGui(DestGuiState {
-                    cfg,
-                    dest_file,
-                    webview,
-                    window,
-                }),
-            );
-        }
-        Err(e) => {
-            close_window_kind(WindowKind::DestGui);
-            let _ = sender.send(ActionResult::Error(format!(
-                "Fenêtre destinations : {:#}",
-                e
-            )));
-        }
-    }
+    open_single_window(
+        WindowKind::DestGui,
+        "Fenêtre destinations",
+        windows,
+        sender,
+        || {
+            let (window, webview, window_id, cfg) =
+                super::windows::build_dest_gui_window(target, proxy, &dest_file, None, false)?;
+            let state = DestGuiState {
+                cfg,
+                dest_file,
+                webview,
+                window,
+            };
+            Ok((window_id, WState::DestGui(state)))
+        },
+    );
 }
 
 fn handle_push_dest_state(windows: &HashMap<WindowId, WState>, window_id: WindowId, json: String) {
