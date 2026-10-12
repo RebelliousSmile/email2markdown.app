@@ -301,6 +301,7 @@
       <div class="field-row">
         <label>Chemin</label>
         <input id="new-path" type="text" placeholder="ex: Perso/Banque">
+        <button class="btn" id="btn-browse-path" type="button">Parcourir…</button>
       </div>
       <div class="field-row">
         <label>Note</label>
@@ -443,6 +444,11 @@
     if (data.type === 'folder_suggestions') {
       renderFolderScan(data.paths || []);
       renderOrphanScan(data.orphans || []);
+      return;
+    }
+    if (data.type === 'picked_folder') {
+      document.getElementById('new-path').value = data.path || '';
+      document.getElementById('new-note').focus();
       return;
     }
     if (data.type === 'error') {
@@ -652,6 +658,9 @@
   document.getElementById('btn-add-entry').addEventListener('click', function () {
     document.getElementById('add-entry-form').style.display = 'block';
     document.getElementById('new-path').focus();
+  });
+  document.getElementById('btn-browse-path').addEventListener('click', function () {
+    send('browse_folder');
   });
   document.getElementById('btn-add-entry-cancel').addEventListener('click', function () {
     document.getElementById('add-entry-form').style.display = 'none';

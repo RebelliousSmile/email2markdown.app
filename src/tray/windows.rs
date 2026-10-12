@@ -413,6 +413,10 @@ pub(super) fn build_dest_gui_window(
                 .to_string();
                 let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
             }
+            super::ipc::DestGuiIpcResult::BrowseFolder => {
+                drop(cfg_guard);
+                let _ = proxy_ipc.send_event(AppCommand::BrowseDestFolder { window_id });
+            }
             super::ipc::DestGuiIpcResult::Saved => {
                 drop(cfg_guard);
                 let command = if contextual_on_save {

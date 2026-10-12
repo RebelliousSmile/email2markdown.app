@@ -28,6 +28,8 @@ pub(super) enum DestGuiIpcResult {
         new_folders: Vec<String>,
         orphans: Vec<String>,
     },
+    /// The window asked for a folder picker; the dialog runs in the event loop.
+    BrowseFolder,
     Saved,
     Close,
     Noop,
@@ -64,6 +66,7 @@ pub(super) fn handle_dest_gui_ipc(
         "add_entries" => handle_add_entries(cfg, msg.data),
         "scan_suggest" | "scan_folders" => handle_scan(cfg, &msg.action),
         "suggest_confirm" => handle_suggest_confirm(cfg, msg.data),
+        "browse_folder" => DestGuiIpcResult::BrowseFolder,
         _ => DestGuiIpcResult::Noop,
     }
 }
@@ -324,6 +327,68 @@ fn scan_destinations(
             orphans,
         }
     })
+}
+
+/// Open a folder picker rooted at `notes_dir` and build the reply for the
+/// destinations window: the picked destination path, or an error message.
+///
+/// Returns `None` when the user cancels. Must run in the event loop, not in the
+/// IPC closure: the dialog pumps its own message loop.
+pub(super) fn browse_dest_folder() -> Option<String> {
+    let notes_dir = match Settings::load(&config::settings_path())
+        .context("failed to load settings")
+        .and_then(|settings| {
+            settings
+                .notes_dir
+                .ok_or_else(|| anyhow::anyhow!("le dossier de notes n'est pas configuré"))
+        }) {
+        Ok(dir) => std::path::PathBuf::from(dir),
+        Err(e) => return Some(browse_error_json(&e)),
+    };
+    let picked = rfd::FileDialog::new()
+        .set_title("Choisir un dossier de destination")
+        .set_directory(&notes_dir)
+        .pick_folder()?;
+    Some(match relative_destination(&notes_dir, &picked) {
+        Ok(path) => serde_json::json!({"type": "picked_folder", "path": path}).to_string(),
+        Err(e) => browse_error_json(&e),
+    })
+}
+
+fn browse_error_json(error: &anyhow::Error) -> String {
+    serde_json::json!({"type": "error", "message": format!("Sélection impossible : {error:#}")})
+        .to_string()
+}
+
+/// Destination path (`/`-separated, relative to `notes_dir`) of a picked folder.
+///
+/// Fails when `picked` is the notes directory itself, lies outside it, or has a
+/// segment the router would reject.
+fn relative_destination(notes_dir: &Path, picked: &Path) -> anyhow::Result<String> {
+    let root = notes_dir
+        .canonicalize()
+        .with_context(|| format!("le dossier de notes est introuvable : {}", notes_dir.display()))?;
+    let target = picked
+        .canonicalize()
+        .with_context(|| format!("le dossier choisi est introuvable : {}", picked.display()))?;
+    let relative = target.strip_prefix(&root).map_err(|_| {
+        anyhow::anyhow!(
+            "le dossier choisi n'est pas dans le dossier de notes ({})",
+            notes_dir.display()
+        )
+    })?;
+    let segments: Vec<&str> = relative
+        .components()
+        .map(|c| c.as_os_str().to_str())
+        .collect::<Option<_>>()
+        .ok_or_else(|| anyhow::anyhow!("le nom du dossier choisi n'est pas de l'UTF-8 valide"))?;
+    if segments.is_empty() {
+        anyhow::bail!("choisissez un sous-dossier du dossier de notes");
+    }
+    let path = segments.join("/");
+    crate::route::join_safe_segments(Path::new(""), &path)
+        .context("le nom du dossier contient des caractères non pris en charge")?;
+    Ok(path)
 }
 
 fn handle_suggest_confirm(
@@ -822,8 +887,8 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_route_decisions, delete_staged_emails, save_account, save_outcome, save_settings,
-        scan_destinations, AccountData, DestGuiIpcResult, RouteApplyReport, RouteDecisionRow,
+        apply_route_decisions, delete_staged_emails, relative_destination, save_account,
+        save_outcome, save_settings, scan_destinations, AccountData, DestGuiIpcResult, RouteApplyReport, RouteDecisionRow,
         SettingsData,
     };
     use crate::config::{load_raw_accounts, Settings};
@@ -893,6 +958,31 @@ mod tests {
             Ok(DestGuiIpcResult::FolderSuggestions { new_folders, orphans })
                 if new_folders.is_empty() && orphans.is_empty()
         ));
+    }
+
+    #[test]
+    fn test_relative_destination_with_nested_folder() {
+        let temp = TempDir::new().unwrap();
+        let picked = temp.path().join("Perso").join("Banque");
+        fs::create_dir_all(&picked).unwrap();
+        let result = relative_destination(temp.path(), &picked).unwrap();
+        assert_eq!(result, "Perso/Banque");
+    }
+
+    #[test]
+    fn test_relative_destination_with_notes_dir_itself() {
+        let temp = TempDir::new().unwrap();
+        assert!(relative_destination(temp.path(), temp.path()).is_err());
+    }
+
+    #[test]
+    fn test_relative_destination_with_folder_outside_notes_dir() {
+        let temp = TempDir::new().unwrap();
+        let notes = temp.path().join("notes");
+        let outside = temp.path().join("ailleurs");
+        fs::create_dir_all(&notes).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        assert!(relative_destination(&notes, &outside).is_err());
     }
 
     /// Staging dir with three emails dated 2026-06, plus an empty notes dir.

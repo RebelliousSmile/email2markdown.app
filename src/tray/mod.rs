@@ -117,6 +117,11 @@ pub enum AppCommand {
         window_id: WindowId,
         json: String,
     },
+    /// Open a folder picker for the destinations GUI "add" form.
+    /// Dispatched via proxy so the modal dialog runs in the event loop, not the IPC closure.
+    BrowseDestFolder {
+        window_id: WindowId,
+    },
     /// The contextual destination editor saved its configuration. Revalidate
     /// the clicked directory and continue directly to the email search.
     ContextualDestinationSaved {
@@ -482,6 +487,11 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                                 .evaluate_script(&format!("window_msg({js_str})"));
                         }
                     }
+                }
+            }
+            Event::UserEvent(AppCommand::BrowseDestFolder { window_id }) => {
+                if let Some(json) = ipc::browse_dest_folder() {
+                    let _ = proxy.send_event(AppCommand::PushDestState { window_id, json });
                 }
             }
             Event::UserEvent(AppCommand::ContextualDestinationSaved { window_id }) => {

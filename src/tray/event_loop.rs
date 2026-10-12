@@ -167,6 +167,11 @@ pub(super) fn run() -> Result<()> {
             Event::UserEvent(AppCommand::PushDestState { window_id, json }) => {
                 handle_push_dest_state(&windows, window_id, json)
             }
+            Event::UserEvent(AppCommand::BrowseDestFolder { window_id }) => {
+                if let Some(json) = super::ipc::browse_dest_folder() {
+                    let _ = proxy.send_event(AppCommand::PushDestState { window_id, json });
+                }
+            }
             Event::UserEvent(AppCommand::ContextualDestinationSaved { window_id }) => {
                 handle_contextual_destination_saved(&mut windows, window_id)
             }
