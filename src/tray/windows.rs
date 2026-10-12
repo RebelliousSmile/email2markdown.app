@@ -481,6 +481,8 @@ pub(super) fn escape_json_for_script(json: &str) -> String {
 /// Loads `route_review.html`, injects the decisions JSON and the list of
 /// known paths from `destinations.yaml`, and wires an IPC handler that
 /// calls `apply_route_decisions` when the user clicks Apply.
+///
+/// The handler only moves or deletes the staging files sent to the page here.
 pub(super) fn build_route_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
@@ -528,6 +530,11 @@ pub(super) fn build_route_window(
             )
         })
         .collect();
+
+    // Staging files this window may act on, as the exact strings sent to the page
+    // so the comparison never depends on path normalisation.
+    let allowed_files: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(owned_rows.iter().map(|row| row.0.clone()).collect());
 
     let json_rows: Vec<serde_json::Value> = owned_rows
         .iter()
@@ -609,7 +616,10 @@ pub(super) fn build_route_window(
                 if kind.action == "delete" {
                     match serde_json::from_str::<DeletePayload>(&body) {
                         Ok(p) => {
-                            let (deleted, err) = super::ipc::delete_staged_emails(&p.files);
+                            let (deleted, err) = super::ipc::delete_staged_emails(
+                                &p.files,
+                                &mut allowed_files.borrow_mut(),
+                            );
                             // Remove the successfully-deleted rows from the table.
                             if let Ok(js_arr) = serde_json::to_string(&deleted) {
                                 let js = format!(
@@ -642,18 +652,40 @@ pub(super) fn build_route_window(
             }
 
             // 3. Existing apply flow — payload `{ decisions: [...] }` (no `action` field).
-            match super::ipc::apply_route_decisions(&body, &notes_dir, window_id, &proxy_ipc) {
-                Ok(()) => {
+            let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
+                .unwrap_or_default()
+                .organize_by_date;
+            let outcome = super::ipc::parse_route_decisions(&body).and_then(|rows| {
+                super::ipc::apply_route_decisions(
+                    &rows,
+                    &notes_dir,
+                    &mut allowed_files.borrow_mut(),
+                    organize_by_date,
+                )
+            });
+            let error = match outcome {
+                Ok(report) if report.is_complete() => {
                     let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+                    return;
                 }
-                Err(e) => {
-                    // Surface the error back to the HTML without closing.
-                    let msg = format!("{:#}", e);
-                    if let Ok(js_str) = serde_json::to_string(&msg) {
-                        let js = format!("route_review_error({})", js_str);
+                Ok(report) => {
+                    // Drop the rows with nothing left to route, keep the failed ones.
+                    if let Ok(js_arr) = serde_json::to_string(&report.settled_files()) {
+                        let js = format!(
+                            "route_review_applied({})",
+                            escape_json_for_script(&js_arr)
+                        );
                         let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
                     }
+                    report.error_message().unwrap_or_default()
                 }
+                // Validation failed: nothing was moved.
+                Err(e) => format!("{:#}", e),
+            };
+            // Surface the error back to the HTML without closing.
+            if let Ok(js_str) = serde_json::to_string(&error) {
+                let js = format!("route_review_error({})", escape_json_for_script(&js_str));
+                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
             }
         },
     )?;

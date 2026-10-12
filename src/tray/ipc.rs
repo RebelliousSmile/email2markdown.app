@@ -1,16 +1,13 @@
 //! IPC message decoding for the destinations-management and settings webviews.
 
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::Path;
 
 use anyhow::Context;
 use serde_json::Value;
-use tao::event_loop::EventLoopProxy;
-use tao::window::WindowId;
 
 use crate::config::{self, AccountBehavior, RawAccount, Settings};
 use crate::tray_actions::{action_open_config, ActionResult};
-
-use super::AppCommand;
 
 /// Read a string field from a JSON object, `None` if missing or not a string.
 fn field_str<'a>(data: &'a Value, field: &str) -> Option<&'a str> {
@@ -363,88 +360,170 @@ fn handle_suggest_confirm(
     DestGuiIpcResult::StateChanged
 }
 
-/// Apply a batch of route decisions (move staged emails into their target folders).
-///
-/// `route.rs`/`destinations.rs` already own path validation and the actual file
-/// move (`join_safe_segments`, `move_email`) — no logic is reimplemented here.
-pub(super) fn apply_route_decisions(
-    body: &str,
-    notes_dir: &PathBuf,
-    _window_id: WindowId,
-    _proxy: &EventLoopProxy<AppCommand>,
-) -> anyhow::Result<()> {
+/// One row of the route review "apply" payload.
+#[derive(serde::Deserialize)]
+pub(super) struct RouteDecisionRow {
+    pub(super) file: String,
+    pub(super) dest_path: String,
+}
+
+/// Outcome of a route review "apply", file by file.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct RouteApplyReport {
+    /// Files moved to their destination.
+    pub(super) moved: Vec<String>,
+    /// Files that were no longer in staging: nothing left to route.
+    pub(super) missing: Vec<String>,
+    /// Files that could not be moved, with the reason.
+    pub(super) failed: Vec<(String, String)>,
+}
+
+impl RouteApplyReport {
+    /// `true` when every decision ended with its file moved.
+    pub(super) fn is_complete(&self) -> bool {
+        self.missing.is_empty() && self.failed.is_empty()
+    }
+
+    /// Files whose row has nothing left to route (moved or gone).
+    pub(super) fn settled_files(&self) -> Vec<String> {
+        self.moved.iter().chain(&self.missing).cloned().collect()
+    }
+
+    /// User-facing summary of what did not move, `None` when everything did.
+    pub(super) fn error_message(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if !self.missing.is_empty() {
+            parts.push(format!(
+                "{} fichier(s) introuvable(s) dans le transit :\n{}",
+                self.missing.len(),
+                self.missing.join("\n")
+            ));
+        }
+        if !self.failed.is_empty() {
+            let lines: Vec<String> = self
+                .failed
+                .iter()
+                .map(|(file, reason)| format!("{}: {}", file, reason))
+                .collect();
+            parts.push(format!(
+                "Déplacement échoué pour {} fichier(s) :\n{}",
+                self.failed.len(),
+                lines.join("\n")
+            ));
+        }
+        (!parts.is_empty()).then(|| parts.join("\n"))
+    }
+}
+
+/// Decode the route review "apply" payload `{ decisions: [{ file, dest_path }] }`.
+pub(super) fn parse_route_decisions(body: &str) -> anyhow::Result<Vec<RouteDecisionRow>> {
     #[derive(serde::Deserialize)]
     struct RouteApplyPayload {
         decisions: Vec<RouteDecisionRow>,
     }
-    #[derive(serde::Deserialize)]
-    struct RouteDecisionRow {
-        file: String,
-        dest_path: String,
-    }
-
     let payload: RouteApplyPayload =
         serde_json::from_str(body).context("failed to parse route review IPC payload")?;
+    Ok(payload.decisions)
+}
 
-    let organize_by_date =
-        crate::config::Settings::load(&crate::config::settings_path())
-            .unwrap_or_default()
-            .organize_by_date;
+/// Final destination of a row, carrying the email's `<Year>/<Month>`.
+///
+/// The auto proposal already ends with it; a manually reassigned path (cascade /
+/// free entry / bulk) comes bare from destinations.txt — append it from the email
+/// date so files always land under `<dest>/<Year>/<Month>` (no double suffix).
+/// Skipped entirely when the "organize by date" preference is off, so a bare
+/// manual path stays flat instead of being silently re-dated.
+fn dated_dest_path(row: &RouteDecisionRow, organize_by_date: bool) -> String {
+    if !organize_by_date {
+        return row.dest_path.clone();
+    }
+    match read_frontmatter_field(Path::new(&row.file), "date")
+        .and_then(|d| chrono::DateTime::parse_from_rfc3339(d.trim()).ok())
+    {
+        Some(dt) => crate::route::ensure_year_month(
+            &row.dest_path,
+            &dt.format("%Y").to_string(),
+            &dt.format("%m").to_string(),
+        ),
+        // Date unreadable/unparseable → keep the path as-is (no guess).
+        None => row.dest_path.clone(),
+    }
+}
 
-    for row in &payload.decisions {
-        let staging_md = PathBuf::from(&row.file);
-        // Normalize the destination to carry the email's <Year>/<Month>. The auto
-        // proposal already ends with it; a manually reassigned path (cascade / free
-        // entry / bulk) comes bare from destinations.txt — append it from the email
-        // date so files always land under <dest>/<Year>/<Month> (no double suffix).
-        // Skipped entirely when the "organize by date" preference is off, so a bare
-        // manual path stays flat instead of being silently re-dated.
-        let dest_path = if !organize_by_date {
-            row.dest_path.clone()
-        } else {
-            match read_frontmatter_field(&staging_md, "date")
-                .and_then(|d| chrono::DateTime::parse_from_rfc3339(d.trim()).ok())
-            {
-                Some(dt) => crate::route::ensure_year_month(
-                    &row.dest_path,
-                    &dt.format("%Y").to_string(),
-                    &dt.format("%m").to_string(),
-                ),
-                // Date unreadable/unparseable → keep the path as-is (no guess).
-                None => row.dest_path.clone(),
-            }
-        };
+/// Apply a batch of route decisions (move staged emails into their target folders).
+///
+/// `allowed` holds the staging files the host sent to the review window: a row
+/// naming any other file is rejected. The whole batch is validated before the
+/// first move, so a bad row moves nothing; once moves start, a failure is
+/// recorded and the remaining rows still run. Moved and missing files leave
+/// `allowed`. The move itself is `route::apply_decision`.
+pub(super) fn apply_route_decisions(
+    rows: &[RouteDecisionRow],
+    notes_dir: &Path,
+    allowed: &mut HashSet<String>,
+    organize_by_date: bool,
+) -> anyhow::Result<RouteApplyReport> {
+    // Pass 1 — validation only, no side effect.
+    let mut dest_paths = Vec::with_capacity(rows.len());
+    for row in rows {
+        if !allowed.contains(&row.file) {
+            anyhow::bail!("file {:?} is not part of this review", row.file);
+        }
+        if row.dest_path.trim().is_empty() {
+            anyhow::bail!("empty destination path for file {:?}", row.file);
+        }
+        let dest_path = dated_dest_path(row, organize_by_date);
         // Anti-traversal validation — rejects "..", "\", absolute paths.
-        let dest_dir =
-            crate::route::join_safe_segments(notes_dir, &dest_path).with_context(|| {
-                format!(
-                    "invalid destination path {:?} for file {:?}",
-                    dest_path, row.file
-                )
-            })?;
-        // Create the directory tree (D4: mkdir -p).
-        std::fs::create_dir_all(&dest_dir)
-            .with_context(|| format!("failed to create directory {}", dest_dir.display()))?;
-        // Move .md + its referenced attachment siblings.
-        crate::route::move_email(&staging_md, &dest_dir).with_context(|| {
+        crate::route::join_safe_segments(notes_dir, &dest_path).with_context(|| {
             format!(
-                "failed to move {} to {}",
-                staging_md.display(),
-                dest_dir.display()
+                "invalid destination path {:?} for file {:?}",
+                dest_path, row.file
             )
         })?;
+        dest_paths.push(dest_path);
     }
-    Ok(())
+
+    // Pass 2 — move; a failure does not stop the following rows.
+    let mut report = RouteApplyReport::default();
+    for (row, dest_path) in rows.iter().zip(&dest_paths) {
+        let staging_md = Path::new(&row.file);
+        // A file gone since the window opened must not block the batch.
+        if staging_md.symlink_metadata().is_err() {
+            allowed.remove(&row.file);
+            report.missing.push(row.file.clone());
+            continue;
+        }
+        match crate::route::apply_decision(staging_md, dest_path, notes_dir) {
+            Ok(()) => {
+                allowed.remove(&row.file);
+                report.moved.push(row.file.clone());
+            }
+            Err(e) => report.failed.push((row.file.clone(), format!("{:#}", e))),
+        }
+    }
+    Ok(report)
 }
 
 /// Delete staged emails (and their attachment sidecars) that were rejected during routing.
-pub(super) fn delete_staged_emails(files: &[String]) -> (Vec<String>, Option<String>) {
+///
+/// A file absent from `allowed` (the staging files the host sent to the review
+/// window) is refused. Deleted files leave `allowed`.
+pub(super) fn delete_staged_emails(
+    files: &[String],
+    allowed: &mut HashSet<String>,
+) -> (Vec<String>, Option<String>) {
     let mut deleted = Vec::new();
     let mut errors = Vec::new();
     for file in files {
-        let path = PathBuf::from(file);
-        match crate::route::delete_email(&path) {
-            Ok(()) => deleted.push(file.clone()),
+        if !allowed.contains(file) {
+            errors.push(format!("{}: fichier hors de cette revue", file));
+            continue;
+        }
+        match crate::route::delete_email(Path::new(file)) {
+            Ok(()) => {
+                allowed.remove(file);
+                deleted.push(file.clone());
+            }
             Err(e) => errors.push(format!("{}: {:#}", file, e)),
         }
     }
@@ -712,10 +791,222 @@ pub(super) fn handle_config_ipc(body: &str) -> (Option<ActionResult>, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{save_account, save_settings, AccountData, SettingsData};
+    use super::{
+        apply_route_decisions, delete_staged_emails, save_account, save_settings, AccountData,
+        RouteApplyReport, RouteDecisionRow, SettingsData,
+    };
     use crate::config::{load_raw_accounts, Settings};
+    use std::collections::HashSet;
     use std::fs;
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
+
+    /// Staging dir with three emails dated 2026-06, plus an empty notes dir.
+    struct RouteFixture {
+        _temp: TempDir,
+        staging: PathBuf,
+        notes: PathBuf,
+        files: Vec<String>,
+    }
+
+    fn route_fixture() -> RouteFixture {
+        let temp = TempDir::new().unwrap();
+        let staging = temp.path().join("staging");
+        let notes = temp.path().join("notes");
+        fs::create_dir_all(&staging).unwrap();
+        fs::create_dir_all(&notes).unwrap();
+        let files = ["a.md", "b.md", "c.md"]
+            .iter()
+            .map(|name| {
+                let path = staging.join(name);
+                fs::write(
+                    &path,
+                    "---\ndate: 2026-06-15T10:00:00+00:00\nsubject: test\n---\nbody\n",
+                )
+                .unwrap();
+                path.to_string_lossy().into_owned()
+            })
+            .collect();
+        RouteFixture {
+            _temp: temp,
+            staging,
+            notes,
+            files,
+        }
+    }
+
+    fn rows(pairs: &[(&str, &str)]) -> Vec<RouteDecisionRow> {
+        pairs
+            .iter()
+            .map(|(file, dest_path)| RouteDecisionRow {
+                file: file.to_string(),
+                dest_path: dest_path.to_string(),
+            })
+            .collect()
+    }
+
+    fn allowed(files: &[String]) -> HashSet<String> {
+        files.iter().cloned().collect()
+    }
+
+    /// Names of the `.md` files directly under `dir`, sorted.
+    fn md_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn test_apply_route_decisions_valid_moves_all_files() {
+        let fx = route_fixture();
+        let decisions = rows(&[
+            (&fx.files[0], "Perso/Banque"),
+            (&fx.files[1], "Perso/Banque"),
+            (&fx.files[2], "Travail"),
+        ]);
+
+        apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), false).unwrap();
+
+        assert_eq!(
+            (
+                md_names(&fx.notes.join("Perso").join("Banque")),
+                md_names(&fx.notes.join("Travail")),
+                md_names(&fx.staging),
+            ),
+            (
+                vec!["a.md".to_string(), "b.md".to_string()],
+                vec!["c.md".to_string()],
+                Vec::<String>::new(),
+            )
+        );
+    }
+
+    #[test]
+    fn test_apply_route_decisions_organize_by_date_single_suffix() {
+        let fx = route_fixture();
+        let decisions = rows(&[
+            (&fx.files[0], "Perso/Banque"),
+            (&fx.files[1], "Perso/Banque/2026/06"),
+        ]);
+        let dated = fx.notes.join("Perso").join("Banque").join("2026").join("06");
+
+        apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), true).unwrap();
+
+        assert_eq!(
+            (md_names(&dated), dated.join("2026").exists()),
+            (vec!["a.md".to_string(), "b.md".to_string()], false)
+        );
+    }
+
+    #[test]
+    fn test_apply_route_decisions_invalid_path_moves_nothing() {
+        let fx = route_fixture();
+        let decisions = rows(&[
+            (&fx.files[0], "Perso"),
+            (&fx.files[1], "../outside"),
+            (&fx.files[2], "Travail"),
+        ]);
+
+        let err = apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), false)
+            .unwrap_err();
+
+        assert!(format!("{:#}", err).contains("b.md"));
+        assert_eq!(md_names(&fx.staging), ["a.md", "b.md", "c.md"]);
+        assert!(!fx.notes.join("Perso").exists());
+    }
+
+    #[test]
+    fn test_apply_route_decisions_unlisted_file_moves_nothing() {
+        let fx = route_fixture();
+        let decisions = rows(&[(&fx.files[0], "Perso"), (&fx.files[1], "Perso")]);
+        let mut allowed = allowed(&fx.files[..1]);
+
+        let err = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap_err();
+
+        assert!(format!("{:#}", err).contains("b.md"));
+        assert_eq!(md_names(&fx.staging), ["a.md", "b.md", "c.md"]);
+        assert!(!fx.notes.join("Perso").exists());
+    }
+
+    #[test]
+    fn test_apply_route_decisions_missing_file_reports_and_continues() {
+        let fx = route_fixture();
+        let decisions = rows(&[
+            (&fx.files[0], "Perso"),
+            (&fx.files[1], "Perso"),
+            (&fx.files[2], "Perso"),
+        ]);
+        fs::remove_file(&fx.files[1]).unwrap();
+        let mut allowed = allowed(&fx.files);
+
+        let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
+
+        assert_eq!(
+            report,
+            RouteApplyReport {
+                moved: vec![fx.files[0].clone(), fx.files[2].clone()],
+                missing: vec![fx.files[1].clone()],
+                failed: vec![],
+            }
+        );
+        assert_eq!(md_names(&fx.notes.join("Perso")), ["a.md", "c.md"]);
+        assert!(allowed.is_empty());
+    }
+
+    #[test]
+    fn test_route_apply_report_error_message_names_missing_file_once() {
+        let report = RouteApplyReport {
+            moved: vec!["a.md".to_string()],
+            missing: vec!["b.md".to_string()],
+            failed: vec![],
+        };
+
+        let message = report.error_message().unwrap();
+
+        assert_eq!(message.matches("b.md").count(), 1);
+        assert!(!message.contains("a.md"));
+    }
+
+    #[test]
+    fn test_route_apply_report_all_moved_is_complete() {
+        let report = RouteApplyReport {
+            moved: vec!["a.md".to_string()],
+            ..Default::default()
+        };
+
+        assert_eq!((report.is_complete(), report.error_message()), (true, None));
+    }
+
+    #[test]
+    fn test_delete_staged_emails_listed_file_deletes_it() {
+        let fx = route_fixture();
+        let mut allowed = allowed(&fx.files);
+
+        let (deleted, err) = delete_staged_emails(&fx.files[..1], &mut allowed);
+
+        assert_eq!((deleted, err), (vec![fx.files[0].clone()], None));
+        assert_eq!(md_names(&fx.staging), ["b.md", "c.md"]);
+        assert!(!allowed.contains(&fx.files[0]));
+    }
+
+    #[test]
+    fn test_delete_staged_emails_unlisted_file_keeps_file() {
+        let fx = route_fixture();
+        let mut allowed = allowed(&fx.files[..1]);
+
+        let (deleted, err) = delete_staged_emails(&fx.files[1..2], &mut allowed);
+
+        assert!(deleted.is_empty());
+        assert!(err.unwrap().contains("b.md"));
+        assert_eq!(md_names(&fx.staging), ["a.md", "b.md", "c.md"]);
+    }
 
     const INVALID_YAML: &str = "export_base_dir: [unclosed\naccounts: : :\n";
     const VALID_ACCOUNTS: &str =

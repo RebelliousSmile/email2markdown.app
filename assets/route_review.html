@@ -838,6 +838,8 @@
 
     var msg = JSON.stringify({ decisions: decisions });
     if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      // Disabled until Rust answers (route_review_error) or closes the window.
+      document.getElementById('btn-apply').disabled = true;
       window.ipc.postMessage(msg);
     } else {
       alert('IPC non disponible.');
@@ -848,7 +850,16 @@
   // Called by Rust via webview.evaluate_script("route_review_error('...')") if
   // the apply step encounters a validation error for a specific file.
   window.route_review_error = function (msg) {
+    document.getElementById('btn-apply').disabled = false;
     showError(msg);
+  };
+
+  // ── apply feedback from Rust ──────────────────────────────────────────────
+  // Called by Rust after a partial apply, passing the staging paths that are
+  // settled (moved, or no longer in staging). Drops those rows from the table;
+  // the rows left are the ones still to route. route_review_error follows.
+  window.route_review_applied = function (filesArray) {
+    window.route_review_deleted(filesArray);
   };
 
   // ── delete feedback from Rust ─────────────────────────────────────────────
