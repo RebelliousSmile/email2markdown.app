@@ -2,6 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Paramètres</title>
 <style>
@@ -287,6 +288,12 @@
     border-color: #1e88e5;
     box-shadow: 0 0 0 2px rgba(30,136,229,0.15);
   }
+  .save-error {
+    display: none;
+    color: #d32f2f;
+    font-size: 12px;
+    margin-right: auto;
+  }
   .acct-error {
     display: none;
     color: #d32f2f;
@@ -487,6 +494,7 @@
 </div>
 
 <div class="footer" id="main-footer">
+  <span class="save-error" id="save-error"></span>
   <button id="btn-open-raw">Ouvrir le fichier brut</button>
   <button id="btn-save">Sauvegarder</button>
 </div>
@@ -557,6 +565,7 @@
     };
 
     var msg = JSON.stringify(payload);
+    document.getElementById('save-error').style.display = 'none';
     document.getElementById('btn-save').disabled = true;
     if (window.ipc && typeof window.ipc.postMessage === 'function') {
       window.ipc.postMessage(msg);
@@ -706,6 +715,9 @@
     currentFolders = [];
   });
 
+  // Account save sent to the host and not answered yet.
+  var pendingAccount = null;
+
   document.getElementById('acct-save').addEventListener('click', function () {
     var errorEl = document.getElementById('acct-error');
     errorEl.style.display = 'none';
@@ -762,10 +774,16 @@
     };
 
     this.disabled = true;
+    pendingAccount = { name: accountName, behavior: behaviorData };
     if (window.ipc && typeof window.ipc.postMessage === 'function') {
       window.ipc.postMessage(JSON.stringify(payload));
     }
+  });
 
+  // Runs once the host confirms the account was written: only then is the
+  // in-memory copy updated and "Enregistré ✓" shown.
+  function onAccountSaved(saved) {
+    var behaviorData = saved.behavior;
     if (!window.__SETTINGS_DATA__.accounts) window.__SETTINGS_DATA__.accounts = {};
     var inMemBehavior = {};
     for (var bf = 0; bf < ACCT_BOOL_FIELDS.length; bf++) {
@@ -773,10 +791,10 @@
       if (bfVal !== null) inMemBehavior[ACCT_BOOL_FIELDS[bf][1]] = bfVal;
     }
     if (behaviorData.quote_depth !== null) inMemBehavior.quote_depth = behaviorData.quote_depth;
-    window.__SETTINGS_DATA__.accounts[accountName] = inMemBehavior;
+    window.__SETTINGS_DATA__.accounts[saved.name] = inMemBehavior;
 
     var savedMsg = document.getElementById('acct-saved-msg');
-    var saveBtn = this;
+    var saveBtn = document.getElementById('acct-save');
     savedMsg.style.display = 'inline';
 
     setTimeout(function () {
@@ -787,7 +805,32 @@
       currentAccountIdx = -1;
       currentFolders = [];
     }, 800);
-  });
+  }
+
+  // Called by Rust via evaluate_script("config_result(<json>)") after each save request.
+  window.config_result = function (result) {
+    var message = result.message || 'Erreur de sauvegarde';
+    if (result.action === 'save') {
+      if (result.ok) return; // the host closes the window
+      var saveError = document.getElementById('save-error');
+      saveError.textContent = message;
+      saveError.style.display = 'block';
+      document.getElementById('btn-save').disabled = false;
+      return;
+    }
+    if (result.action === 'save_account') {
+      var saved = pendingAccount;
+      pendingAccount = null;
+      if (result.ok && saved) {
+        onAccountSaved(saved);
+        return;
+      }
+      var acctError = document.getElementById('acct-error');
+      acctError.textContent = message;
+      acctError.style.display = 'block';
+      document.getElementById('acct-save').disabled = false;
+    }
+  };
 
   function escapeHtml(str) {
     return String(str)

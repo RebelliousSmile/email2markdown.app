@@ -22,6 +22,13 @@ Release profile: `opt-level = 3`, `lto = true`, `codegen-units = 1`, `strip = tr
 
 Output: `target/release/email-to-markdown` (`.exe` on Windows)
 
+## Reproducible builds
+
+- `Cargo.lock` is tracked; CI and release run every `cargo` command with `--locked`
+- The Rust toolchain version is written in three places that must stay in sync: `rust-toolchain.toml`, `rust-version` in `Cargo.toml`, `toolchain:` in `.github/workflows/`
+- GitHub Actions are pinned by commit SHA, with the tag in a trailing comment
+- Pushing a `v*` tag triggers `release.yml`, which publishes the binaries and a `SHA256SUMS` file; the auto-updater refuses a release without a matching checksum
+
 ## Intégration gestionnaire de fichiers
 
 ```bash

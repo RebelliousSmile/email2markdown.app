@@ -838,18 +838,14 @@ pub fn action_choose_export_dir(result_sender: Sender<ActionResult>) {
         let result = set_export_dir(&base_dir);
         let action_result = match result {
             Ok(msg) => ActionResult::Success("Répertoire d'export".to_string(), msg),
-            Err(e) => ActionResult::Error(format!("Erreur répertoire d'export : {}", e)),
+            Err(e) => ActionResult::Error(format!("Erreur répertoire d'export : {:#}", e)),
         };
         let _ = result_sender.send(action_result);
     });
 }
 
 fn set_export_dir(base_dir: &std::path::Path) -> Result<String> {
-    let settings_path = config::settings_path();
-    let mut settings = config::Settings::load(&settings_path).unwrap_or_default();
-
-    settings.export_base_dir = Some(base_dir.to_string_lossy().replace('\\', "/"));
-    settings.save(&settings_path)?;
+    set_export_dir_in(base_dir, &config::settings_path())?;
 
     // Count accounts to report
     let count = Config::load(&config::accounts_yaml_path())
@@ -873,18 +869,37 @@ pub fn action_choose_notes_dir(result_sender: Sender<ActionResult>) {
         let result = set_notes_dir(&base_dir);
         let action_result = match result {
             Ok(msg) => ActionResult::Success("Répertoire de notes".to_string(), msg),
-            Err(e) => ActionResult::Error(format!("Erreur répertoire de notes : {}", e)),
+            Err(e) => ActionResult::Error(format!("Erreur répertoire de notes : {:#}", e)),
         };
         let _ = result_sender.send(action_result);
     });
 }
 
 fn set_notes_dir(base_dir: &std::path::Path) -> Result<String> {
-    let settings_path = config::settings_path();
-    let mut settings = Settings::load(&settings_path).unwrap_or_default();
-    settings.notes_dir = Some(base_dir.to_string_lossy().replace('\\', "/"));
-    settings.save(&settings_path)?;
+    set_notes_dir_in(base_dir, &config::settings_path())?;
     Ok(format!("Défini sur {}", base_dir.display()))
+}
+
+/// Store `base_dir` as the export directory in the settings file at `settings_path`.
+fn set_export_dir_in(base_dir: &std::path::Path, settings_path: &std::path::Path) -> Result<()> {
+    let mut settings = Settings::load(settings_path)
+        .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
+    settings.export_base_dir = Some(base_dir.to_string_lossy().replace('\\', "/"));
+    settings
+        .save(settings_path)
+        .with_context(|| format!("failed to save settings to {}", settings_path.display()))?;
+    Ok(())
+}
+
+/// Store `base_dir` as the notes directory in the settings file at `settings_path`.
+fn set_notes_dir_in(base_dir: &std::path::Path, settings_path: &std::path::Path) -> Result<()> {
+    let mut settings = Settings::load(settings_path)
+        .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
+    settings.notes_dir = Some(base_dir.to_string_lossy().replace('\\', "/"));
+    settings
+        .save(settings_path)
+        .with_context(|| format!("failed to save settings to {}", settings_path.display()))?;
+    Ok(())
 }
 
 /// Open the documentation (README.md) in the default viewer.
@@ -1024,4 +1039,70 @@ pub fn get_account_names() -> Result<Vec<String>> {
         .into_iter()
         .map(String::from)
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{set_export_dir_in, set_notes_dir_in};
+    use crate::config::Settings;
+    use std::fs;
+    use tempfile::TempDir;
+
+    const INVALID_YAML: &str = "export_base_dir: [unclosed\naccounts: : :\n";
+
+    #[test]
+    fn test_set_export_dir_in_valid_keeps_other_fields() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, "notes_dir: C:/notes\n").unwrap();
+
+        set_export_dir_in(temp.path(), &path).unwrap();
+
+        let saved = Settings::load(&path).unwrap();
+        assert_eq!(
+            (saved.notes_dir, saved.export_base_dir),
+            (
+                Some("C:/notes".to_string()),
+                Some(temp.path().to_string_lossy().replace('\\', "/"))
+            )
+        );
+    }
+
+    #[test]
+    fn test_set_export_dir_in_invalid_yaml_keeps_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, INVALID_YAML).unwrap();
+
+        let err = set_export_dir_in(temp.path(), &path).unwrap_err();
+
+        assert!(format!("{:#}", err).contains("settings.yaml"));
+        assert_eq!(fs::read(&path).unwrap(), INVALID_YAML.as_bytes());
+    }
+
+    #[test]
+    fn test_set_notes_dir_in_missing_file_creates_it() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+
+        set_notes_dir_in(temp.path(), &path).unwrap();
+
+        let saved = Settings::load(&path).unwrap();
+        assert_eq!(
+            saved.notes_dir,
+            Some(temp.path().to_string_lossy().replace('\\', "/"))
+        );
+    }
+
+    #[test]
+    fn test_set_notes_dir_in_invalid_yaml_keeps_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, INVALID_YAML).unwrap();
+
+        let err = set_notes_dir_in(temp.path(), &path).unwrap_err();
+
+        assert!(format!("{:#}", err).contains("settings.yaml"));
+        assert_eq!(fs::read(&path).unwrap(), INVALID_YAML.as_bytes());
+    }
 }

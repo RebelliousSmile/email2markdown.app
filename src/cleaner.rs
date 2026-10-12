@@ -119,6 +119,9 @@ pub fn trim_trailing(s: &str) -> String {
     joined
 }
 
+static REF_URL_LINE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[\d+\]: (.+)$").expect("static regex"));
+
 /// Walk lines and rewrite any numbered-reference line `[N]: <url>` by
 /// passing its URL through `decontaminate_trackers`. Non-matching lines
 /// are left untouched. A trailing newline in the input is preserved.
@@ -126,7 +129,6 @@ fn decontaminate_ref_urls(s: &str) -> String {
     if s.is_empty() {
         return String::new();
     }
-    let re = Regex::new(r"^\[\d+\]: (.+)$").expect("static regex");
     let had_trailing_newline = s.ends_with('\n');
 
     let mut out: Vec<String> = Vec::new();
@@ -138,7 +140,7 @@ fn decontaminate_ref_urls(s: &str) -> String {
     };
 
     for line in working {
-        if let Some(caps) = re.captures(line) {
+        if let Some(caps) = REF_URL_LINE_RE.captures(line) {
             if let Some(url_match) = caps.get(1) {
                 let url = url_match.as_str();
                 let cleaned = decontaminate_trackers(url);
@@ -159,6 +161,12 @@ fn decontaminate_ref_urls(s: &str) -> String {
     joined
 }
 
+static QP_SOFT_BREAK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"=\r?\n").expect("static regex"));
+
+static QP_HEX_RUN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:=[0-9A-Fa-f]{2}){1,4}").expect("static regex"));
+
 /// Defensive fallback for surviving quoted-printable byte sequences.
 ///
 /// When the upstream MIME parser fails to decode a quoted-printable body
@@ -178,13 +186,11 @@ fn decontaminate_ref_urls(s: &str) -> String {
 pub fn decode_residual_qp(s: &str) -> String {
     // Strip soft line breaks first so wrapped `=C2=\n=A0` becomes `=C2=A0`
     // and the hex-decode regex below sees it as one match.
-    let soft_break_re = Regex::new(r"=\r?\n").expect("static regex");
-    let unwrapped = soft_break_re.replace_all(s, "");
+    let unwrapped = QP_SOFT_BREAK_RE.replace_all(s, "");
 
     // Match 1..=4 consecutive =XX hex bytes (UTF-8 max 4 bytes per codepoint),
     // longest first thanks to the +-greediness inside a single match.
-    let re = Regex::new(r"(?:=[0-9A-Fa-f]{2}){1,4}").expect("static regex");
-    re.replace_all(&unwrapped, |caps: &regex::Captures| {
+    let decoded = QP_HEX_RUN_RE.replace_all(&unwrapped, |caps: &regex::Captures| {
         let m = &caps[0];
         // Each =XX is 3 chars, so byte count = m.len() / 3
         let count = m.len() / 3;
@@ -201,8 +207,8 @@ pub fn decode_residual_qp(s: &str) -> String {
             // Not valid UTF-8 — keep the original literal so we don't lose data.
             Err(_) => m.to_string(),
         }
-    })
-    .into_owned()
+    });
+    decoded.into_owned()
 }
 
 /// Decode HTML entities (`&amp;`, `&eacute;`, `&#x27;`, `&nbsp;`, …).
@@ -385,6 +391,9 @@ fn classify_social_url(url_str: &str) -> Option<&'static str> {
     None
 }
 
+static SOCIAL_LINK_LINE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[(.+)\]\((.+)\)$").expect("static regex"));
+
 /// Extract a trailing block of social-network links from the body.
 ///
 /// Scans backwards from the end, skipping blank lines, and collects contiguous
@@ -400,8 +409,6 @@ pub fn extract_social_footer(s: &str) -> (String, Option<BTreeMap<String, String
         return (String::new(), None);
     }
 
-    let link_re = Regex::new(r"^\[(.+)\]\((.+)\)$").expect("static regex");
-
     let lines: Vec<&str> = s.split('\n').collect();
 
     // Walk from the end, skipping any trailing blank lines.
@@ -416,7 +423,7 @@ pub fn extract_social_footer(s: &str) -> (String, Option<BTreeMap<String, String
     let mut collected: Vec<(String, &'static str)> = Vec::new();
     while block_start > 0 {
         let candidate = lines[block_start - 1].trim();
-        let Some(caps) = link_re.captures(candidate) else {
+        let Some(caps) = SOCIAL_LINK_LINE_RE.captures(candidate) else {
             break;
         };
         let Some(url_match) = caps.get(2) else {
@@ -452,6 +459,9 @@ pub fn extract_social_footer(s: &str) -> (String, Option<BTreeMap<String, String
     (new_body, Some(map))
 }
 
+static INLINE_LINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^\)]+)\)").expect("static regex"));
+
 /// Rewrite inline markdown links `[text](url)` to numbered reference form
 /// `[text][N]` and append a `[N]: url` block at the bottom of the body.
 ///
@@ -470,12 +480,10 @@ pub fn extract_social_footer(s: &str) -> (String, Option<BTreeMap<String, String
 /// Reference-style markdown links (`[text][label]` or `[label]: url`) are not
 /// rewritten — the `(...)` shape is required.
 pub fn extract_links(s: &str) -> String {
-    let re = Regex::new(r"\[([^\]]+)\]\(([^\)]+)\)").expect("static regex");
-
     let mut counter: usize = 0;
     let mut refs: Vec<(usize, String)> = Vec::new();
 
-    let rewritten = re.replace_all(s, |caps: &regex::Captures| {
+    let rewritten = INLINE_LINK_RE.replace_all(s, |caps: &regex::Captures| {
         let text = &caps[1];
         let raw = &caps[2];
         // Strip optional Markdown title attribute: [text](url "title") → url
@@ -591,6 +599,9 @@ const UNWRAP_MIN_LEN: usize = 60;
 /// next line by the unwrap heuristic.
 const UNWRAP_TERMINAL_CHARS: &[char] = &['.', '!', '?', ':', '\u{2026}', ')', '"', '\u{00BB}'];
 
+static LONE_LINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[.+\]\(.+\)$").expect("static regex"));
+
 /// True if `line` is a structural / preserved line that must NOT be joined
 /// to its previous or next neighbour by `unwrap_lines`.
 ///
@@ -638,8 +649,7 @@ fn is_preserved_line(line: &str) -> bool {
     }
 
     // Lone markdown link line: `[text](url)`
-    let link_re = Regex::new(r"^\[.+\]\(.+\)$").expect("static regex");
-    if link_re.is_match(trimmed_full) {
+    if LONE_LINK_RE.is_match(trimmed_full) {
         return true;
     }
 

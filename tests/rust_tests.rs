@@ -1,5 +1,5 @@
 use email_to_markdown::config::{
-    load_raw_accounts, save_accounts, AccountBehavior, Config, RawAccount, Settings,
+    load_raw_accounts, save_accounts, AccountBehavior, Config, ConfigError, RawAccount, Settings,
 };
 use email_to_markdown::network::{NetworkConfig, ProgressIndicator}; // [3][4]
 use email_to_markdown::utils::*;
@@ -155,6 +155,40 @@ mod utils_tests {
 
 mod config_tests {
     use super::*;
+
+    #[test]
+    fn test_load_with_settings_invalid_settings_yaml() {
+        let temp = TempDir::new().expect("create tempdir");
+        let accounts = temp.path().join("accounts.yaml");
+        let settings = temp.path().join("settings.yaml");
+        std::fs::write(
+            &accounts,
+            "accounts:\n  - name: Perso\n    server: imap.example.org\n    port: 993\n    username: perso@example.org\n",
+        )
+        .expect("write accounts");
+        std::fs::write(&settings, "export_base_dir: [unclosed\n").expect("write settings");
+
+        let result = Config::load_with_settings(&accounts, &settings);
+
+        assert!(matches!(result, Err(ConfigError::YamlParseError(_))));
+    }
+
+    #[test]
+    fn test_load_with_settings_missing_settings_yaml() {
+        let temp = TempDir::new().expect("create tempdir");
+        let accounts = temp.path().join("accounts.yaml");
+        std::fs::write(
+            &accounts,
+            "accounts:\n  - name: Perso\n    server: imap.example.org\n    port: 993\n    username: perso@example.org\n",
+        )
+        .expect("write accounts");
+
+        let result = Config::load_with_settings(&accounts, &temp.path().join("settings.yaml"));
+
+        // A missing file is not a load failure: defaults apply, then validation
+        // rejects the account for lack of export_base_dir.
+        assert!(matches!(result, Err(ConfigError::ValidationError(_))));
+    }
 
     #[test]
     fn test_config_validation_empty_accounts_is_ok() {

@@ -2,6 +2,9 @@
 name = "email-to-markdown"
 version = "0.16.0"
 edition = "2021"
+# Toolchain the project is built and tested with (see rust-toolchain.toml);
+# no lower version has been tried.
+rust-version = "1.93.0"
 exclude = [".pytest_cache", "packaging/windows/shell-extension/target"]
 authors = ["FX Guillois"]
 repository = "https://github.com/fxguillois/email-to-markdown"
@@ -69,6 +72,9 @@ ureq = { version = "2", features = ["json"], optional = true }
 # In-place binary self-replacement (for auto-update, tray only)
 self-replace = { version = "1", optional = true }
 
+# SHA-256 of the downloaded binary (for auto-update, tray only)
+sha2 = { version = "0.10", optional = true }
+
 # Temporary files (used by updater for atomic binary download)
 tempfile = "3"
 
@@ -108,7 +114,7 @@ windows-sys = { version = "0.59", optional = true, features = [
 
 [features]
 default = []
-tray = ["tray-icon", "tao", "wry", "rfd", "dep:ureq", "dep:self-replace", "dep:windows-sys"]
+tray = ["tray-icon", "tao", "wry", "rfd", "dep:ureq", "dep:self-replace", "dep:sha2", "dep:windows-sys"]
 
 [dev-dependencies]
 

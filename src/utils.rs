@@ -2,6 +2,7 @@ use anyhow::Context;
 use regex::Regex;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 
 /// Limit the depth of quoted messages to reduce redundancy.
 pub fn limit_quote_depth(text: &str, max_depth: usize) -> String {
@@ -94,6 +95,9 @@ pub fn get_short_name(email_str: Option<&str>) -> String {
     }
 }
 
+static EMAIL_ADDRESS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[\w\.-]+@[\w\.-]+\.\w+").expect("static regex"));
+
 /// Extract email addresses from a text field.
 pub fn extract_emails(text: Option<&str>) -> Vec<String> {
     let text = match text {
@@ -101,23 +105,27 @@ pub fn extract_emails(text: Option<&str>) -> Vec<String> {
         None => return Vec::new(),
     };
 
-    let re = Regex::new(r"[\w\.-]+@[\w\.-]+\.\w+").unwrap();
-    re.find_iter(text)
+    EMAIL_ADDRESS_RE
+        .find_iter(text)
         .map(|m| m.as_str().to_lowercase())
         .collect()
 }
 
+static EXCESS_NEWLINES_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\n{3,}").expect("static regex"));
+
 /// Normalize line breaks to max 2 consecutive newlines.
 pub fn normalize_line_breaks(text: &str) -> String {
-    let re = Regex::new(r"\n{3,}").unwrap();
-    re.replace_all(text, "\n\n").to_string()
+    EXCESS_NEWLINES_RE.replace_all(text, "\n\n").to_string()
 }
+
+static MIME_ENCODED_WORD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"=\?(.*?)\?(.*?)\?(.*?)\?=").expect("static regex"));
 
 /// Decode MIME encoded filenames (format: =?utf-8?q?filename?=).
 pub fn decode_mime_filename(encoded_filename: &str) -> String {
     if encoded_filename.starts_with("=?") && encoded_filename.contains("?=") {
-        let re = Regex::new(r"=\?(.*?)\?(.*?)\?(.*?)\?=").unwrap();
-        if let Some(caps) = re.captures(encoded_filename) {
+        if let Some(caps) = MIME_ENCODED_WORD_RE.captures(encoded_filename) {
             let charset = caps.get(1).map_or("", |m| m.as_str());
             let encoding = caps.get(2).map_or("", |m| m.as_str());
             let encoded_text = caps.get(3).map_or("", |m| m.as_str());
@@ -427,10 +435,14 @@ pub fn hash_md5_prefix(text: &str, length: usize) -> String {
     format!("{:x}", digest).chars().take(length).collect()
 }
 
+static FORBIDDEN_FILENAME_CHARS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"[<>:"/\\|?*]"#).expect("static regex"));
+
 /// Sanitize filename for filesystem.
 pub fn sanitize_filename(filename: &str) -> String {
-    let re = Regex::new(r#"[<>:"/\\|?*]"#).unwrap();
-    re.replace_all(filename, "_").to_string()
+    FORBIDDEN_FILENAME_CHARS_RE
+        .replace_all(filename, "_")
+        .to_string()
 }
 
 /// Get relative path between two paths.

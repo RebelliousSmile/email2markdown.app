@@ -31,6 +31,20 @@ fn build_gui_window(
     Ok((window, window_id))
 }
 
+/// Decide whether a webview may navigate to `url`.
+///
+/// Windows are loaded once from an HTML string and never navigate afterwards.
+/// `about:blank` is always allowed: it is the document a webview starts from,
+/// and on some platforms the URL reported for an HTML-string load. The first
+/// other navigation is the initial load itself (WebView2 reports it under its
+/// own URL); it claims `initial_load_seen` and every later one is refused.
+fn allow_navigation(url: &str, initial_load_seen: &AtomicBool) -> bool {
+    if url == "about:blank" {
+        return true;
+    }
+    !initial_load_seen.swap(true, Ordering::SeqCst)
+}
+
 fn attach_webview(
     window: &Window,
     html: impl Into<std::borrow::Cow<'static, str>>,
@@ -38,8 +52,18 @@ fn attach_webview(
     ipc_handler: impl Fn(wry::http::Request<String>) + 'static,
 ) -> Result<WebView> {
     let html: std::borrow::Cow<'static, str> = html.into();
+    let initial_load_seen = AtomicBool::new(false);
     let mut builder = WebViewBuilder::new(window)
         .with_html(html.into_owned())
+        .with_navigation_handler(move |url| {
+            let allowed = allow_navigation(&url, &initial_load_seen);
+            if !allowed {
+                // Only the scheme is logged: a refused URL may carry page data.
+                let scheme = url.split(':').next().unwrap_or_default();
+                eprintln!("navigation refusée (schéma {scheme})");
+            }
+            allowed
+        })
         .with_ipc_handler(ipc_handler);
     if let Some(script) = init_script {
         builder = builder.with_initialization_script(script);
@@ -105,6 +129,12 @@ pub(super) fn build_contextual_window(
     Ok((window, webview, window_id))
 }
 
+/// Cancel button of the progress window, only present when the action can be cancelled.
+const CANCEL_BUTTON_HTML: &str = r#"<button id="cancel" onclick="this.disabled = true; window.ipc.postMessage('cancel')">Annuler</button>"#;
+
+/// `action_name` and `warning` are inserted into the page body without HTML
+/// escaping. They must stay fixed labels chosen by the caller: never pass an
+/// account name, a folder name or any other external data.
 pub(super) fn build_progress_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
@@ -118,7 +148,11 @@ pub(super) fn build_progress_window(
         .replace("__WARNING__", warning.unwrap_or(""))
         .replace(
             "__HAS_CANCEL__",
-            if cancel_token.is_some() { "true" } else { "false" },
+            if cancel_token.is_some() {
+                CANCEL_BUTTON_HTML
+            } else {
+                ""
+            },
         );
     let ipc_proxy = proxy.clone();
     let webview = attach_webview(&window, html, None, move |req| {
@@ -147,17 +181,19 @@ pub(super) fn build_config_window(
     sender: Sender<ActionResult>,
 ) -> Result<(Window, WebView, WindowId)> {
     let settings_path = crate::config::settings_path();
-    let settings = crate::config::Settings::load(&settings_path).unwrap_or_default();
+    let settings = crate::config::Settings::load(&settings_path)
+        .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
     let accounts_path = crate::config::accounts_yaml_path();
-    let raw_accounts = crate::config::load_raw_accounts(&accounts_path).unwrap_or_default();
+    let raw_accounts = crate::config::load_raw_accounts(&accounts_path)
+        .with_context(|| format!("failed to load accounts from {}", accounts_path.display()))?;
 
     let html_template = include_str!("../../assets/config_window.html");
     let settings_json = serde_json::to_string(&settings).context("failed to serialize settings")?;
     let accounts_json =
         serde_json::to_string(&raw_accounts).context("failed to serialize accounts")?;
     let html = html_template
-        .replace("__SETTINGS_JSON__", &settings_json)
-        .replace("__ACCOUNTS_JSON__", &accounts_json);
+        .replace("__SETTINGS_JSON__", &escape_json_for_script(&settings_json))
+        .replace("__ACCOUNTS_JSON__", &escape_json_for_script(&accounts_json));
 
     let (window, window_id) = build_gui_window(
         target,
@@ -172,11 +208,15 @@ pub(super) fn build_config_window(
         None,
         move |req: wry::http::Request<String>| {
             let body = req.body().clone();
-            let (result, should_close) = super::ipc::handle_config_ipc(&body);
-            if let Some(r) = result {
+            let outcome = super::ipc::handle_config_ipc(&body);
+            if let Some(r) = outcome.result {
                 let _ = sender.send(r);
             }
-            if should_close {
+            if let Some(reply) = outcome.reply {
+                let js = format!("config_result({})", escape_json_for_script(&reply));
+                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+            }
+            if outcome.should_close {
                 let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
             }
         },
@@ -200,7 +240,12 @@ pub(super) fn build_update_window(
         (700.0, 500.0),
     )?;
 
+    // The release found by the check stays on the host side: the page only
+    // confirms, it never chooses what gets downloaded.
+    let pending_release: Arc<Mutex<Option<updater::Release>>> = Arc::new(Mutex::new(None));
+
     let proxy_ipc = proxy.clone();
+    let pending_ipc = Arc::clone(&pending_release);
     let webview = attach_webview(
         &window,
         html,
@@ -212,11 +257,12 @@ pub(super) fn build_update_window(
                 Err(_) => return,
             };
             if parsed.get("action").and_then(|v| v.as_str()) == Some("update-confirm") {
-                if let Some(asset_url) = parsed.get("asset_url").and_then(|v| v.as_str()) {
-                    let asset_url = asset_url.to_string();
+                // Any other field of the message is ignored.
+                let release = pending_ipc.lock().ok().and_then(|guard| guard.clone());
+                if let Some(release) = release {
                     let proxy_dl = proxy_ipc.clone();
                     thread::spawn(move || {
-                        let result = updater::download_and_apply(&asset_url, |msg| {
+                        let result = updater::download_and_apply(&release, |msg| {
                             let json = serde_json::json!({ "type": "msg", "text": msg }).to_string();
                             let _ = proxy_dl.send_event(AppCommand::UpdateMsg(json));
                         });
@@ -233,7 +279,7 @@ pub(super) fn build_update_window(
                             }
                             Err(e) => {
                                 let json = serde_json::json!({
-                                    "type": "msg",
+                                    "type": "error",
                                     "text": format!("Erreur : {:#}", e)
                                 })
                                 .to_string();
@@ -263,15 +309,19 @@ pub(super) fn build_update_window(
                 "type": "check_result",
                 "current": current_version,
                 "latest": release.tag_name,
-                "body": release.body,
-                "asset_url": release.asset_url
+                "body": release.body
             })
             .to_string();
+            // Stored before the page learns about it, so a confirmation always
+            // finds the release.
+            if let Ok(mut pending) = pending_release.lock() {
+                *pending = Some(release);
+            }
             let _ = proxy_check.send_event(AppCommand::UpdateMsg(json));
         }
         Err(e) => {
             let json = serde_json::json!({
-                "type": "msg",
+                "type": "error",
                 "text": format!("Erreur : {:#}", e)
             })
             .to_string();
@@ -294,12 +344,16 @@ pub(super) fn build_dest_gui_window(
     WindowId,
     Arc<Mutex<crate::destinations::DestinationsConfig>>,
 )> {
-    let cfg = crate::destinations::load_yaml(dest_file).unwrap_or_default();
+    let cfg = crate::destinations::load_yaml(dest_file)
+        .with_context(|| format!("failed to load destinations from {}", dest_file.display()))?;
     let cfg_arc = Arc::new(Mutex::new(cfg));
 
     let initial_path_json = serde_json::to_string(&initial_path).unwrap_or_else(|_| "null".into());
     let html = include_str!("../../assets/destinations_window.html")
-        .replace("__INITIAL_PATH_JSON__", &initial_path_json)
+        .replace(
+            "__INITIAL_PATH_JSON__",
+            &escape_json_for_script(&initial_path_json),
+        )
         .replace(
             "__CONTEXTUAL_SETUP_JSON__",
             if contextual_on_save { "true" } else { "false" },
@@ -448,6 +502,8 @@ pub(super) fn escape_json_for_script(json: &str) -> String {
 /// Loads `route_review.html`, injects the decisions JSON and the list of
 /// known paths from `destinations.yaml`, and wires an IPC handler that
 /// calls `apply_route_decisions` when the user clicks Apply.
+///
+/// The handler only moves or deletes the staging files sent to the page here.
 pub(super) fn build_route_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
@@ -495,6 +551,11 @@ pub(super) fn build_route_window(
             )
         })
         .collect();
+
+    // Staging files this window may act on, as the exact strings sent to the page
+    // so the comparison never depends on path normalisation.
+    let allowed_files: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(owned_rows.iter().map(|row| row.0.clone()).collect());
 
     let json_rows: Vec<serde_json::Value> = owned_rows
         .iter()
@@ -576,7 +637,10 @@ pub(super) fn build_route_window(
                 if kind.action == "delete" {
                     match serde_json::from_str::<DeletePayload>(&body) {
                         Ok(p) => {
-                            let (deleted, err) = super::ipc::delete_staged_emails(&p.files);
+                            let (deleted, err) = super::ipc::delete_staged_emails(
+                                &p.files,
+                                &mut allowed_files.borrow_mut(),
+                            );
                             // Remove the successfully-deleted rows from the table.
                             if let Ok(js_arr) = serde_json::to_string(&deleted) {
                                 let js = format!(
@@ -609,18 +673,40 @@ pub(super) fn build_route_window(
             }
 
             // 3. Existing apply flow — payload `{ decisions: [...] }` (no `action` field).
-            match super::ipc::apply_route_decisions(&body, &notes_dir, window_id, &proxy_ipc) {
-                Ok(()) => {
+            let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
+                .unwrap_or_default()
+                .organize_by_date;
+            let outcome = super::ipc::parse_route_decisions(&body).and_then(|rows| {
+                super::ipc::apply_route_decisions(
+                    &rows,
+                    &notes_dir,
+                    &mut allowed_files.borrow_mut(),
+                    organize_by_date,
+                )
+            });
+            let error = match outcome {
+                Ok(report) if report.is_complete() => {
                     let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+                    return;
                 }
-                Err(e) => {
-                    // Surface the error back to the HTML without closing.
-                    let msg = format!("{:#}", e);
-                    if let Ok(js_str) = serde_json::to_string(&msg) {
-                        let js = format!("route_review_error({})", js_str);
+                Ok(report) => {
+                    // Drop the rows with nothing left to route, keep the failed ones.
+                    if let Ok(js_arr) = serde_json::to_string(&report.settled_files()) {
+                        let js = format!(
+                            "route_review_applied({})",
+                            escape_json_for_script(&js_arr)
+                        );
                         let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
                     }
+                    report.error_message().unwrap_or_default()
                 }
+                // Validation failed: nothing was moved.
+                Err(e) => format!("{:#}", e),
+            };
+            // Surface the error back to the HTML without closing.
+            if let Ok(js_str) = serde_json::to_string(&error) {
+                let js = format!("route_review_error({})", escape_json_for_script(&js_str));
+                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
             }
         },
     )?;
@@ -630,8 +716,59 @@ pub(super) fn build_route_window(
 
 #[cfg(test)]
 mod tests {
-    use super::escape_json_for_script;
+    use super::{allow_navigation, escape_json_for_script};
+    use std::sync::atomic::AtomicBool;
     use std::time::Instant;
+
+    #[test]
+    fn test_escape_json_for_script_decodes_to_original() {
+        let original = serde_json::json!({
+            "name": "A & B <admin>",
+            "path": "C:/notes/</script><img src=x onerror=alert(1)>",
+        });
+        let escaped = escape_json_for_script(&original.to_string());
+        let decoded: serde_json::Value = serde_json::from_str(&escaped).expect("valid json");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_escape_json_for_script_no_markup_characters() {
+        let payload = serde_json::json!({ "v": "</script><b>a & b</b>" }).to_string();
+        let escaped = escape_json_for_script(&payload);
+        assert!(
+            !escaped.contains(['<', '>', '&']),
+            "no <, > or & may remain: {escaped}"
+        );
+    }
+
+    #[test]
+    fn test_allow_navigation_initial_load_then_refused() {
+        let seen = AtomicBool::new(false);
+        let decisions = [
+            allow_navigation("about:blank", &seen),
+            allow_navigation("data:text/html,initial", &seen),
+            allow_navigation("https://example.org/", &seen),
+            allow_navigation("about:blank", &seen),
+        ];
+        assert_eq!(decisions, [true, true, false, true]);
+    }
+
+    #[test]
+    fn test_templates_declare_content_security_policy() {
+        let templates = [
+            include_str!("../../assets/config_window.html"),
+            include_str!("../../assets/contextual_export.html"),
+            include_str!("../../assets/destinations_window.html"),
+            include_str!("../../assets/progress_window.html"),
+            include_str!("../../assets/route_review.html"),
+            include_str!("../../assets/update_window.html"),
+        ];
+        let with_policy = templates
+            .iter()
+            .filter(|html| html.contains("Content-Security-Policy\" content=\"default-src 'none'"))
+            .count();
+        assert_eq!(with_policy, templates.len());
+    }
 
     #[test]
     fn test_escape_json_for_script_script_tag_breakout() {

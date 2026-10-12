@@ -2,6 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mise à jour</title>
 <style>
@@ -171,7 +172,7 @@
 
 <script>
 (function () {
-  var pendingAssetUrl = null;
+  var updateAvailable = false;
 
   function window_msg(jsonStr) {
     var data;
@@ -195,7 +196,7 @@
           document.getElementById('release-notes-section').style.display = '';
         }
 
-        pendingAssetUrl = data.asset_url;
+        updateAvailable = true;
         document.getElementById('btn-update').disabled = false;
       }
       return;
@@ -212,6 +213,17 @@
       appendMessage(data.text);
       return;
     }
+
+    if (data.type === 'error') {
+      // A failed check, download or integrity verification: shown as the
+      // window status, not as one more progress line. Retry stays possible.
+      var statusEl = document.getElementById('status-msg');
+      statusEl.textContent = data.text;
+      statusEl.className = 'error';
+      appendMessage(data.text);
+      document.getElementById('btn-update').disabled = !updateAvailable;
+      return;
+    }
   }
 
   function appendMessage(text) {
@@ -225,9 +237,10 @@
   }
 
   document.getElementById('btn-update').addEventListener('click', function () {
-    if (!pendingAssetUrl) { return; }
+    if (!updateAvailable) { return; }
     this.disabled = true;
-    var payload = JSON.stringify({ action: 'update-confirm', asset_url: pendingAssetUrl });
+    // The host downloads the release it checked itself: no URL is sent.
+    var payload = JSON.stringify({ action: 'update-confirm' });
     if (window.ipc && typeof window.ipc.postMessage === 'function') {
       window.ipc.postMessage(payload);
     }
