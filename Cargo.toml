@@ -5,9 +5,9 @@ edition = "2021"
 # Toolchain the project is built and tested with (see rust-toolchain.toml);
 # no lower version has been tried.
 rust-version = "1.93.0"
-exclude = [".pytest_cache", "packaging/windows/shell-extension/target"]
+exclude = [".pytest_cache"]
 authors = ["FX Guillois"]
-repository = "https://github.com/fxguillois/email-to-markdown"
+repository = "https://github.com/RebelliousSmile/email2markdown.app"
 description = "Export emails from IMAP accounts to Markdown files with YAML frontmatter"
 license = "MIT"
 keywords = ["email", "imap", "markdown", "export"]
@@ -26,6 +26,8 @@ mailparse = "0.14"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
+# The ```email block of a note is TOML
+toml = "0.8"
 
 # Regex for text processing
 regex = "1.10"
@@ -105,8 +107,6 @@ open = "5.3"
 dirs = "5.0"
 
 [target.'cfg(windows)'.dependencies]
-email-to-markdown-shell-extension-contract = { path = "packaging/windows/shell-extension-contract" }
-winreg = "0.52"
 windows-sys = { version = "0.59", optional = true, features = [
     "Win32_System_Console",
     "Win32_Storage_FileSystem",

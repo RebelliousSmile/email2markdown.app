@@ -4,12 +4,12 @@ pub mod config;
 pub mod contextual_export;
 pub mod dest_cmd; // `dest` CLI subcommand (list, add, suggest)
 pub mod destinations; // YAML storage for routing destinations
+pub mod email_block; // ```email block of a note: header + body as TOML
 pub mod email_export;
 pub mod html_layout; // Email HTML handlers for the htmd converter
 pub mod handled; // Ledger of sorted/discarded messages, so they are not re-exported
 pub mod network; // [3][4] Progress indicator et retry logic
 pub mod route;
-pub mod shell_integration;
 pub mod thunderbird; // [1] Import automatique depuis Thunderbird
 #[cfg(feature = "tray")]
 pub mod updater;

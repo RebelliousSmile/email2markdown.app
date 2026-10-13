@@ -1004,6 +1004,45 @@ mod route_tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
+    #[test]
+    fn test_rewrite_attachment_paths_keeps_email_block_intact() {
+        let temp = TempDir::new().unwrap();
+        let old_dir = temp.path().join("staging");
+        let new_dir = temp.path().join("notes").join("Perso");
+        fs::create_dir_all(&old_dir).unwrap();
+        fs::create_dir_all(&new_dir).unwrap();
+        let block = "```email
+subject = \"Devis\"
+from = \"a@b.c\"
+to = []
+body = '''
+attachments:
+- fake.pdf
+'''
+```
+";
+        let md = new_dir.join("note.md");
+        fs::write(
+            &md,
+            format!("---
+tags:
+  - email
+attachments:
+  - a.pdf
+---
+
+{block}"),
+        )
+        .unwrap();
+
+        email_to_markdown::route::rewrite_attachment_paths(&md, &old_dir, &new_dir).unwrap();
+
+        let content = fs::read_to_string(&md).unwrap();
+        assert!(content.ends_with(block), "block must be unchanged: {content:?}");
+        assert!(content.contains("  - ../../staging/a.pdf"), "got {content:?}");
+        assert!(!content.contains("  - a.pdf"));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     fn make_meta(

@@ -807,31 +807,15 @@ fn scan_staged_decisions(account_name: &str) -> Result<Vec<(PathBuf, RouteDecisi
     Ok(decisions)
 }
 
-/// Read a single scalar field from a `.md` file's YAML frontmatter block.
-/// Matches the field name exactly (so `subject` never matches `subject_hash`).
-fn frontmatter_field(content: &str, field: &str) -> Option<String> {
-    let rest = content.strip_prefix("---\n")?;
-    let end = rest.find("\n---")?;
-    let frontmatter = &rest[..end];
-    let prefix = format!("{}:", field);
-    for line in frontmatter.lines() {
-        if let Some(value) = line.trim().strip_prefix(&prefix) {
-            let value = value.trim().trim_matches('"').trim_matches('\'');
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
-    None
-}
-
 /// Rebuild the `EmailMeta` used for routing from a staged note's frontmatter.
 /// Mirrors the export-time construction in `email_export::export_to_markdown`.
 fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
-    let from_raw = frontmatter_field(content, "from").unwrap_or_default();
-    let to_raw = frontmatter_field(content, "to").unwrap_or_default();
-    let subject = frontmatter_field(content, "subject").unwrap_or_default();
-    let date_raw = frontmatter_field(content, "date").unwrap_or_default();
+    let field =
+        |name: &str| crate::email_block::note_header_field(content, name).unwrap_or_default();
+    let from_raw = field("from");
+    let to_raw = field("to");
+    let subject = field("subject");
+    let date_raw = field("date");
 
     let addresses = crate::utils::extract_emails(Some(&from_raw));
     let sender_addr = addresses.first().cloned().unwrap_or_default();

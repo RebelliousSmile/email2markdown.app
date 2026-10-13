@@ -37,6 +37,7 @@ import logging
 from datetime import datetime
 
 import frontmatter
+from src.email_block import with_block
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
@@ -51,8 +52,10 @@ def _load_email(filepath: Path) -> dict:
     ``StrictUndefined`` can read them via attribute access without try/except.
     """
     post = frontmatter.load(filepath)
-    meta = dict(post.metadata or {})
-    meta["body"] = post.content
+    # The header may live in the note's ```email block rather than the frontmatter.
+    meta, body = with_block(dict(post.metadata or {}), post.content)
+    meta = dict(meta)
+    meta["body"] = body
     meta["filename"] = filepath.name
     meta["path"] = str(filepath)
     # Normalise common variants for templates.

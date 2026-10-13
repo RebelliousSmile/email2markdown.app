@@ -22,12 +22,20 @@ use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailFrontmatter {
+    // The message header lives in the note's ```email block (see `email_block`);
+    // these four stay readable from old notes but are no longer written.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub from: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub to: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub date: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub subject: String,
     pub subject_hash: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,
     /// Stable proof tying this Markdown to one exact IMAP message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -412,7 +420,8 @@ pub struct ExportContext<'a> {
 /// Returns `Ok(None)` when the email was skipped (already exported or filtered).
 pub fn export_to_markdown(
     raw_email: &[u8],
-    tags: Vec<String>,
+    // Kept for callers; IMAP placement tags are no longer written to the note.
+    _tags: Vec<String>,
     contacts_collector: Option<&mut ContactsCollector>,
     ctx: &mut ExportContext<'_>,
 ) -> Result<Option<(PathBuf, RouteDecision)>> {
@@ -539,35 +548,66 @@ pub fn export_to_markdown(
     // Normalize body and add attachments list
     let body = normalize_line_breaks(&body);
     let cleaned = crate::cleaner::clean(&body);
-    let mut normalized_body = cleaned.body;
+    let normalized_body = cleaned.body;
     let social_links = cleaned.social_links;
 
     // Create frontmatter
-    let frontmatter = EmailFrontmatter {
-        from: from_field,
-        to: to_field,
-        date: date_obj
-            .map(|d| d.to_rfc3339())
-            .unwrap_or_else(|| date_field.clone()),
+    // The header and body go into the ```email block; the frontmatter keeps what
+    // describes the note itself (proof of origin, linked files, type). No
+    // placement tag is derived: the IMAP folder says nothing about the note, and
+    // category/subcategory/bucket are only known once it is filed.
+    let date_value = date_obj
+        .map(|d| d.to_rfc3339())
+        .unwrap_or_else(|| date_field.clone());
+    let block_header = crate::email_block::BlockHeader {
         subject: subject.clone(),
+        from: from_field.clone(),
+        to: split_addresses(&to_field),
+        cc: split_addresses(&cc_field),
+        date: date_value,
+    };
+    let frontmatter = EmailFrontmatter {
+        from: String::new(),
+        to: String::new(),
+        date: String::new(),
+        subject: String::new(),
         subject_hash,
-        tags,
+        tags: vec!["email".to_string()],
         attachments: attachments.clone(),
         source: ctx.source_proof.cloned(),
         email_type: Some(email_type_str),
         social_links,
     };
 
-    if !attachments.is_empty() {
-        normalized_body.push_str("\n\n### Pieces jointes :\n");
-        for attachment in &attachments {
+    // The plugin shows the block body as plain text: images and links are
+    // listed after the block so they render.
+    let media = crate::email_block::body_media(&normalized_body);
+    let media_section = crate::email_block::render_media(&media);
+
+    // Attachments already displayed as an image are not listed a second time.
+    let listed: Vec<&String> = attachments
+        .iter()
+        .filter(|a| !media.images.iter().any(|(_, src)| src == *a))
+        .collect();
+    let mut attachments_section = String::new();
+    if !listed.is_empty() {
+        attachments_section.push_str("\n\n### Pieces jointes :\n");
+        for attachment in listed {
             let filename_only = Path::new(attachment)
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy();
-            normalized_body.push_str(&format!("- [{}]({})\n", filename_only, attachment));
+            attachments_section.push_str(&format!("- [{}]({})\n", filename_only, attachment));
         }
     }
+
+    // Body of the note: the email block, then images, links and attachments.
+    let note_body = format!(
+        "{}{}{}",
+        crate::email_block::render(&block_header, &normalized_body),
+        media_section,
+        attachments_section
+    );
 
     // Write file
     let filepath = export_directory.join(&filename);
@@ -577,7 +617,7 @@ pub fn export_to_markdown(
     let yaml = serde_yaml::to_string(&frontmatter)?;
     write!(file, "{}", yaml)?;
     writeln!(file, "---\n")?;
-    write!(file, "{}", normalized_body)?;
+    write!(file, "{}", note_body)?;
 
     // A later duplicate in the same pass must find this file.
     if let Some(index) = ctx.exported.as_deref_mut() {
@@ -586,7 +626,7 @@ pub fn export_to_markdown(
 
     // Route the email — extract domain from the From address for matching.
     // Uses the first email address found; falls back to empty string on parse failure.
-    let email_addresses = extract_emails(Some(&frontmatter.from));
+    let email_addresses = extract_emails(Some(&block_header.from));
     let sender_addr = email_addresses.first().map(|s| s.as_str()).unwrap_or("");
     let domain = sender_addr
         .rfind('@')
@@ -595,11 +635,11 @@ pub fn export_to_markdown(
 
     let meta = EmailMeta {
         from: sender_addr.to_string(),
-        to: extract_emails(Some(&frontmatter.to)),
+        to: extract_emails(Some(&to_field)),
         cc: extract_emails(Some(&cc_field)),
         bcc: extract_emails(Some(&bcc_field)),
         domain,
-        subject: frontmatter.subject.clone(),
+        subject: block_header.subject.clone(),
         account: account.name.clone(),
         // date_obj is Option<DateTime<FixedOffset>>; use epoch on None
         date: date_obj.unwrap_or_else(|| {
@@ -612,6 +652,48 @@ pub fn export_to_markdown(
     let decision = route_email(&meta, dests, ctx.organize_by_date);
 
     Ok(Some((filepath, decision)))
+}
+
+/// Split an address header into its addresses, keeping each display name.
+///
+/// A comma inside a quoted display name or an `<...>` is not a separator.
+fn split_addresses(field: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut in_angle = false;
+
+    for c in field.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(c);
+            }
+            '<' if !in_quotes => {
+                in_angle = true;
+                current.push(c);
+            }
+            '>' if !in_quotes => {
+                in_angle = false;
+                current.push(c);
+            }
+            ',' if !in_quotes && !in_angle => {
+                let item = current.trim();
+                if !item.is_empty() {
+                    out.push(item.to_string());
+                }
+                current.clear();
+            }
+            c => current.push(c),
+        }
+    }
+
+    let item = current.trim();
+    if !item.is_empty() {
+        out.push(item.to_string());
+    }
+
+    out
 }
 
 /// Convert HTML to Markdown using htmd. Returns empty string on failure.
@@ -2938,15 +3020,28 @@ abc123
             "file should start with ---: got {:?}",
             &content[..50.min(content.len())]
         );
+        // The message header lives in the ```email block, not in the frontmatter.
+        let frontmatter_end = content[4..].find("\n---").expect("closing ---");
+        let frontmatter = &content[..4 + frontmatter_end];
+        assert!(!frontmatter.contains("subject: Hello World"));
+        assert!(!frontmatter.contains("from:"));
         assert!(
-            content.contains("subject: Hello World"),
-            "frontmatter should contain subject: got {:?}",
-            &content[..200.min(content.len())]
+            !frontmatter.contains("INBOX"),
+            "IMAP placement must not become a tag: got {frontmatter:?}"
         );
         assert!(
-            content.contains("from: Alice <alice@example.com>"),
-            "frontmatter should contain from"
+            frontmatter.contains("tags:\n- email"),
+            "note tag expected: got {frontmatter:?}"
         );
+        assert!(
+            !frontmatter.contains("attachments:"),
+            "no attachments key without attachments: got {frontmatter:?}"
+        );
+        assert!(!frontmatter.contains("\nto:") && !frontmatter.contains("\ndate:"));
+        let header = crate::email_block::read_header(&content).expect("email block");
+        assert_eq!(header.subject, "Hello World");
+        assert_eq!(header.from, "Alice <alice@example.com>");
+        assert_eq!(header.to, vec!["Bob <bob@example.com>".to_string()]);
         // Inclusive: subject_hash key must be present in frontmatter
         assert!(
             content.contains("subject_hash:"),
@@ -2957,6 +3052,45 @@ abc123
             content.contains("Test body"),
             "body should appear after frontmatter"
         );
+    }
+
+    #[test]
+    fn test_export_to_markdown_lists_images_and_links_after_the_block() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let export_dir = temp.path().join("out");
+        let account = make_account(&export_dir.to_string_lossy());
+
+        let raw = "From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Devis\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body><p>Voir <a href=\"https://a.test/devis\">le devis</a></p><p><img src=\"https://a.test/plan.png\" alt=\"plan\"></p></body></html>\r\n".as_bytes().to_vec();
+
+        let mut ctx = ExportContext {
+            export_directory: &export_dir,
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+            source_proof: None,
+            organize_by_date: true,
+            exported: None,
+        };
+        let (path, _) = export_to_markdown(&raw, vec![], None, &mut ctx)
+            .unwrap()
+            .expect("should return a path");
+        let content = fs::read_to_string(&path).unwrap();
+
+        let block_end = content.rfind("\n```\n").expect("end of the email block");
+        let after = &content[block_end..];
+        assert!(
+            after.contains("![plan](https://a.test/plan.png)"),
+            "image listed after the block: {after:?}"
+        );
+        assert_eq!(after.matches("![plan](https://a.test/plan.png)").count(), 1);
+        assert!(
+            after.contains("- [le devis](https://a.test/devis)"),
+            "link listed after the block: {after:?}"
+        );
+        assert!(!after.contains("### Pieces jointes"));
     }
 
     #[test]

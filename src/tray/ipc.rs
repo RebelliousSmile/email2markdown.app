@@ -524,7 +524,7 @@ fn dated_dest_path(row: &RouteDecisionRow, organize_by_date: bool) -> String {
     if !organize_by_date {
         return row.dest_path.clone();
     }
-    match read_frontmatter_field(Path::new(&row.file), "date")
+    match read_note_header_field(Path::new(&row.file), "date")
         .and_then(|d| chrono::DateTime::parse_from_rfc3339(d.trim()).ok())
     {
         Some(dt) => crate::route::ensure_year_month(
@@ -657,26 +657,11 @@ pub(super) fn delete_staged_emails(
     (deleted, err)
 }
 
-/// Read a single YAML frontmatter field from a markdown file, if present.
-pub(super) fn read_frontmatter_field(path: &std::path::Path, field: &str) -> Option<String> {
+/// Read a message header field (`subject`, `from`, `to`, `date`) of a note,
+/// from its frontmatter or its ```email block.
+pub(super) fn read_note_header_field(path: &std::path::Path, field: &str) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
-    let rest = content.strip_prefix("---\n")?;
-    let end = rest.find("\n---")?;
-    let frontmatter = &rest[..end];
-    let prefix = format!("{}:", field);
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(&prefix) {
-            let value = trimmed[prefix.len()..]
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'');
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
-    None
+    crate::email_block::note_header_field(&content, field)
 }
 
 /// Read a YAML frontmatter block list (`field:` followed by `- item` lines).
@@ -1241,7 +1226,7 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_route_decisions, delete_account, delete_staged_emails, read_frontmatter_list,
+        apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails, read_frontmatter_list,
         relative_destination, reload_outcome, remove_env_passwords, save_account, save_outcome,
         save_settings, scan_destinations, set_env_password, validate_new_account_name, AccountData,
         DestGuiIpcResult, RouteApplyReport, RouteDecisionRow, SettingsData,
@@ -1447,6 +1432,39 @@ mod tests {
             (md_names(&dated), dated.join("2026").exists()),
             (vec!["a.md".to_string(), "b.md".to_string()], false)
         );
+    }
+
+    #[test]
+    fn test_dated_dest_path_reads_date_from_email_block() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("note.md");
+        fs::write(
+            &path,
+            "---
+tags:
+  - email
+---
+
+```email
+subject = \"x\"
+from = \"a@b.c\"
+to = []
+date = 2026-07-02T10:18:19+00:00
+body = '''
+hi
+'''
+```
+",
+        )
+        .unwrap();
+        let row = RouteDecisionRow {
+            file: path.to_string_lossy().into_owned(),
+            dest_path: "Perso/Banque".to_string(),
+        };
+
+        let dated = dated_dest_path(&row, true);
+
+        assert_eq!(dated, "Perso/Banque/2026/07");
     }
 
     #[test]

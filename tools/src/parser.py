@@ -10,6 +10,8 @@ from typing import TypedDict
 
 import frontmatter
 
+from src.email_block import with_block
+
 
 VALID_EMAIL_TYPES = {"direct", "group", "mailing_list"}
 
@@ -63,7 +65,8 @@ def parse_email(filepath: Path) -> EmailData:
     except Exception as exc:
         raise ValueError(f"Failed to parse frontmatter in {filepath.name}: {exc}") from exc
 
-    metadata = post.metadata
+    # The header may live in the note's ```email block rather than the frontmatter.
+    metadata, content = with_block(post.metadata, post.content)
 
     # Required fields
     raw_sender = metadata.get("from")
@@ -120,6 +123,6 @@ def parse_email(filepath: Path) -> EmailData:
         subject=str(raw_subject),
         subject_hash=subject_hash,
         email_type=email_type,
-        body=post.content,
+        body=content,
         filepath=filepath,
     )

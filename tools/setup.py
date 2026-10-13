@@ -9,7 +9,8 @@ setup(
         "PyYAML",
         "anthropic",
         "scikit-learn",
-        "ollama"
+        "ollama",
+        'tomli>=2; python_version < "3.11"',
     ],
     python_requires=">=3.8",
 )
