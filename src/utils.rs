@@ -429,6 +429,36 @@ pub fn subject_extract(subject: &str) -> String {
     result.chars().take(12).collect()
 }
 
+/// Maximum number of characters of the subject kept in a note file name.
+/// Keeps the full path comfortably under the Windows 260-character limit.
+const SUBJECT_FILENAME_MAX_CHARS: usize = 100;
+
+static REPLY_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*(?:re|tr|fw|fwd|rép|réf|aw|wg)\s*:\s*").expect("static regex")
+});
+
+/// Full subject, made safe for a file name.
+///
+/// Reply/forward prefixes (`Re:`, `TR:`, `Fwd:` …) are dropped, characters
+/// forbidden by the filesystem and control characters become `_`, runs of
+/// whitespace collapse to one space, and the result is cut to
+/// [`SUBJECT_FILENAME_MAX_CHARS`] characters with no trailing space or dot.
+/// Accents and spaces are preserved. Returns an empty string for a blank subject.
+pub fn subject_filename_part(subject: &str) -> String {
+    let mut rest = subject;
+    while let Some(found) = REPLY_PREFIX_RE.find(rest) {
+        rest = &rest[found.end()..];
+    }
+
+    let cleaned: String = sanitize_filename(rest)
+        .chars()
+        .map(|c| if c.is_control() && !c.is_whitespace() { '_' } else { c })
+        .collect();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let truncated: String = collapsed.chars().take(SUBJECT_FILENAME_MAX_CHARS).collect();
+    truncated.trim_end_matches([' ', '.']).to_string()
+}
+
 /// Generate MD5 hash prefix for uniqueness.
 pub fn hash_md5_prefix(text: &str, length: usize) -> String {
     let digest = md5::compute(text.as_bytes());
@@ -642,6 +672,33 @@ mod tests {
     fn test_subject_extract_truncates_to_12() {
         let result = subject_extract("Information about enterprise restructuring");
         assert_eq!(result.chars().count(), 12);
+    }
+
+    #[test]
+    fn test_subject_filename_part_keeps_full_subject_and_accents() {
+        assert_eq!(
+            subject_filename_part("Livraison immédiate : 3 nouveautés"),
+            "Livraison immédiate _ 3 nouveautés"
+        );
+    }
+
+    #[test]
+    fn test_subject_filename_part_strips_reply_prefixes_and_forbidden_chars() {
+        let part = subject_filename_part("RE: TR: Fwd:  Budget <2026>/Q1 \"final\"?");
+        assert_eq!(part, "Budget _2026__Q1 _final__");
+        assert!(!part.contains(['<', '>', '/', '"', '?', ':']));
+    }
+
+    #[test]
+    fn test_subject_filename_part_collapses_whitespace_and_trims_dots() {
+        assert_eq!(subject_filename_part("  a \t\n b ...  "), "a b");
+        assert_eq!(subject_filename_part("   "), "");
+    }
+
+    #[test]
+    fn test_subject_filename_part_truncates_on_char_boundary() {
+        let part = subject_filename_part(&"é".repeat(300));
+        assert_eq!(part.chars().count(), 100);
     }
 
     #[test]

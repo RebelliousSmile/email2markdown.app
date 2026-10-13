@@ -356,6 +356,124 @@ pub fn run_contextual_batch(
     })
 }
 
+enum ImmediateServerDeletion {
+    Sorted(DeletionRequest),
+    Discarded(crate::contextual_export::LocalSourceProof),
+}
+
+impl ImmediateServerDeletion {
+    fn account(&self) -> &str {
+        match self {
+            Self::Sorted(request) => &request.proof.identity.account,
+            Self::Discarded(proof) => &proof.identity.account,
+        }
+    }
+}
+
+fn spawn_immediate_server_deletions(entries: Vec<ImmediateServerDeletion>) {
+    if entries.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        dotenvy::from_path(config::env_file_path()).ok();
+        let cfg = match Config::load(&config::accounts_yaml_path()) {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("warning: server deletion configuration failed: {error:#}");
+                return;
+            }
+        };
+        let mut grouped = std::collections::BTreeMap::<String, Vec<_>>::new();
+        for entry in entries {
+            grouped
+                .entry(entry.account().to_string())
+                .or_default()
+                .push(entry);
+        }
+
+        for (account_name, entries) in grouped {
+            let Some(account) = cfg.get_account(&account_name).cloned() else {
+                eprintln!("warning: server deletion account not found: {account_name}");
+                continue;
+            };
+            if !account.delete_after_export {
+                continue;
+            }
+            let mut sorted = Vec::new();
+            let mut discarded = Vec::new();
+            for entry in entries {
+                match entry {
+                    ImmediateServerDeletion::Sorted(request) => sorted.push(request),
+                    ImmediateServerDeletion::Discarded(proof) => discarded.push(proof),
+                }
+            }
+
+            let mut exporter = ImapExporter::new(account, false);
+            if let Err(error) = exporter.connect() {
+                eprintln!("warning: server deletion for {account_name} failed: {error:#}");
+                continue;
+            }
+            let result = (|| -> Result<()> {
+                let mut failures = 0usize;
+                if !sorted.is_empty() {
+                    failures += exporter
+                        .delete_proved_messages(&sorted)?
+                        .into_iter()
+                        .filter(|result| {
+                            matches!(
+                                result.outcome,
+                                DeletionOutcome::RetryRequired(_)
+                                    | DeletionOutcome::StaleUidValidity { .. }
+                            )
+                        })
+                        .count();
+                }
+                if !discarded.is_empty() {
+                    failures += exporter
+                        .delete_discarded_messages(&discarded)?
+                        .into_iter()
+                        .filter(|result| {
+                            matches!(
+                                result.outcome,
+                                DeletionOutcome::RetryRequired(_)
+                                    | DeletionOutcome::StaleUidValidity { .. }
+                            )
+                        })
+                        .count();
+                }
+                if failures > 0 {
+                    anyhow::bail!("{failures} suppression(s) IMAP ont échoué");
+                }
+                Ok(())
+            })();
+            exporter.disconnect().ok();
+            if let Err(error) = result {
+                eprintln!("warning: server deletion for {account_name} failed: {error:#}");
+            }
+        }
+    });
+}
+
+/// Asynchronously delete messages whose notes were just sorted.
+pub fn spawn_server_deletions(requests: Vec<DeletionRequest>) {
+    spawn_immediate_server_deletions(
+        requests
+            .into_iter()
+            .map(ImmediateServerDeletion::Sorted)
+            .collect(),
+    );
+}
+
+/// Asynchronously delete messages explicitly discarded during review.
+pub fn spawn_discarded_deletions(proofs: Vec<crate::contextual_export::LocalSourceProof>) {
+    spawn_immediate_server_deletions(
+        proofs
+            .into_iter()
+            .map(ImmediateServerDeletion::Discarded)
+            .collect(),
+    );
+}
+
 pub fn retry_contextual_deletions(
     account_name: &str,
     requests: &[DeletionRequest],
@@ -446,12 +564,23 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
     if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
         action_name: "Export".to_string(),
         warning: if delete_warning {
-            Some("Les emails seront supprimés du serveur après export".to_string())
+            Some(
+                "Les emails exportés seront supprimés du serveur une fois le tri appliqué \
+                 (un tri annulé les laisse sur le serveur)"
+                    .to_string(),
+            )
         } else {
             None
         },
         progress_rx,
         on_close: None,
+        done_action: {
+            let account_name = account_name.clone();
+            let result_sender = result_sender.clone();
+            Some(Box::new(move || {
+                action_export(account_name, result_sender);
+            }))
+        },
         error_action: Some(Box::new(|| {
             let _ = action_open_config();
         })),
@@ -480,14 +609,30 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
                 text: text.to_string(),
             });
         };
-        match run_export(
-            &account_name,
-            Some(&on_progress),
-            Some(&on_status),
-            cancel_token_worker,
-        ) {
-            Ok((summary, decisions)) => {
-                let _ = progress_tx.send(ProgressUpdate::Done { summary });
+        // A panic would drop `progress_tx` silently and leave the window frozen
+        // on "Annuler": turn it into a visible error instead.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_export(
+                &account_name,
+                Some(&on_progress),
+                Some(&on_status),
+                cancel_token_worker,
+            )
+        }))
+        .unwrap_or_else(|payload| {
+            let detail = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            Err(anyhow::anyhow!("internal error during export: {detail}"))
+        });
+        match outcome {
+            Ok((summary, decisions, has_next_batch)) => {
+                let _ = progress_tx.send(ProgressUpdate::Done {
+                    summary,
+                    action_label: has_next_batch.then(|| "Continuer".to_string()),
+                });
                 // D6: files stay in staging. Open the route review window so the
                 // user can validate/reassign paths before any file is moved.
                 // The AutoClose sent by ProgressUpdate::Done will close the progress
@@ -518,7 +663,7 @@ fn run_export(
     on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
     on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
     cancel_token: Arc<AtomicBool>,
-) -> Result<(String, Vec<(PathBuf, RouteDecision)>)> {
+) -> Result<(String, Vec<(PathBuf, RouteDecision)>, bool)> {
     dotenvy::from_path(config::env_file_path()).ok();
 
     let config =
@@ -548,6 +693,7 @@ fn run_export(
     // `decisions` holds `Vec<(PathBuf, RouteDecision)>` — deferred move (D6).
     // GUI mode: files stay in staging; the route review window handles the move.
 
+    let batch_full = exporter.batch_full();
     exporter.disconnect().ok();
 
     let cancelled = cancel_token.load(Ordering::Relaxed);
@@ -557,16 +703,20 @@ fn run_export(
 
     let prefix = if cancelled {
         "Export annulé"
+    } else if batch_full {
+        "Lot terminé"
     } else {
         "Export terminé"
     };
-    Ok((
-        format!(
-            "{} — {} exportés, {} ignorés, {} erreurs",
-            prefix, total_exported, total_skipped, total_errors
-        ),
-        decisions,
-    ))
+    let mut summary = format!(
+        "{} — {} exportés, {} déjà connus localement, {} erreurs",
+        prefix, total_exported, total_skipped, total_errors
+    );
+    let has_next_batch = batch_full && !cancelled;
+    if has_next_batch {
+        summary.push_str(" — triez ce lot puis relancez l'export pour le lot suivant");
+    }
+    Ok((summary, decisions, has_next_batch))
 }
 
 /// Resume sorting: re-open the route review window for a single account's emails
@@ -741,6 +891,7 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
         warning: None,
         progress_rx,
         on_close,
+        done_action: None,
         error_action: Some(Box::new(|| {
             let _ = action_open_config();
         })),
@@ -761,7 +912,10 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
         match run_import_thunderbird(extract_passwords) {
             Ok(message) => {
                 let _ = result_tx.send(ActionResult::Imported(message.clone()));
-                let _ = progress_tx.send(ProgressUpdate::Done { summary: message });
+                let _ = progress_tx.send(ProgressUpdate::Done {
+                    summary: message,
+                    action_label: None,
+                });
             }
             Err(e) => {
                 let _ = progress_tx.send(ProgressUpdate::Error {
@@ -938,6 +1092,7 @@ defaults:
   collect_contacts: false
   skip_signature_images: true
   delete_after_export: false
+  batch_size: 0                 # emails per export run, 0 = no batching
 
 # Per-account overrides (optional)
 # accounts:
@@ -963,6 +1118,7 @@ pub fn action_fix_html(account_name: String, result_sender: Sender<ActionResult>
         warning: None,
         progress_rx,
         on_close: None,
+        done_action: None,
         error_action: Some(Box::new(|| {
             let _ = action_open_config();
         })),
@@ -987,7 +1143,10 @@ pub fn action_fix_html(account_name: String, result_sender: Sender<ActionResult>
         };
         match run_fix_html(&account_name, Some(&on_progress)) {
             Ok(summary) => {
-                let _ = progress_tx.send(ProgressUpdate::Done { summary });
+                let _ = progress_tx.send(ProgressUpdate::Done {
+                    summary,
+                    action_label: None,
+                });
             }
             Err(e) => {
                 let _ = progress_tx.send(ProgressUpdate::Error {

@@ -200,7 +200,7 @@ pub fn parse_header_candidate(
     })
 }
 
-fn normalize_message_id(value: &str) -> Option<String> {
+pub fn normalize_message_id(value: &str) -> Option<String> {
     let value = value.trim().trim_matches(['<', '>']).to_lowercase();
     (!value.is_empty()).then_some(value)
 }
@@ -446,7 +446,7 @@ pub fn build_deletion_batch(results: &[MessageConversionResult]) -> Vec<Deletion
         .collect()
 }
 
-fn proof_is_complete(proof: &LocalSourceProof) -> bool {
+pub fn proof_is_complete(proof: &LocalSourceProof) -> bool {
     !proof.identity.account.trim().is_empty()
         && !proof.identity.header_fingerprint.trim().is_empty()
         && proof.location.uid > 0

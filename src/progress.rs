@@ -10,6 +10,8 @@ pub enum ProgressUpdate {
     },
     Done {
         summary: String,
+        /// Optional primary action displayed next to the Close button.
+        action_label: Option<String>,
     },
     Error {
         message: String,

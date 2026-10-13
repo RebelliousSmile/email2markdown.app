@@ -4,7 +4,7 @@ use crate::route::{route_email, Destination, EmailMeta, MatchRule, RouteDecision
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
     is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename,
-    subject_extract,
+    subject_filename_part,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
@@ -258,17 +258,49 @@ impl ExportedIndex {
         recipient_short: &str,
         subject_hash: &str,
     ) -> bool {
+        self.contains_message(date_str, sender_short, recipient_short, subject_hash, None)
+    }
+
+    /// Same as [`contains`](Self::contains), but a file whose stored proof carries
+    /// a different `Message-ID` is a distinct message (same day, sender and subject)
+    /// and does not count as a duplicate.
+    pub fn contains_message(
+        &self,
+        date_str: &str,
+        sender_short: &str,
+        recipient_short: &str,
+        subject_hash: &str,
+        message_id: Option<&str>,
+    ) -> bool {
+        // The recipient is not part of file names any more (older notes still
+        // carry `_to_<recipient>`), so it cannot discriminate: the subject hash
+        // and the Message-ID checked below do. `_` after the sender keeps
+        // `Odon` from matching `OdonEdit`.
+        let _ = recipient_short;
         let search_pattern = format!(
-            "email_{}_{}*to_{}*.md",
-            date_str, sender_short, recipient_short
+            "email_{}_{}[_.]*",
+            glob::Pattern::escape(date_str),
+            glob::Pattern::escape(sender_short)
         );
         let Ok(pattern) = glob::Pattern::new(&search_pattern) else {
             return false;
         };
 
         self.files.iter().any(|(name, path)| {
-            pattern.matches(name)
-                && fs::read_to_string(path).is_ok_and(|content| content.contains(subject_hash))
+            if !pattern.matches(name) {
+                return false;
+            }
+            if !fs::read_to_string(path).is_ok_and(|content| content.contains(subject_hash)) {
+                return false;
+            }
+            let stored_id = crate::contextual_export::read_source_proof(path)
+                .ok()
+                .flatten()
+                .and_then(|proof| proof.identity.message_id);
+            match (message_id, stored_id) {
+                (Some(incoming), Some(stored)) => incoming == stored,
+                _ => true,
+            }
         })
     }
 }
@@ -297,6 +329,7 @@ pub fn email_already_exported(
 fn should_skip_from_headers(
     raw_headers: &[u8],
     exported: &ExportedIndex,
+    handled: &HashSet<String>,
 ) -> (bool, Option<EmailAnalysis>) {
     if raw_headers.is_empty() {
         return (false, None);
@@ -322,7 +355,17 @@ fn should_skip_from_headers(
         "no-subject".to_string()
     };
 
-    let skip = exported.contains(&date_str, &sender_short, &recipient_short, &subject_hash);
+    let message_id = crate::contextual_export::normalize_message_id(
+        &mail.headers.get_first_value("Message-ID").unwrap_or_default(),
+    );
+    let skip = message_id.as_ref().is_some_and(|id| handled.contains(id))
+        || exported.contains_message(
+            &date_str,
+            &sender_short,
+            &recipient_short,
+            &subject_hash,
+            message_id.as_deref(),
+        );
     let analysis = analyze_email_type(&mail);
     (skip, Some(analysis))
 }
@@ -401,10 +444,17 @@ pub fn export_to_markdown(
 
     // Check if email already exported
     if account.skip_existing {
+        let message_id = crate::contextual_export::normalize_message_id(
+            &mail.headers.get_first_value("Message-ID").unwrap_or_default(),
+        );
         let already_exported = match ctx.exported.as_deref() {
-            Some(index) => {
-                index.contains(&date_str, &sender_short, &recipient_short, &subject_hash)
-            }
+            Some(index) => index.contains_message(
+                &date_str,
+                &sender_short,
+                &recipient_short,
+                &subject_hash,
+                message_id.as_deref(),
+            ),
             None => email_already_exported(
                 &date_str,
                 &sender_short,
@@ -431,20 +481,19 @@ pub fn export_to_markdown(
     fs::create_dir_all(export_directory)?;
 
     // Generate unique filename
-    let extract = subject_extract(&subject);
-    let base_filename = if extract.is_empty() {
-        format!("email_{}_{}*to_{}", date_str, sender_short, recipient_short)
+    // `email_<date>_<sender>_<full subject>`: the recipient is almost always the
+    // account owner, so it is left out in favour of the whole subject.
+    let subject_part = subject_filename_part(&subject);
+    let base_filename = if subject_part.is_empty() {
+        format!("email_{}_{}", date_str, sender_short)
     } else {
-        format!(
-            "email_{}_{}_{}*to_{}",
-            date_str, sender_short, extract, recipient_short
-        )
+        format!("email_{}_{}_{}", date_str, sender_short, subject_part)
     };
     let mut counter = 1;
-    let mut filename = format!("{}.md", base_filename.replace('*', "_"));
+    let mut filename = format!("{base_filename}.md");
     while export_directory.join(&filename).exists() {
         counter += 1;
-        filename = format!("{}_{}.md", base_filename.replace('*', "_"), counter);
+        filename = format!("{base_filename}_{counter}.md");
     }
 
     // Extract body
@@ -461,14 +510,25 @@ pub fn export_to_markdown(
     // named `<date>_<original-name>` for readability.
     let mut attachments = Vec::new();
 
+    // Embedded images (`![](cid:…)`): saved next to the note and re-linked below.
+    let referenced_cids = referenced_content_ids(&body);
+    let mut inline_images: HashMap<String, Option<String>> = HashMap::new();
+
     extract_attachments(
         &mail,
         export_directory,
         &date_str,
         account.skip_signature_images,
         debug_mode,
+        &referenced_cids,
+        &mut inline_images,
         &mut attachments,
     )?;
+    let body = if referenced_cids.is_empty() {
+        body
+    } else {
+        rewrite_cid_images(&body, &inline_images)
+    };
 
     // Normalize body and add attachments list
     let body = normalize_line_breaks(&body);
@@ -549,8 +609,73 @@ pub fn export_to_markdown(
 }
 
 /// Convert HTML to Markdown using htmd. Returns empty string on failure.
+///
+/// Newsletter/transactional HTML is noisy: `<head>`, `<style>` and `<title>`
+/// carry no readable content, and 1x1 tracking pixels would become `![](url)`.
 fn html_to_markdown(html: &str) -> String {
-    htmd::convert(html).unwrap_or_default()
+    let converter = htmd::HtmlToMarkdown::builder()
+        .skip_tags(vec!["head", "style", "script", "noscript", "title"])
+        .add_handler(vec!["img"], |handlers: &dyn htmd::element_handler::Handlers,
+                                   element: htmd::Element| {
+            let attrs: Vec<(&str, &str)> = element
+                .attrs
+                .iter()
+                .map(|attr| (&*attr.name.local, &*attr.value))
+                .collect();
+            if is_tracking_pixel(&attrs) {
+                return None;
+            }
+            handlers.fallback(element)
+        })
+        .build();
+    let markdown = converter.convert(html).unwrap_or_default();
+    collapse_blank_lines(&markdown)
+}
+
+/// True for an `<img>` that is invisible by construction (tracking pixel):
+/// a declared width or height of at most 2 pixels, or `display:none`.
+fn is_tracking_pixel(attrs: &[(&str, &str)]) -> bool {
+    attrs.iter().any(|(name, raw)| {
+        let value = raw.trim().trim_end_matches("px");
+        match *name {
+            "width" | "height" => value.parse::<u32>().is_ok_and(|size| size <= 2),
+            "style" => raw
+                .to_ascii_lowercase()
+                .replace(' ', "")
+                .contains("display:none"),
+            _ => false,
+        }
+    })
+}
+
+/// Collapse runs of blank lines (layout tables leave many) to a single one.
+fn collapse_blank_lines(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut blank_run = 0usize;
+    for line in markdown.lines() {
+        if line.trim().is_empty() {
+            blank_run += 1;
+            if blank_run > 1 {
+                continue;
+            }
+            out.push('\n');
+        } else {
+            blank_run = 0;
+            out.push_str(line.trim_end());
+            out.push('\n');
+        }
+    }
+    out.trim().to_string()
+}
+
+/// True when `text` is an HTML document rather than prose: it starts with a
+/// doctype or `<html` tag (any case, e.g. `<!doctype html>`).
+fn looks_like_html(text: &str) -> bool {
+    let head = text.trim_start();
+    ["<!doctype html", "<html"].iter().any(|marker| {
+        head.get(..marker.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(marker))
+    })
 }
 
 /// Stats returned by `fix_html_bodies`.
@@ -600,10 +725,7 @@ pub fn fix_html_bodies(
         // Find body: content after the second "---" separator line
         let body = extract_md_body(&content);
         let trimmed = body.trim_start();
-        if !trimmed.starts_with("<!DOCTYPE html")
-            && !trimmed.starts_with("<html")
-            && !trimmed.starts_with("<HTML")
-        {
+        if !looks_like_html(trimmed) {
             stats.skipped += 1;
             continue;
         }
@@ -647,37 +769,52 @@ pub(crate) fn extract_md_body(content: &str) -> &str {
 }
 
 /// Extract the body from a parsed email.
+///
+/// A readable `text/plain` part wins; otherwise the `text/html` part is
+/// converted to Markdown. This holds for single-part messages too, and for a
+/// part mislabelled `text/plain` that actually carries an HTML document.
 pub(crate) fn extract_body(mail: &ParsedMail) -> String {
-    if mail.subparts.is_empty() {
-        // Not multipart
-        mail.get_body().unwrap_or_default()
-    } else {
-        // Multipart - look for text/plain or text/html
-        let mut body = String::new();
+    let mut plain: Option<String> = None;
+    let mut html: Option<String> = None;
+    collect_text_bodies(mail, &mut plain, &mut html);
 
-        for part in &mail.subparts {
-            let content_type = part
-                .headers
-                .get_first_value("Content-Type")
-                .unwrap_or_default()
-                .to_lowercase();
-
-            if content_type.starts_with("text/plain") {
-                body = part.get_body().unwrap_or_default();
-                break;
-            } else if content_type.starts_with("text/html") && body.is_empty() {
-                let raw_html = part.get_body().unwrap_or_default();
-                body = html_to_markdown(&raw_html);
-            } else if content_type.starts_with("multipart/") {
-                // Recurse into nested multipart
-                let nested_body = extract_body(part);
-                if !nested_body.is_empty() && body.is_empty() {
-                    body = nested_body;
+    if let Some(text) = plain.take() {
+        if !text.trim().is_empty() {
+            if looks_like_html(&text) {
+                let converted = html_to_markdown(&text);
+                if !converted.is_empty() {
+                    return converted;
                 }
             }
+            return text;
         }
+    }
+    html.map(|raw| html_to_markdown(&raw)).unwrap_or_default()
+}
 
-        body
+/// Walk the MIME tree and keep the first non-attachment `text/plain` and
+/// `text/html` bodies found at any depth.
+fn collect_text_bodies(mail: &ParsedMail, plain: &mut Option<String>, html: &mut Option<String>) {
+    if !mail.subparts.is_empty() {
+        for part in &mail.subparts {
+            collect_text_bodies(part, plain, html);
+        }
+        return;
+    }
+    if matches!(
+        mail.get_content_disposition().disposition,
+        mailparse::DispositionType::Attachment
+    ) {
+        return;
+    }
+    let mimetype = mail.ctype.mimetype.to_ascii_lowercase();
+    let slot = match mimetype.as_str() {
+        "text/plain" => plain,
+        "text/html" => html,
+        _ => return,
+    };
+    if slot.is_none() {
+        *slot = mail.get_body().ok();
     }
 }
 
@@ -693,6 +830,8 @@ fn extract_attachments(
     name_prefix: &str,
     skip_signature_images: bool,
     debug_mode: bool,
+    referenced_cids: &HashSet<String>,
+    inline_images: &mut HashMap<String, Option<String>>,
     attachments: &mut Vec<String>,
 ) -> Result<()> {
     for part in &mail.subparts {
@@ -701,7 +840,14 @@ fn extract_attachments(
             .get_first_value("Content-Disposition")
             .unwrap_or_default();
 
-        if content_disposition.is_empty() && part.subparts.is_empty() {
+        // Content-ID of this part when the body embeds it through `cid:<id>`.
+        let referenced_cid = part
+            .headers
+            .get_first_value("Content-ID")
+            .map(|value| normalize_content_id(&value))
+            .filter(|id| referenced_cids.contains(id));
+
+        if content_disposition.is_empty() && part.subparts.is_empty() && referenced_cid.is_none() {
             continue;
         }
 
@@ -709,7 +855,13 @@ fn extract_attachments(
         let has_attachment_disposition = content_disposition.to_lowercase().contains("attachment")
             || content_disposition.to_lowercase().contains("inline");
 
-        if let Some(filename) = extract_attachment_filename(part) {
+        let filename = extract_attachment_filename(part).or_else(|| {
+            referenced_cid
+                .as_deref()
+                .and_then(|id| inline_image_name(part, id))
+        });
+
+        if let Some(filename) = filename {
             let decoded_filename = decode_mime_filename(&filename);
 
             if has_attachment_disposition || !filename.is_empty() {
@@ -720,15 +872,26 @@ fn extract_attachments(
 
                 let payload = part.get_body_raw().unwrap_or_default();
 
+                // An image the body embeds is content: the "inline" disposition
+                // alone must not make it look like a mail signature.
+                let disposition_for_filter = if referenced_cid.is_some() {
+                    ""
+                } else {
+                    content_disposition.as_str()
+                };
+
                 // Check if this is a signature image that should be skipped
                 if skip_signature_images
                     && is_signature_image(
                         Some(&decoded_filename),
                         &content_type,
                         payload.len(),
-                        Some(&content_disposition),
+                        Some(disposition_for_filter),
                     )
                 {
+                    if let Some(id) = &referenced_cid {
+                        inline_images.insert(id.clone(), None);
+                    }
                     if debug_mode {
                         println!(
                             "    Skipping signature image: '{}' ({} bytes)",
@@ -764,6 +927,9 @@ fn extract_attachments(
 
                     // Store bare filename — same-folder relative link; normalize \ → / at write time
                     let bare_link = full_filename.replace('\\', "/");
+                    if let Some(id) = &referenced_cid {
+                        inline_images.insert(id.clone(), Some(bare_link.clone()));
+                    }
                     attachments.push(bare_link);
                 } else if debug_mode {
                     println!(
@@ -782,6 +948,8 @@ fn extract_attachments(
                 name_prefix,
                 skip_signature_images,
                 debug_mode,
+                referenced_cids,
+                inline_images,
                 attachments,
             )?;
         }
@@ -808,6 +976,81 @@ fn extract_attachment_filename(part: &ParsedMail) -> Option<String> {
 
     None
 }
+
+static CID_REF_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"(?i)cid:([^)>\s"'\]]+)"#).expect("static regex"));
+
+static CID_IMAGE_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)!\[([^\]]*)\]\(\s*<?cid:([^)>\s]+)>?\s*\)").expect("static regex")
+});
+
+/// Canonical form of a Content-ID, comparable with a `cid:` reference:
+/// no angle brackets, percent-decoded, lowercase.
+fn normalize_content_id(raw: &str) -> String {
+    let trimmed = raw.trim().trim_start_matches('<').trim_end_matches('>');
+    let bytes = trimmed.as_bytes();
+    let hex = |b: u8| (b as char).to_digit(16);
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                decoded.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&decoded).to_ascii_lowercase()
+}
+
+/// Content-IDs the converted body embeds as `cid:<id>`.
+fn referenced_content_ids(body: &str) -> HashSet<String> {
+    CID_REF_RE
+        .captures_iter(body)
+        .map(|caps| normalize_content_id(&caps[1]))
+        .collect()
+}
+
+/// File name for an embedded image part that carries no name of its own.
+fn inline_image_name(part: &ParsedMail, content_id: &str) -> Option<String> {
+    let mimetype = part.ctype.mimetype.to_ascii_lowercase();
+    let extension = match mimetype.strip_prefix("image/")? {
+        "jpeg" => "jpg",
+        "svg+xml" => "svg",
+        "" => return None,
+        other => other,
+    };
+    let stem: String = content_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(24)
+        .collect();
+    let stem = if stem.is_empty() { "image".to_string() } else { stem };
+    Some(format!("inline_{stem}.{extension}"))
+}
+
+/// Point each `![alt](cid:<id>)` at the file saved next to the note. An image
+/// that was filtered out or whose part is missing is dropped: a `cid:` link
+/// can never resolve in a standalone Markdown file.
+fn rewrite_cid_images(body: &str, saved: &HashMap<String, Option<String>>) -> String {
+    CID_IMAGE_RE
+        .replace_all(body, |caps: &regex::Captures| {
+            match saved.get(&normalize_content_id(&caps[2])) {
+                Some(Some(file)) if file.contains([' ', '(', ')']) => {
+                    format!("![{}](<{}>)", &caps[1], file)
+                }
+                Some(Some(file)) => format!("![{}]({})", &caps[1], file),
+                _ => String::new(),
+            }
+        })
+        .into_owned()
+}
+
+/// Resolution of the per-folder progress bar (steps reported per folder).
+const PROGRESS_STEPS_PER_FOLDER: usize = 1000;
 
 static FILENAME_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r#"filename[*]?=(?:"([^"]+)"|([^;\s]+))"#).expect("static regex")
@@ -836,6 +1079,54 @@ pub(crate) fn extract_filename_from_header(header: &str) -> Option<String> {
     None
 }
 
+static GM_MSGID_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)X-GM-MSGID\s+(\d+)").expect("static regex"));
+
+/// Gmail's stable message id for the message at sequence number `seq`
+/// in the currently selected mailbox.
+fn fetch_gmail_msgid(session: &mut Session<Box<dyn ImapConnection>>, seq: u32) -> Option<String> {
+    let raw = session
+        .run_command_and_read_response(format!("FETCH {seq} (X-GM-MSGID)"))
+        .ok()?;
+    let text = String::from_utf8_lossy(&raw);
+    GM_MSGID_RE.captures(&text).map(|c| c[1].to_string())
+}
+
+/// Source proof written to the frontmatter of a globally exported message, so
+/// the server copy can be deleted once the note is sorted. `None` when the
+/// message cannot be targeted without ambiguity (no UID / UIDVALIDITY, no
+/// Message-ID, Gmail without X-GM-MSGID): it then stays on the server.
+fn build_global_source_proof(
+    account: &str,
+    folder: &FolderName,
+    uid_validity: Option<u32>,
+    uid: Option<u32>,
+    raw_email: &[u8],
+    provider_id: Option<String>,
+    gmail: bool,
+) -> Option<crate::contextual_export::LocalSourceProof> {
+    use crate::contextual_export::{
+        parse_header_candidate, proof_is_complete, LocalSourceProof, MessageLocation,
+    };
+
+    if gmail && provider_id.is_none() {
+        return None;
+    }
+    let location = MessageLocation {
+        folder_raw: folder.raw.clone(),
+        folder_display: folder.display.clone(),
+        uid_validity: uid_validity?,
+        uid: uid?,
+    };
+    let candidate =
+        parse_header_candidate(account, location.clone(), raw_email, provider_id).ok()?;
+    let proof = LocalSourceProof {
+        identity: candidate.source,
+        location,
+    };
+    proof_is_complete(&proof).then_some(proof)
+}
+
 fn is_gmail_server(host: &str) -> bool {
     let lower = host.to_lowercase();
     lower.contains("gmail.com") || lower.contains("googlemail.com")
@@ -848,6 +1139,24 @@ pub struct ImapExporter {
     debug_mode: bool,
     network_config: NetworkConfig, // [4][5]
     is_gmail: bool,
+    /// Messages newly exported during the current `export_account` run.
+    batch_exported: usize,
+    /// Set when the run stopped because `account.batch_size` was reached
+    /// while messages remained to process.
+    batch_full: bool,
+}
+
+fn progress_counts(
+    batch_size: usize,
+    batch_exported: usize,
+    processed_messages: usize,
+    total_messages: usize,
+) -> (usize, usize) {
+    if batch_size > 0 {
+        (batch_exported.min(batch_size), batch_size)
+    } else {
+        (processed_messages.min(total_messages), total_messages)
+    }
 }
 
 impl ImapExporter {
@@ -858,7 +1167,15 @@ impl ImapExporter {
             debug_mode,
             network_config: NetworkConfig::default(), // [4][5]
             is_gmail: false,
+            batch_exported: 0,
+            batch_full: false,
         }
+    }
+
+    /// `true` when the last export stopped on the account's batch limit,
+    /// meaning more messages are waiting for a next run.
+    pub fn batch_full(&self) -> bool {
+        self.batch_full
     }
 
     /// [5] Set custom network configuration
@@ -895,6 +1212,20 @@ impl ImapExporter {
                 .danger_skip_tls_verify(true);
         }
         let client = builder.connect().context("connect to imap server")?;
+
+        // `ClientBuilder` has no timeout option: without one, a server that stops
+        // answering mid-export blocks the read forever. Apply the configured read
+        // timeout on the transport, then rebuild the client around it.
+        let client = {
+            use imap::extensions::idle::SetReadTimeout;
+            let mut stream = client.into_inner().context("take imap transport")?;
+            stream
+                .set_read_timeout(Some(self.network_config.read_timeout))
+                .context("set imap read timeout")?;
+            let mut client = imap::Client::new(stream);
+            client.greeting_read = true; // greeting already consumed by the builder
+            client
+        };
 
         self.is_gmail = is_gmail_server(&self.account.server);
 
@@ -1250,10 +1581,7 @@ impl ImapExporter {
         &mut self,
         requests: &[crate::contextual_export::DeletionRequest],
     ) -> Result<Vec<crate::contextual_export::MessageDeletionResult>> {
-        use crate::contextual_export::{
-            read_source_proof, DeletionOutcome, DeletionProvider, MessageDeletionResult,
-        };
-        use std::collections::BTreeMap;
+        use crate::contextual_export::read_source_proof;
 
         let preflight = self.contextual_deletion_preflight()?;
         if !preflight.required {
@@ -1278,7 +1606,48 @@ impl ImapExporter {
             valid.push(request.clone());
         }
 
-        match preflight.provider {
+        self.delete_validated(preflight.provider, valid)
+    }
+
+    /// Delete from the server messages the user explicitly discarded in the
+    /// review window. Their note is gone, so the proof captured before its
+    /// removal is the only evidence; the user's choice is the authorisation.
+    pub fn delete_discarded_messages(
+        &mut self,
+        proofs: &[crate::contextual_export::LocalSourceProof],
+    ) -> Result<Vec<crate::contextual_export::MessageDeletionResult>> {
+        let preflight = self.contextual_deletion_preflight()?;
+        if !preflight.required {
+            return Ok(Vec::new());
+        }
+        if !preflight.supported {
+            anyhow::bail!(
+                "targeted deletion blocked: {}",
+                preflight
+                    .reason
+                    .unwrap_or_else(|| "unsupported server".into())
+            );
+        }
+        let valid = proofs
+            .iter()
+            .filter(|proof| crate::contextual_export::proof_is_complete(proof))
+            .map(|proof| crate::contextual_export::DeletionRequest {
+                markdown: PathBuf::new(),
+                proof: proof.clone(),
+            })
+            .collect();
+        self.delete_validated(preflight.provider, valid)
+    }
+
+    fn delete_validated(
+        &mut self,
+        provider: crate::contextual_export::DeletionProvider,
+        valid: Vec<crate::contextual_export::DeletionRequest>,
+    ) -> Result<Vec<crate::contextual_export::MessageDeletionResult>> {
+        use crate::contextual_export::{DeletionOutcome, DeletionProvider, MessageDeletionResult};
+        use std::collections::BTreeMap;
+
+        match provider {
             DeletionProvider::GenericUidPlus => {
                 let mut grouped: BTreeMap<(String, String, u32), Vec<_>> = BTreeMap::new();
                 for request in valid {
@@ -1342,6 +1711,7 @@ impl ImapExporter {
                 Ok(results)
             }
             DeletionProvider::Gmail { trash_folder } => {
+                let session = self.session.as_mut().context("Not connected")?;
                 let mut results = Vec::new();
                 for request in valid {
                     let Some(provider_id) = request.proof.identity.provider_id.clone() else {
@@ -1353,7 +1723,6 @@ impl ImapExporter {
                         });
                         continue;
                     };
-                    let session = self.session.as_mut().context("Not connected")?;
                     let outcome = (|| -> Result<DeletionOutcome> {
                         session.select(&request.proof.location.folder_raw)?;
                         let source_uids =
@@ -1404,6 +1773,8 @@ impl ImapExporter {
         cancel_token: Option<&AtomicBool>,
         dests: &[Destination],
         organize_by_date: bool,
+        on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
+        on_progress: Option<&(dyn Fn(usize, usize) + Send + Sync)>,
     ) -> Result<(ExportStats, Vec<(PathBuf, RouteDecision)>)> {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
         let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
@@ -1413,6 +1784,13 @@ impl ImapExporter {
         } else {
             ExportedIndex::default()
         };
+        // Messages already sorted or discarded: they left the export folder but
+        // stay on a server that is not asked to delete.
+        let handled = if self.account.skip_existing {
+            crate::handled::load(&self.account.name)
+        } else {
+            HashSet::new()
+        };
 
         // Keep the session borrow scoped to the folder traversal.
         let stats_and_decisions = {
@@ -1421,9 +1799,18 @@ impl ImapExporter {
             // Select folder using the raw IMAP name (modified UTF-7)
             let mailbox = session.select(&folder.raw)?;
             let message_count = mailbox.exists as usize;
+            let mailbox_uid_validity = mailbox.uid_validity;
+            let mut proofless = 0usize;
 
             if self.debug_mode {
                 println!("  {} messages in folder", message_count);
+            }
+
+            if let Some(s) = on_status {
+                s(&format!(
+                    "{} \u{2014} analyse de {} messages\u{2026}",
+                    folder.display, message_count
+                ));
             }
 
             // Search for all messages
@@ -1448,6 +1835,7 @@ impl ImapExporter {
                                 let (skip, analysis) = should_skip_from_headers(
                                     message.header().unwrap_or(&[]),
                                     &exported,
+                                    &handled,
                                 );
                                 if skip {
                                     skip_set.insert(message.message);
@@ -1490,15 +1878,48 @@ impl ImapExporter {
             let mut stats = ExportStats::default();
             let mut folder_decisions: Vec<(PathBuf, RouteDecision)> = Vec::new();
             stats.skipped += pre_skipped;
+            let mut last_reported_batch_exported = self.batch_exported;
 
-            for (_idx, uid) in filtered_uids.into_iter().enumerate() {
+            for (idx, uid) in filtered_uids.into_iter().enumerate() {
+                if idx % 10 == 0 {
+                    if let Some(s) = on_status {
+                        if self.account.batch_size > 0 {
+                            s(&format!(
+                                "{} — lot {}/{} exportés · {}/{} messages examinés",
+                                folder.display,
+                                self.batch_exported,
+                                self.account.batch_size,
+                                idx,
+                                total_to_process
+                            ));
+                        } else {
+                            s(&format!(
+                                "{} — {}/{} messages examinés, {} exportés",
+                                folder.display, idx, total_to_process, stats.exported
+                            ));
+                        }
+                    }
+                    if let Some(f) = on_progress {
+                        let (current, total) = progress_counts(
+                            self.account.batch_size,
+                            self.batch_exported,
+                            idx,
+                            total_to_process,
+                        );
+                        f(current, total);
+                    }
+                }
                 if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
+                    break;
+                }
+                if self.account.batch_size > 0 && self.batch_exported >= self.account.batch_size {
+                    self.batch_full = true;
                     break;
                 }
 
                 // [4] Retry logic for fetch
                 let fetch_result = with_retry(&self.network_config, "fetch", || {
-                    session.fetch(uid.to_string(), "RFC822")
+                    session.fetch(uid.to_string(), "(UID RFC822)")
                 });
 
                 let messages = match fetch_result {
@@ -1509,19 +1930,55 @@ impl ImapExporter {
                         }
                         stats.errors += 1;
                         progress.inc();
+                        // A transport failure (read timeout, reset) leaves the session
+                        // unusable: stop here instead of timing out on every message.
+                        if matches!(e, imap::Error::Io(_)) {
+                            eprintln!(
+                                "warning: connection to {} lost in {}, folder export aborted: {e}",
+                                self.account.server, folder.display
+                            );
+                            break;
+                        }
                         continue;
                     }
                 };
 
+                // Gmail deletion targets X-GM-MSGID, which RFC822 does not carry.
+                let provider_id = if self.is_gmail {
+                    fetch_gmail_msgid(session, uid)
+                } else {
+                    None
+                };
+
                 for message in messages.iter() {
                     if let Some(body) = message.body() {
+                        let source_proof = build_global_source_proof(
+                            &self.account.name,
+                            folder,
+                            mailbox_uid_validity,
+                            message.uid,
+                            body,
+                            provider_id.clone(),
+                            self.is_gmail,
+                        );
+                        if source_proof.is_none() {
+                            proofless += 1;
+                        }
+                        let already_handled = source_proof
+                            .as_ref()
+                            .and_then(|proof| proof.identity.message_id.as_ref())
+                            .is_some_and(|id| handled.contains(id));
+                        if already_handled {
+                            stats.skipped += 1;
+                            continue;
+                        }
                         let mut ctx = ExportContext {
                             export_directory: &export_directory,
                             base_export_directory: &base_export_directory,
                             account: &self.account,
                             debug_mode: self.debug_mode,
                             dests,
-                            source_proof: None,
+                            source_proof: source_proof.as_ref(),
                             organize_by_date,
                             exported: Some(&mut exported),
                         };
@@ -1535,6 +1992,7 @@ impl ImapExporter {
                         match result {
                             Ok(Some((path, decision))) => {
                                 stats.exported += 1;
+                                self.batch_exported += 1;
                                 folder_decisions.push((path, decision));
                             }
                             Ok(None) => stats.skipped += 1,
@@ -1575,11 +2033,20 @@ impl ImapExporter {
 
                 // [3] Update progress
                 progress.inc();
+                if self.account.batch_size > 0
+                    && self.batch_exported != last_reported_batch_exported
+                {
+                    if let Some(f) = on_progress {
+                        f(self.batch_exported, self.account.batch_size);
+                    }
+                    last_reported_batch_exported = self.batch_exported;
+                }
             }
 
-            if self.account.delete_after_export {
+            if self.account.delete_after_export && proofless > 0 {
                 eprintln!(
-                    "warning: legacy global export keeps server messages because it has no stable source proof; use contextual export to delete safely"
+                    "warning: {proofless} message(s) of {} have no stable source proof and stay on the server",
+                    folder.display
                 );
             }
 
@@ -1622,6 +2089,9 @@ impl ImapExporter {
             .unwrap_or_default()
             .organize_by_date;
 
+        self.batch_exported = 0;
+        self.batch_full = false;
+
         // Run the existing body in an IIFE so cleanup can run on every exit path.
         let run_result: Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> =
             (|| {
@@ -1636,6 +2106,7 @@ impl ImapExporter {
                 let folders = self.list_folders()?;
                 let total_folders = folders.len();
                 let mut folder_index = 0usize;
+                let batch_size = self.account.batch_size;
 
                 for folder in folders {
                     // Skip ignored folders (matched against the decoded display name)
@@ -1646,28 +2117,58 @@ impl ImapExporter {
 
                     folder_index += 1;
                     if let Some(cb) = on_progress {
-                        cb(folder_index, total_folders, &folder.display);
+                        if batch_size > 0 {
+                            cb(self.batch_exported, batch_size, &folder.display);
+                        } else {
+                            cb(
+                                (folder_index - 1) * PROGRESS_STEPS_PER_FOLDER,
+                                total_folders * PROGRESS_STEPS_PER_FOLDER,
+                                &folder.display,
+                            );
+                        }
                     }
 
                     println!("Exporting {} ...", folder.display);
 
+                    // Progress inside the folder: scale each folder to 1000 steps so
+                    // the bar moves per message instead of per folder.
+                    let label = folder.display.clone();
+                    let base = (folder_index - 1) * PROGRESS_STEPS_PER_FOLDER;
+                    let grand_total = total_folders * PROGRESS_STEPS_PER_FOLDER;
+                    let on_folder_progress = move |current: usize, total: usize| {
+                        if let Some(cb) = on_progress {
+                            if batch_size > 0 {
+                                cb(current, total, &label);
+                            } else {
+                                let fraction = current as f32 / total.max(1) as f32;
+                                let inner = (fraction.clamp(0.0, 1.0)
+                                    * PROGRESS_STEPS_PER_FOLDER as f32)
+                                    as usize;
+                                cb(base + inner, grand_total, &label);
+                            }
+                        }
+                    };
                     let (stats, folder_decisions) = self.export_folder(
                         &folder,
                         contacts_collector.as_mut(),
                         cancel_token,
                         &dests,
                         organize_by_date,
+                        on_status,
+                        Some(&on_folder_progress),
                     )?;
                     if let Some(s) = on_status {
                         s(&format!(
-                            "{} — {} exportés, {} ignorés, {} erreurs",
+                            "{} — {} exportés, {} déjà connus localement, {} erreurs",
                             folder.display, stats.exported, stats.skipped, stats.errors
                         ));
                     }
                     all_decisions.extend(folder_decisions);
                     results.insert(folder.display, stats);
 
-                    if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
+                    if self.batch_full
+                        || cancel_token.map_or(false, |t| t.load(Ordering::Relaxed))
+                    {
                         break;
                     }
                 }
@@ -1726,6 +2227,16 @@ pub struct FolderName {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_progress_counts_exports_against_the_batch_limit() {
+        assert_eq!(progress_counts(100, 25, 700, 4_395), (25, 100));
+    }
+
+    #[test]
+    fn unbounded_progress_counts_processed_messages() {
+        assert_eq!(progress_counts(0, 0, 700, 4_395), (700, 4_395));
+    }
 
     #[test]
     fn test_is_gmail_server_gmail() {
@@ -1841,6 +2352,35 @@ mod tests {
         let index = ExportedIndex::build(temp.path());
 
         assert!(!index.contains("2024-01-15", "alice", "bob", "ffffff"));
+    }
+
+    #[test]
+    fn test_exported_index_contains_message_with_other_message_id_is_not_duplicate() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("email_2024-01-15_alice_to_bob.md"),
+            "---
+source:
+  identity:
+    account: a
+    message_id: id-1
+    header_fingerprint: f
+    provider_id: null
+  location:
+    folder_raw: INBOX
+    folder_display: INBOX
+    uid_validity: 1
+    uid: 1
+---
+abc123
+",
+        )
+        .unwrap();
+        let index = ExportedIndex::build(temp.path());
+
+        assert!(index.contains_message("2024-01-15", "alice", "bob", "abc123", Some("id-1")));
+        assert!(!index.contains_message("2024-01-15", "alice", "bob", "abc123", Some("id-2")));
+        assert!(index.contains_message("2024-01-15", "alice", "bob", "abc123", None));
     }
 
     #[test]
@@ -2017,6 +2557,182 @@ mod tests {
         );
     }
 
+    /// Transactional mail shaped like a real one: lowercase doctype, head with
+    /// style/title, MSO conditional comments, layout tables, tracking pixel.
+    const TRANSACTIONAL_HTML: &str = concat!(
+        "<!doctype html><html lang=\"und\"><head><title></title>",
+        "<!--[if !mso]><!--><style type=\"text/css\">body { margin:0; }</style><!--<![endif]-->",
+        "</head><body><div><table role=\"presentation\"><tbody><tr><td>",
+        "<div>Connectez-vous \u{e0} Claude.ai</div>",
+        "<p>Cliquez sur le bouton ci-dessous.</p>",
+        "<a href=\"https://example.com/magic\">Se connecter</a>",
+        "</td></tr></tbody></table></div>",
+        "<img src=\"https://example.com/open?x=1\" alt=\"\" width=\"1\" height=\"1\">",
+        "</body></html>"
+    );
+
+    #[test]
+    fn test_extract_body_single_part_html_is_converted() {
+        let raw = make_raw_email(
+            "a@b.com",
+            "c@d.com",
+            "Lien",
+            "text/html; charset=UTF-8",
+            TRANSACTIONAL_HTML,
+        );
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        assert!(body.contains("Connectez-vous \u{e0} Claude.ai"), "{body:?}");
+        assert!(body.contains("[Se connecter](https://example.com/magic)"), "{body:?}");
+        assert!(!body.contains("<html"), "{body:?}");
+        assert!(!body.contains("<table"), "{body:?}");
+        assert!(!body.contains("margin:0"), "style leaked: {body:?}");
+        assert!(!body.contains("open?x=1"), "tracking pixel leaked: {body:?}");
+    }
+
+    #[test]
+    fn test_extract_body_plain_part_holding_html_is_converted() {
+        let raw = make_raw_email(
+            "a@b.com",
+            "c@d.com",
+            "Lien",
+            "text/plain; charset=UTF-8",
+            TRANSACTIONAL_HTML,
+        );
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        assert!(body.contains("Cliquez sur le bouton ci-dessous."), "{body:?}");
+        assert!(!body.contains("<!doctype"), "{body:?}");
+    }
+
+    #[test]
+    fn test_extract_body_ignores_text_attachment() {
+        let boundary = "BOUND_ATT";
+        let raw = format!(
+            "From: a@b.com\r\nTo: c@d.com\r\nSubject: S\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Real body</p>\r\n--{boundary}\r\nContent-Type: text/plain; name=\"notes.txt\"\r\nContent-Disposition: attachment; filename=\"notes.txt\"\r\n\r\nattachment text\r\n--{boundary}--\r\n"
+        )
+        .into_bytes();
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        assert!(body.contains("Real body"), "{body:?}");
+        assert!(!body.contains("attachment text"), "{body:?}");
+    }
+
+    /// multipart/related mail: an HTML body embedding `cid:photo` (large, inline,
+    /// no filename) and `cid:icon` (tiny).
+    fn related_mail_with_cid_images() -> Vec<u8> {
+        let boundary = "BOUND_REL";
+        let big = "A".repeat(60_000);
+        format!(
+            "From: a@b.com\r\nTo: c@d.com\r\nSubject: S\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/related; boundary=\"{boundary}\"\r\n\r\n\
+--{boundary}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Voici <img src=\"cid:Photo@Mail\" alt=\"vue\"> et <img src=\"cid:icon@mail\" alt=\"i\"></p>\r\n\
+--{boundary}\r\nContent-Type: image/png\r\nContent-Transfer-Encoding: 7bit\r\nContent-ID: <photo@mail>\r\nContent-Disposition: inline\r\n\r\n{big}\r\n\
+--{boundary}\r\nContent-Type: image/png\r\nContent-Transfer-Encoding: 7bit\r\nContent-ID: <icon@mail>\r\nContent-Disposition: inline\r\n\r\ntiny\r\n\
+--{boundary}--\r\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn test_extract_attachments_saves_and_relinks_referenced_cid_image() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let raw = related_mail_with_cid_images();
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        let cids = referenced_content_ids(&body);
+        let mut inline = HashMap::new();
+        let mut attachments = Vec::new();
+        extract_attachments(
+            &mail,
+            temp.path(),
+            "2024-01-01",
+            true,
+            false,
+            &cids,
+            &mut inline,
+            &mut attachments,
+        )
+        .unwrap();
+        let rewritten = rewrite_cid_images(&body, &inline);
+
+        assert_eq!(attachments.len(), 1, "{attachments:?}");
+        let saved = &attachments[0];
+        assert!(saved.starts_with("2024-01-01_inline_photomail"), "{saved}");
+        assert!(temp.path().join(saved).exists());
+        assert!(rewritten.contains(&format!("![vue]({saved})")), "{rewritten}");
+        assert!(!rewritten.contains("cid:"), "{rewritten}");
+    }
+
+    #[test]
+    fn test_rewrite_cid_images_drops_unknown_and_quotes_spaces() {
+        let mut saved = HashMap::new();
+        saved.insert("a@x".to_string(), Some("my photo.png".to_string()));
+        saved.insert("b@x".to_string(), None);
+
+        let out = rewrite_cid_images("![](cid:A%40X) ![x](cid:b@x) ![y](cid:zzz)", &saved);
+
+        assert!(out.contains("![](<my photo.png>)"), "{out}");
+        assert!(!out.contains("cid:"), "{out}");
+        assert!(!out.contains("![x]"), "{out}");
+    }
+
+    #[test]
+    fn test_normalize_content_id_strips_brackets_and_decodes() {
+        assert_eq!(normalize_content_id(" <Img%40Host> "), "img@host");
+        assert_eq!(normalize_content_id("plain"), "plain");
+    }
+
+    #[test]
+    fn test_export_to_markdown_names_note_after_full_subject_without_recipient() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let raw = b"From: Alice Martin <alice@x.com>\r\nTo: bob@y.com\r\nSubject: Re: Plan du projet \xE2\x80\x93 version finale\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nMessage-ID: <n1@x>\r\n\r\nBonjour\r\n";
+        let account = make_account(&temp.path().to_string_lossy());
+        let mut ctx = ExportContext {
+            export_directory: temp.path(),
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+            source_proof: None,
+            organize_by_date: false,
+            exported: None,
+        };
+
+        let (path, _) = export_to_markdown(raw, vec![], None, &mut ctx)
+            .unwrap()
+            .unwrap();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+
+        assert_eq!(name, "email_2024-01-01_AlicMart_Plan du projet – version finale.md");
+        assert!(!name.contains("_to_"), "{name}");
+    }
+
+    #[test]
+    fn test_looks_like_html_is_case_insensitive() {
+        assert!(looks_like_html("  <!doctype html><html>"));
+        assert!(looks_like_html("<!DOCTYPE HTML PUBLIC"));
+        assert!(looks_like_html("<HTML>"));
+        assert!(!looks_like_html("Bonjour, <html> est un format"));
+        assert!(!looks_like_html(""));
+    }
+
+    #[test]
+    fn test_is_tracking_pixel_detects_tiny_and_hidden_images() {
+        assert!(is_tracking_pixel(&[("width", "1"), ("height", "1")]));
+        assert!(is_tracking_pixel(&[("width", "0px")]));
+        assert!(is_tracking_pixel(&[("style", "display: none")]));
+        assert!(!is_tracking_pixel(&[("width", "112"), ("height", "33")]));
+    }
+
+    #[test]
+    fn test_collapse_blank_lines_keeps_single_separator() {
+        assert_eq!(collapse_blank_lines("a\n\n\n\nb  \n"), "a\n\nb");
+    }
+
     #[test]
     fn test_extract_body_simple_non_multipart() {
         let raw = make_raw_email(
@@ -2081,6 +2797,7 @@ mod tests {
             skip_signature_images: false,
             delete_after_export: false,
             cleanup_empty_dirs: false,
+            batch_size: 0,
         }
     }
 

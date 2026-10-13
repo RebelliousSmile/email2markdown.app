@@ -63,13 +63,31 @@
     line-height: 1.4;
   }
   .btn-row-delete:hover { background: #ffcdd2; border-color: #e53935; }
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+    display: flex; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal {
+    background: #fff; border-radius: 8px; padding: 20px 24px; width: min(420px, 90vw);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+  }
+  .modal h3 { font-size: 1rem; margin-bottom: 8px; color: #111; }
+  .modal p { font-size: 0.88rem; line-height: 1.45; color: #444; margin-bottom: 18px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .modal-actions button {
+    padding: 6px 16px; border-radius: 4px; border: 1px solid #ccc;
+    background: #f5f5f5; color: #333; cursor: pointer; font-size: 0.88rem;
+  }
+  .modal-actions button.btn-danger { background: #e53935; border-color: #e53935; color: #fff; }
   .table-wrap {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 0;
   }
   table {
     width: 100%;
+    table-layout: fixed;
     border-collapse: collapse;
     background: #fff;
   }
@@ -96,9 +114,10 @@
     border-bottom: 1px solid #eee;
     vertical-align: middle;
   }
-  tbody td.subject { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  tbody td.sender  { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  tbody td.dest    { min-width: 260px; }
+  tbody td.subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.sender  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td.date, tbody td.status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  tbody td.dest    { overflow: hidden; }
   tbody td.dest input.dest-input {
     width: 100%;
     padding: 3px 6px;
@@ -118,6 +137,16 @@
     font-size: 11px;
     font-weight: 600;
     background: #9e9e9e;
+    color: #fff;
+    vertical-align: middle;
+  }
+  .badge-auto {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #2e7d32;
     color: #fff;
     vertical-align: middle;
   }
@@ -273,7 +302,7 @@
   </label>
   <input type="text" id="bulk-dest" list="known-paths" placeholder="Chemin en masse (Perso/X/Y)">
   <button id="btn-bulk-dest">Assigner chemin</button>
-  <button id="btn-delete-selected" class="btn-danger" title="Supprimer les emails cochés (le .md est supprimé, les pièces jointes vont dans _deleted)">Supprimer la sélection</button>
+  <button id="btn-delete-selected" class="btn-danger" title="Écarter les emails cochés sans les classer">Supprimer la sélection</button>
   <span style="margin-left:auto; color:#666;" id="summary-badge"></span>
 </div>
 
@@ -283,12 +312,12 @@
   <table>
     <thead>
       <tr>
-        <th><input type="checkbox" id="header-check"></th>
-        <th data-col="subject">Sujet</th>
-        <th data-col="sender">Expéditeur</th>
-        <th data-col="date">Date</th>
+        <th style="width:34px"><input type="checkbox" id="header-check"></th>
+        <th data-col="subject" style="width:24%">Sujet</th>
+        <th data-col="sender" style="width:17%">Expéditeur</th>
+        <th data-col="date" style="width:96px">Date</th>
         <th data-col="dest_path">Chemin proposé</th>
-        <th data-col="is_default">Statut</th>
+        <th data-col="is_default" style="width:70px">Statut</th>
       </tr>
     </thead>
     <tbody id="email-table-body"></tbody>
@@ -426,8 +455,17 @@
     renderCascade(area, bulkDest, pathTree);
   }
 
+  // The router proposes "<dest>/<AAAA>/<MM>" while paths picked by hand are bare;
+  // the host appends <Year>/<Month> at apply time. Show bare paths everywhere so
+  // proposals and manual choices look the same.
+  function stripYearMonth(p) {
+    var m = /^(.*?)\/?(?:19|20)\d{2}\/(?:0[1-9]|1[0-2])\/?$/.exec(p);
+    return m && m[1] ? m[1] : p;
+  }
+
   // Build mutable rows — include sender_email, sender_domain, source from injected data.
   var rows = rawDecisions.map(function (d) {
+    var full = d.dest_path || '';
     return {
       file:          d.file          || '',
       subject:       d.subject       || '',
@@ -435,9 +473,11 @@
       sender_email:  d.sender_email  || '',
       sender_domain: d.sender_domain || '',
       date:          d.date          || '',
-      dest_path:     d.dest_path     || '',
-      orig_path:     d.dest_path     || '',  // original proposal for "modified" highlight
+      dest_path:     stripYearMonth(full),
+      full_path:     full,                    // exact router proposal, sent back if untouched
+      orig_path:     stripYearMonth(full),  // original proposal for "modified" highlight
       is_default:    !!d.is_default,
+      matched_rule:  d.matched_rule  || '',
       checked:       false,
       source:        'default'  // "default" | "manual" | "rule"
     };
@@ -466,6 +506,12 @@
       var cmp = String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' });
       return sortDir === 'asc' ? cmp : -cmp;
     });
+  }
+
+  // ISO timestamp -> dd/mm/yyyy (the full value stays in the tooltip).
+  function fmtDate(v) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || '');
+    return m ? m[3] + '/' + m[2] + '/' + m[1] : (v || '');
   }
 
   function updateSortIndicators() {
@@ -502,6 +548,9 @@
         statusCell = '<span class="badge-rule">règle</span>';
       } else if (row.is_default) {
         statusCell = '<span class="badge-default">défaut</span>';
+      } else {
+        statusCell = '<span class="badge-auto" title="' + esc(row.matched_rule || 'Chemin proposé par destinations.txt') +
+          '">auto</span>';
       }
 
       tr.innerHTML =
@@ -509,14 +558,14 @@
           (row.checked ? ' checked' : '') + '></td>' +
         '<td class="subject" title="' + esc(row.subject) + '">' + esc(row.subject) + '</td>' +
         '<td class="sender"  title="' + esc(row.sender)  + '">' + esc(row.sender)  + '</td>' +
-        '<td>' + esc(row.date) + '</td>' +
+        '<td class="date" title="' + esc(row.date) + '">' + esc(fmtDate(row.date)) + '</td>' +
         '<td class="dest">' +
           '<input type="text" class="dest-input' + modifiedClass + '" list="known-paths"' +
             ' data-i="' + i + '"' +
             ' value="' + esc(row.dest_path) + '"' +
             ' placeholder="Perso/Catégorie/Sous-cat/YYYY/MM">' +
         '</td>' +
-        '<td style="text-align:center">' + statusCell + '</td>';
+        '<td class="status" style="text-align:center">' + statusCell + '</td>';
 
       tbody.appendChild(tr);
     });
@@ -776,26 +825,53 @@
   function requestDelete(files) {
     files = (files || []).filter(function (f) { return !!f; });
     if (files.length === 0) { return; }
-    var label = files.length === 1
+    var title = files.length === 1
       ? 'Supprimer cet email ?'
-      : 'Supprimer ' + files.length + ' emails ?';
-    if (typeof window.confirm === 'function' && !window.confirm(
-        label + '\n\nLe fichier .md sera supprimé ; les pièces jointes seront déplacées dans _deleted.')) {
-      return;
-    }
-    clearError();
-    var msg = JSON.stringify({ action: 'delete', files: files });
-    if (window.ipc && typeof window.ipc.postMessage === 'function') {
-      window.ipc.postMessage(msg);
-    } else {
-      showError('IPC non disponible.');
-    }
+      : 'Supprimer ces ' + files.length + ' emails ?';
+    var body = (files.length === 1 ? 'Cet email ne sera pas classé.' : 'Ces emails ne seront pas classés.') +
+      ' Si votre compte est configuré pour supprimer les emails après export, ' +
+      (files.length === 1 ? 'il sera aussi supprimé' : 'ils seront aussi supprimés') +
+      ' de la boîte mail.';
+    askConfirm(title, body, 'Supprimer', function () {
+      clearError();
+      var msg = JSON.stringify({ action: 'delete', files: files });
+      if (window.ipc && typeof window.ipc.postMessage === 'function') {
+        window.ipc.postMessage(msg);
+      } else {
+        showError('IPC non disponible.');
+      }
+    });
+  }
+
+  // In-page confirmation dialog (native confirm() is ugly and blocks the webview).
+  function askConfirm(title, body, okLabel, onOk) {
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML =
+      '<div class="modal" role="dialog" aria-modal="true">' +
+        '<h3></h3><p></p>' +
+        '<div class="modal-actions">' +
+          '<button class="modal-cancel">Annuler</button>' +
+          '<button class="modal-ok btn-danger"></button>' +
+        '</div>' +
+      '</div>';
+    overlay.querySelector('h3').textContent = title;
+    overlay.querySelector('p').textContent = body;
+    overlay.querySelector('.modal-ok').textContent = okLabel;
+    function close() { document.removeEventListener('keydown', onKey); overlay.remove(); }
+    function onKey(e) { if (e.key === 'Escape') { close(); } }
+    overlay.querySelector('.modal-cancel').addEventListener('click', close);
+    overlay.querySelector('.modal-ok').addEventListener('click', function () { close(); onOk(); });
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) { close(); } });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+    overlay.querySelector('.modal-cancel').focus();
   }
 
   document.getElementById('btn-delete-selected').addEventListener('click', function () {
     var files = rows.filter(function (r) { return r.checked; })
                     .map(function (r) { return r.file; });
-    if (files.length === 0) { alert('Cochez au moins un email à supprimer.'); return; }
+    if (files.length === 0) { showError('Cochez au moins un email à supprimer.'); return; }
     requestDelete(files);
   });
 
@@ -833,7 +909,9 @@
     // Build payload: [{ file, dest_path }]
     // dest_path is always relative to notes_dir (the user types/selects relative paths).
     var decisions = rows.map(function (r) {
-      return { file: r.file, dest_path: r.dest_path.trim() };
+      var p = r.dest_path.trim();
+      // Untouched proposal: send the router's exact dated path (no re-derivation).
+      return { file: r.file, dest_path: p === r.orig_path ? r.full_path : p };
     });
 
     var msg = JSON.stringify({ decisions: decisions });

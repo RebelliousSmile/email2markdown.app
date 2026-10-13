@@ -2484,6 +2484,7 @@ mod contextual_export_tests {
             skip_signature_images: false,
             delete_after_export: false,
             cleanup_empty_dirs: true,
+            batch_size: 0,
         }
     }
 

@@ -124,6 +124,7 @@ pub(super) fn run() -> Result<()> {
                 warning,
                 progress_rx,
                 on_close,
+                done_action,
                 error_action,
                 sender,
                 cancel_token,
@@ -135,6 +136,7 @@ pub(super) fn run() -> Result<()> {
                 warning,
                 progress_rx,
                 on_close,
+                done_action,
                 error_action,
                 sender,
                 cancel_token,
@@ -149,6 +151,7 @@ pub(super) fn run() -> Result<()> {
             Event::UserEvent(AppCommand::ProgressUpdate { window_id, update }) => {
                 handle_progress_update(&windows, window_id, update)
             }
+            Event::UserEvent(AppCommand::RefreshMenu) => rebuild_tray_menu(&tray_icon),
             Event::UserEvent(AppCommand::EvalScript { window_id, js }) => {
                 handle_eval_script(&windows, window_id, js)
             }
@@ -175,8 +178,11 @@ pub(super) fn run() -> Result<()> {
             Event::UserEvent(AppCommand::ContextualDestinationSaved { window_id }) => {
                 handle_contextual_destination_saved(&mut windows, window_id)
             }
-            Event::UserEvent(AppCommand::ActionRequested { window_id }) => {
-                handle_action_requested(&mut windows, window_id)
+            Event::UserEvent(AppCommand::DoneActionRequested { window_id }) => {
+                handle_action_requested(&mut windows, window_id, false)
+            }
+            Event::UserEvent(AppCommand::ErrorActionRequested { window_id }) => {
+                handle_action_requested(&mut windows, window_id, true)
             }
             Event::UserEvent(AppCommand::CloseWindow { window_id }) => {
                 handle_close_window(&mut windows, window_id)
@@ -208,6 +214,7 @@ fn handle_open_progress(
     warning: Option<String>,
     progress_rx: mpsc::Receiver<ProgressUpdate>,
     on_close: Option<CloseCb>,
+    done_action: Option<ActionCb>,
     error_action: Option<ActionCb>,
     sender: Sender<ActionResult>,
     cancel_token: Option<Arc<AtomicBool>>,
@@ -224,6 +231,7 @@ fn handle_open_progress(
                 window_id,
                 WState::Progress(ProgressState {
                     on_close,
+                    done_action,
                     error_action,
                     webview,
                     window,
@@ -477,9 +485,18 @@ fn handle_contextual_destination_saved(windows: &mut HashMap<WindowId, WState>, 
     }
 }
 
-fn handle_action_requested(windows: &mut HashMap<WindowId, WState>, window_id: WindowId) {
+fn handle_action_requested(
+    windows: &mut HashMap<WindowId, WState>,
+    window_id: WindowId,
+    is_error_action: bool,
+) {
     if let Some(WState::Progress(mut state)) = windows.remove(&window_id) {
-        if let Some(f) = state.error_action.take() {
+        let action = if is_error_action {
+            state.error_action.take()
+        } else {
+            state.done_action.take()
+        };
+        if let Some(f) = action {
             f();
         }
     }
@@ -514,16 +531,18 @@ fn handle_menu_event_received(id: &str, result_sender: Sender<ActionResult>) {
     super::menu::handle_menu_event(id, result_sender);
 }
 
+fn rebuild_tray_menu(tray_icon: &Option<TrayIcon>) {
+    if let Some(ref icon) = tray_icon {
+        match super::menu::create_menu() {
+            Ok(new_menu) => icon.set_menu(Some(Box::new(new_menu))),
+            Err(e) => eprintln!("Failed to rebuild menu: {}", e),
+        }
+    }
+}
+
 fn handle_action_result_received(tray_icon: &Option<TrayIcon>, result: ActionResult) {
     match &result {
-        ActionResult::Imported(_) => {
-            if let Some(ref icon) = tray_icon {
-                match super::menu::create_menu() {
-                    Ok(new_menu) => icon.set_menu(Some(Box::new(new_menu))),
-                    Err(e) => eprintln!("Failed to rebuild menu: {}", e),
-                }
-            }
-        }
+        ActionResult::Imported(_) => rebuild_tray_menu(tray_icon),
         _ => {
             show_notification(&result);
         }
@@ -542,8 +561,15 @@ fn format_progress_js(update: &ProgressUpdate) -> String {
         ProgressUpdate::Indeterminate { message } => {
             format!("indeterminate({:?})", message)
         }
-        ProgressUpdate::Done { summary } => {
-            format!("finish({:?})", summary)
+        ProgressUpdate::Done {
+            summary,
+            action_label,
+        } => {
+            format!(
+                "finish({:?}, {:?})",
+                summary,
+                action_label.as_deref().unwrap_or("")
+            )
         }
         ProgressUpdate::Error {
             message,
@@ -586,4 +612,30 @@ fn show_notification(result: &ActionResult) {
             .set_level(level)
             .show();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_progress_js;
+    use crate::progress::ProgressUpdate;
+
+    #[test]
+    fn batch_completion_exposes_continue_action() {
+        let js = format_progress_js(&ProgressUpdate::Done {
+            summary: "Lot terminé".to_string(),
+            action_label: Some("Continuer".to_string()),
+        });
+
+        assert_eq!(js, "finish(\"Lot terminé\", \"Continuer\")");
+    }
+
+    #[test]
+    fn ordinary_completion_keeps_primary_action_hidden() {
+        let js = format_progress_js(&ProgressUpdate::Done {
+            summary: "Export terminé".to_string(),
+            action_label: None,
+        });
+
+        assert_eq!(js, "finish(\"Export terminé\", \"\")");
+    }
 }

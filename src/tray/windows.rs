@@ -130,7 +130,8 @@ pub(super) fn build_contextual_window(
 }
 
 /// Cancel button of the progress window, only present when the action can be cancelled.
-const CANCEL_BUTTON_HTML: &str = r#"<button id="cancel" onclick="this.disabled = true; window.ipc.postMessage('cancel')">Annuler</button>"#;
+const CANCEL_BUTTON_HTML: &str =
+    r#"<button id="cancel" onclick="requestCancel(this)">Annuler</button>"#;
 
 /// `action_name` and `warning` are inserted into the page body without HTML
 /// escaping. They must stay fixed labels chosen by the caller: never pass an
@@ -142,7 +143,7 @@ pub(super) fn build_progress_window(
     warning: Option<&str>,
     cancel_token: Option<Arc<AtomicBool>>,
 ) -> Result<(Window, WebView, WindowId)> {
-    let (window, window_id) = build_gui_window(target, action_name, (480.0, 220.0))?;
+    let (window, window_id) = build_gui_window(target, action_name, (520.0, 270.0))?;
     let html = include_str!("../../assets/progress_window.html")
         .replace("__ACTION_NAME__", action_name)
         .replace("__WARNING__", warning.unwrap_or(""))
@@ -158,8 +159,11 @@ pub(super) fn build_progress_window(
     let webview = attach_webview(&window, html, None, move |req| {
         let body = req.body().as_str();
         match body {
-            "action" => {
-                let _ = ipc_proxy.send_event(AppCommand::ActionRequested { window_id });
+            "done-action" => {
+                let _ = ipc_proxy.send_event(AppCommand::DoneActionRequested { window_id });
+            }
+            "error-action" => {
+                let _ = ipc_proxy.send_event(AppCommand::ErrorActionRequested { window_id });
             }
             "close" => {
                 let _ = ipc_proxy.send_event(AppCommand::CloseWindow { window_id });
@@ -193,7 +197,16 @@ pub(super) fn build_config_window(
         serde_json::to_string(&raw_accounts).context("failed to serialize accounts")?;
     let html = html_template
         .replace("__SETTINGS_JSON__", &escape_json_for_script(&settings_json))
-        .replace("__ACCOUNTS_JSON__", &escape_json_for_script(&accounts_json));
+        .replace("__ACCOUNTS_JSON__", &escape_json_for_script(&accounts_json))
+        .replace(
+            "__CONFIG_DIR__",
+            &crate::config::app_config_dir()
+                .display()
+                .to_string()
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;"),
+        );
 
     let (window, window_id) = build_gui_window(
         target,
@@ -213,6 +226,9 @@ pub(super) fn build_config_window(
                 let _ = sender.send(r);
             }
             if let Some(reply) = outcome.reply {
+                if reply_changed_accounts(&reply) {
+                    let _ = proxy_ipc.send_event(AppCommand::RefreshMenu);
+                }
                 let js = format!("config_result({})", escape_json_for_script(&reply));
                 let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
             }
@@ -223,6 +239,17 @@ pub(super) fn build_config_window(
     )?;
 
     Ok((window, webview, window_id))
+}
+
+/// `true` when a settings-page reply reports a successful account save, deletion or
+/// reload: the tray submenus list the accounts and must be rebuilt.
+fn reply_changed_accounts(reply: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(reply) else {
+        return false;
+    };
+    let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let action = value.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    ok && matches!(action, "save_account" | "reload")
 }
 
 // ── Update window ─────────────────────────────────────────────────────────────
@@ -528,7 +555,17 @@ pub(super) fn build_route_window(
         .collect();
 
     // Build owned rows — extract frontmatter fields for display in the table.
-    let owned_rows: Vec<(String, String, String, String, String, bool, String, String)> = decisions
+    let owned_rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        bool,
+        String,
+        String,
+        String,
+    )> = decisions
         .iter()
         .map(|(staging_path, decision)| {
             let file = staging_path.to_string_lossy().into_owned();
@@ -552,6 +589,7 @@ pub(super) fn build_route_window(
                 decision.is_default,
                 sender_email,
                 sender_domain,
+                decision.matched_rule.clone().unwrap_or_default(),
             )
         })
         .collect();
@@ -564,8 +602,19 @@ pub(super) fn build_route_window(
     let json_rows: Vec<serde_json::Value> = owned_rows
         .iter()
         .map(
-            |(file, subject, sender, date, dest_path, is_default, sender_email, sender_domain)| {
+            |(
+                file,
+                subject,
+                sender,
+                date,
+                dest_path,
+                is_default,
+                sender_email,
+                sender_domain,
+                matched_rule,
+            )| {
                 serde_json::json!({
+                    "matched_rule":  matched_rule,
                     "file":          file,
                     "subject":       subject,
                     "sender":        sender,
@@ -641,10 +690,21 @@ pub(super) fn build_route_window(
                 if kind.action == "delete" {
                     match serde_json::from_str::<DeletePayload>(&body) {
                         Ok(p) => {
+                            // Proofs must be read before the notes disappear.
+                            let proofs = super::ipc::staged_proofs(&p.files);
                             let (deleted, err) = super::ipc::delete_staged_emails(
                                 &p.files,
                                 &mut allowed_files.borrow_mut(),
                             );
+                            // Only the notes actually discarded lose their server copy.
+                            let discarded: Vec<_> = proofs
+                                .into_iter()
+                                .filter(|(file, _)| deleted.contains(file))
+                                .map(|(_, proof)| proof)
+                                .collect();
+                            // A discarded message must not come back at the next export.
+                            crate::handled::record_proofs(&discarded);
+                            tray_actions::spawn_discarded_deletions(discarded);
                             // Remove the successfully-deleted rows from the table.
                             if let Ok(js_arr) = serde_json::to_string(&deleted) {
                                 let js = format!(
@@ -680,14 +740,23 @@ pub(super) fn build_route_window(
             let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
                 .unwrap_or_default()
                 .organize_by_date;
-            let outcome = super::ipc::parse_route_decisions(&body).and_then(|rows| {
-                super::ipc::apply_route_decisions(
-                    &rows,
-                    &notes_dir,
-                    &mut allowed_files.borrow_mut(),
-                    organize_by_date,
-                )
-            });
+            let outcome = super::ipc::parse_route_decisions(&body)
+                .and_then(|rows| {
+                    super::ipc::apply_route_decisions(
+                        &rows,
+                        &notes_dir,
+                        &mut allowed_files.borrow_mut(),
+                        organize_by_date,
+                    )
+                })
+                .map(|mut report| {
+                    // Sorted notes leave the export folder: remember them so the
+                    // next export does not propose them again.
+                    crate::handled::record_proofs(report.deletions.iter().map(|d| &d.proof));
+                    // Sorted notes: remove their server copy (background).
+                    tray_actions::spawn_server_deletions(std::mem::take(&mut report.deletions));
+                    report
+                });
             let error = match outcome {
                 Ok(report) if report.is_complete() => {
                     let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
@@ -772,6 +841,18 @@ mod tests {
             .filter(|html| html.contains("Content-Security-Policy\" content=\"default-src 'none'"))
             .count();
         assert_eq!(with_policy, templates.len());
+    }
+
+    #[test]
+    fn progress_template_exposes_a_separate_continue_action_on_batch_completion() {
+        let html = include_str!("../../assets/progress_window.html");
+
+        assert!(html.contains("function finish(summary, actionLabel)"));
+        assert!(html.contains("function requestCancel(button)"));
+        assert!(html.contains("Annulation demandée"));
+        assert!(html.contains("window.ipc.postMessage(\"done-action\")"));
+        assert!(html.contains("window.ipc.postMessage(\"error-action\")"));
+        assert!(!html.contains("Récupération des en-têtes"));
     }
 
     #[test]

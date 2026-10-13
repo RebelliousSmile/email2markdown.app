@@ -442,6 +442,8 @@ pub(super) struct RouteApplyReport {
     pub(super) missing: Vec<String>,
     /// Files that could not be moved, with the reason.
     pub(super) failed: Vec<(String, String)>,
+    /// Moved notes carrying a source proof: their server copy can now be deleted.
+    pub(super) deletions: Vec<crate::contextual_export::DeletionRequest>,
 }
 
 impl RouteApplyReport {
@@ -559,15 +561,46 @@ pub(super) fn apply_route_decisions(
             report.missing.push(row.file.clone());
             continue;
         }
+        // Read before the move: the proof travels in the note's frontmatter.
+        let proof = crate::contextual_export::read_source_proof(staging_md)
+            .ok()
+            .flatten()
+            .filter(crate::contextual_export::proof_is_complete);
         match crate::route::apply_decision(staging_md, dest_path, notes_dir) {
             Ok(()) => {
                 allowed.remove(&row.file);
                 report.moved.push(row.file.clone());
+                if let (Some(proof), Some(name)) = (proof, staging_md.file_name()) {
+                    if let Ok(dest_dir) = crate::route::join_safe_segments(notes_dir, dest_path) {
+                        report
+                            .deletions
+                            .push(crate::contextual_export::DeletionRequest {
+                                markdown: dest_dir.join(name),
+                                proof,
+                            });
+                    }
+                }
             }
             Err(e) => report.failed.push((row.file.clone(), format!("{:#}", e))),
         }
     }
     Ok(report)
+}
+
+/// Source proofs of the given staging files, read before they are deleted.
+pub(super) fn staged_proofs(
+    files: &[String],
+) -> Vec<(String, crate::contextual_export::LocalSourceProof)> {
+    files
+        .iter()
+        .filter_map(|file| {
+            crate::contextual_export::read_source_proof(Path::new(file))
+                .ok()
+                .flatten()
+                .filter(crate::contextual_export::proof_is_complete)
+                .map(|proof| (file.clone(), proof))
+        })
+        .collect()
 }
 
 /// Delete staged emails (and their attachment sidecars) that were rejected during routing.
@@ -653,6 +686,8 @@ struct DefaultsData {
     skip_signature_images: Option<bool>,
     delete_after_export: Option<bool>,
     cleanup_empty_dirs: Option<bool>,
+    #[serde(default)]
+    batch_size: Option<usize>,
 }
 
 #[derive(serde::Deserialize)]
@@ -675,6 +710,14 @@ struct AccountData {
     skip_signature_images: Option<bool>,
     #[serde(default)]
     quote_depth: Option<usize>,
+    #[serde(default)]
+    batch_size: Option<usize>,
+    /// `true` when the form creates the account: an existing name is refused.
+    #[serde(default)]
+    create: bool,
+    /// New password for `.env`. Empty or absent keeps the current one.
+    #[serde(default)]
+    password: Option<String>,
 }
 
 /// Write the general settings to `settings_path`, keeping every field the form does not edit.
@@ -691,11 +734,154 @@ fn save_settings(data: SettingsData, settings_path: &Path) -> anyhow::Result<()>
         skip_signature_images: data.defaults.skip_signature_images,
         delete_after_export: data.defaults.delete_after_export,
         cleanup_empty_dirs: data.defaults.cleanup_empty_dirs,
+        batch_size: data.defaults.batch_size,
     };
     settings
         .save(settings_path)
         .with_context(|| format!("failed to save settings to {}", settings_path.display()))?;
     Ok(())
+}
+
+/// Characters that cannot appear in an account name: it names an export folder.
+const FORBIDDEN_NAME_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
+/// Reject an account name that is empty, unusable as a folder name, already taken,
+/// or that would share its `.env` variable prefix with another account.
+fn validate_new_account_name(name: &str, accounts: &[RawAccount]) -> anyhow::Result<()> {
+    if name.trim().is_empty() {
+        anyhow::bail!("Le nom du compte est obligatoire.");
+    }
+    if name != name.trim() || name.contains(FORBIDDEN_NAME_CHARS) {
+        anyhow::bail!(
+            "Le nom du compte ne doit pas commencer ou finir par un espace, ni contenir / \\ : * ? \" < > |"
+        );
+    }
+    let prefix = config::env_var_name(name);
+    for existing in accounts {
+        if existing.name.eq_ignore_ascii_case(name) {
+            anyhow::bail!(
+                "Un compte nomm\u{00e9} \u{00ab} {} \u{00bb} existe d\u{00e9}j\u{00e0}.",
+                existing.name
+            );
+        }
+        if config::env_var_name(&existing.name) == prefix {
+            anyhow::bail!(
+                "Le nom est trop proche de \u{00ab} {} \u{00bb} : ils partageraient le m\u{00ea}me mot de passe ({prefix}_PASSWORD).",
+                existing.name
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `.env` keys that can hold the password of `account_name`.
+fn env_password_keys(account_name: &str) -> [String; 2] {
+    let prefix = config::env_var_name(account_name);
+    [
+        format!("{prefix}_APPLICATION_PASSWORD"),
+        format!("{prefix}_PASSWORD"),
+    ]
+}
+
+fn read_env_lines(env_path: &Path) -> anyhow::Result<Vec<String>> {
+    if !env_path.exists() {
+        return Ok(Vec::new());
+    }
+    Ok(std::fs::read_to_string(env_path)
+        .with_context(|| format!("failed to read {}", env_path.display()))?
+        .lines()
+        .map(str::to_string)
+        .collect())
+}
+
+fn write_env_lines(env_path: &Path, lines: &[String]) -> anyhow::Result<()> {
+    if let Some(parent) = env_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut content = lines.join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    std::fs::write(env_path, content)
+        .with_context(|| format!("failed to write {}", env_path.display()))
+}
+
+fn env_line_has_key(line: &str, key: &str) -> bool {
+    line.trim_start()
+        .strip_prefix(key)
+        .is_some_and(|rest| rest.starts_with('='))
+}
+
+/// Store `password` for `account_name` in `.env`.
+///
+/// `<NAME>_APPLICATION_PASSWORD` wins over `<NAME>_PASSWORD` when loading, so an
+/// existing application password is the key to update.
+fn set_env_password(env_path: &Path, account_name: &str, password: &str) -> anyhow::Result<()> {
+    let mut lines = read_env_lines(env_path)?;
+    let [app_key, plain_key] = env_password_keys(account_name);
+    let key = if lines.iter().any(|l| env_line_has_key(l, &app_key)) {
+        app_key
+    } else {
+        plain_key
+    };
+    let line = format!("{}='{}'", key, password.replace('\'', "'\\''"));
+    match lines.iter().position(|l| env_line_has_key(l, &key)) {
+        Some(pos) => lines[pos] = line,
+        None => lines.push(line),
+    }
+    write_env_lines(env_path, &lines)
+}
+
+/// Drop every password line of `account_name` from `.env`. Returns how many were removed.
+fn remove_env_passwords(env_path: &Path, account_name: &str) -> anyhow::Result<usize> {
+    if !env_path.exists() {
+        return Ok(0);
+    }
+    let lines = read_env_lines(env_path)?;
+    let keys = env_password_keys(account_name);
+    let kept: Vec<String> = lines
+        .iter()
+        .filter(|l| !keys.iter().any(|k| env_line_has_key(l, k)))
+        .cloned()
+        .collect();
+    let removed = lines.len() - kept.len();
+    if removed > 0 {
+        write_env_lines(env_path, &kept)?;
+    }
+    Ok(removed)
+}
+
+/// Remove an account: its entry in `accounts.yaml`, its behaviour overrides in
+/// `settings.yaml` and its password lines in `.env`. Exported emails stay on disk.
+///
+/// Both YAML files are loaded before the first write. Returns the number of
+/// password lines removed from `.env`.
+fn delete_account(
+    account_name: &str,
+    accounts_path: &Path,
+    settings_path: &Path,
+    env_path: &Path,
+) -> anyhow::Result<usize> {
+    let mut accounts = config::load_raw_accounts(accounts_path)
+        .with_context(|| format!("failed to load accounts from {}", accounts_path.display()))?;
+    let mut settings = Settings::load(settings_path)
+        .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
+
+    let before = accounts.len();
+    accounts.retain(|a| !a.name.eq_ignore_ascii_case(account_name));
+    if accounts.len() == before {
+        anyhow::bail!("Compte introuvable : {account_name}");
+    }
+    settings
+        .accounts
+        .retain(|key, _| !key.eq_ignore_ascii_case(account_name));
+
+    config::save_accounts(&accounts, accounts_path)
+        .with_context(|| format!("failed to save accounts to {}", accounts_path.display()))?;
+    settings
+        .save(settings_path)
+        .with_context(|| format!("failed to save settings to {}", settings_path.display()))?;
+    remove_env_passwords(env_path, account_name)
 }
 
 /// Write one account: connection info to `accounts_path`, behaviour to `settings_path`.
@@ -711,6 +897,10 @@ fn save_account(
         .with_context(|| format!("failed to load accounts from {}", accounts_path.display()))?;
     let mut settings = Settings::load(settings_path)
         .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
+
+    if data.create {
+        validate_new_account_name(&data.account_name, &accounts)?;
+    }
 
     let mut found = false;
     for acct in accounts.iter_mut() {
@@ -751,6 +941,7 @@ fn save_account(
     behavior.collect_contacts = data.collect_contacts;
     behavior.skip_signature_images = data.skip_signature_images;
     behavior.quote_depth = data.quote_depth;
+    behavior.batch_size = data.batch_size;
 
     let is_empty = serde_json::to_value(&behavior)
         .map(|v| v.as_object().map(|o| o.is_empty()).unwrap_or(false))
@@ -823,6 +1014,43 @@ fn save_outcome(action: &str, saved: anyhow::Result<()>) -> ConfigIpcOutcome {
     }
 }
 
+/// Re-read `settings.yaml` and `accounts.yaml` from disk for the settings page,
+/// so edits made directly in the files show up without reopening the window.
+///
+/// A file that no longer parses keeps the page as it was and reports the cause.
+fn reload_outcome(
+    settings_path: &Path,
+    accounts_path: &Path,
+    notice: Option<&str>,
+) -> ConfigIpcOutcome {
+    let loaded = (|| -> anyhow::Result<serde_json::Value> {
+        let settings = config::Settings::load(settings_path)
+            .with_context(|| format!("failed to load {}", settings_path.display()))?;
+        let accounts = config::load_raw_accounts(accounts_path)
+            .with_context(|| format!("failed to load {}", accounts_path.display()))?;
+        Ok(serde_json::json!({
+            "action": "reload",
+            "ok": true,
+            "settings": settings,
+            "accounts": accounts,
+            "notice": notice,
+        }))
+    })();
+    let reply = match loaded {
+        Ok(value) => value,
+        Err(e) => serde_json::json!({
+            "action": "reload",
+            "ok": false,
+            "message": format!("Rechargement impossible : {:#}", e),
+        }),
+    };
+    ConfigIpcOutcome {
+        result: None,
+        should_close: false,
+        reply: Some(reply.to_string()),
+    }
+}
+
 /// Decode and dispatch one settings-window IPC message.
 pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
     let msg: ConfigIpcMessage = match serde_json::from_str(body) {
@@ -857,11 +1085,18 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
                     .ok_or_else(|| anyhow::anyhow!("save_account action missing data field"))?;
                 let data: AccountData =
                     serde_json::from_value(raw_data).context("failed to parse account data")?;
+                let password = data.password.clone().filter(|p| !p.is_empty());
+                let name = data.account_name.clone();
                 save_account(
                     data,
                     &config::accounts_yaml_path(),
                     &config::settings_path(),
-                )
+                )?;
+                if let Some(password) = password {
+                    set_env_password(&config::env_file_path(), &name, &password)
+                        .context("compte enregistr\u{00e9}, mais mot de passe non \u{00e9}crit")?;
+                }
+                Ok(())
             })();
             save_outcome("save_account", result)
         }
@@ -873,6 +1108,66 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
                 );
             }
             ConfigIpcOutcome::new(None, false)
+        }
+        "open_dir" => {
+            let dir = config::app_config_dir();
+            let opened = std::fs::create_dir_all(&dir)
+                .map_err(anyhow::Error::from)
+                .and_then(|()| open::that(&dir).map_err(anyhow::Error::from))
+                .context("failed to open config folder");
+            match opened {
+                Ok(()) => ConfigIpcOutcome::new(None, false),
+                Err(e) => ConfigIpcOutcome::new(
+                    Some(ActionResult::Error(format!("Erreur : {:#}", e))),
+                    false,
+                ),
+            }
+        }
+        "reload" => reload_outcome(&config::settings_path(), &config::accounts_yaml_path(), None),
+        "delete_account" => {
+            let name = msg
+                .data
+                .as_ref()
+                .and_then(|d| d.get("account_name"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let deleted = name
+                .ok_or_else(|| anyhow::anyhow!("delete_account action missing account_name"))
+                .and_then(|name| {
+                    delete_account(
+                        &name,
+                        &config::accounts_yaml_path(),
+                        &config::settings_path(),
+                        &config::env_file_path(),
+                    )
+                    .map(|removed| (name, removed))
+                });
+            match deleted {
+                Ok((name, removed)) => {
+                    let notice = if removed > 0 {
+                        format!("Compte \u{00ab} {name} \u{00bb} supprim\u{00e9}, mot de passe effac\u{00e9} de .env.")
+                    } else {
+                        format!("Compte \u{00ab} {name} \u{00bb} supprim\u{00e9} (aucun mot de passe dans .env).")
+                    };
+                    reload_outcome(
+                        &config::settings_path(),
+                        &config::accounts_yaml_path(),
+                        Some(&notice),
+                    )
+                }
+                Err(e) => ConfigIpcOutcome {
+                    result: None,
+                    should_close: false,
+                    reply: Some(
+                        serde_json::json!({
+                            "action": "reload",
+                            "ok": false,
+                            "message": format!("Suppression impossible : {:#}", e),
+                        })
+                        .to_string(),
+                    ),
+                },
+            }
         }
         other => ConfigIpcOutcome::new(
             Some(ActionResult::Error(format!(
@@ -887,11 +1182,12 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_route_decisions, delete_staged_emails, relative_destination, save_account,
-        save_outcome, save_settings, scan_destinations, AccountData, DestGuiIpcResult, RouteApplyReport, RouteDecisionRow,
-        SettingsData,
+        apply_route_decisions, delete_account, delete_staged_emails, relative_destination,
+        reload_outcome, remove_env_passwords, save_account, save_outcome, save_settings,
+        scan_destinations, set_env_password, validate_new_account_name, AccountData,
+        DestGuiIpcResult, RouteApplyReport, RouteDecisionRow, SettingsData,
     };
-    use crate::config::{load_raw_accounts, Settings};
+    use crate::config::{load_raw_accounts, RawAccount, Settings};
     use crate::destinations::DestinationsConfig;
     use std::collections::HashSet;
     use std::fs;
@@ -1138,10 +1434,49 @@ mod tests {
                 moved: vec![fx.files[0].clone(), fx.files[2].clone()],
                 missing: vec![fx.files[1].clone()],
                 failed: vec![],
+                deletions: vec![],
             }
         );
         assert_eq!(md_names(&fx.notes.join("Perso")), ["a.md", "c.md"]);
         assert!(allowed.is_empty());
+    }
+
+    #[test]
+    fn test_apply_route_decisions_proof_yields_deletion_request_on_final_path() {
+        let fx = route_fixture();
+        let proof = "---\nsubject: s\nsource:\n  identity:\n    account: perso\n    message_id: m1@example.org\n    header_fingerprint: abc123\n  location:\n    folder_raw: INBOX\n    folder_display: INBOX\n    uid_validity: 7\n    uid: 42\n---\ncorps\n";
+        fs::write(&fx.files[0], proof).unwrap();
+        let decisions = rows(&[(&fx.files[0], "Perso")]);
+        let mut allowed = allowed(&fx.files);
+
+        let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
+
+        assert_eq!(report.deletions.len(), 1);
+        assert_eq!(report.deletions[0].markdown, fx.notes.join("Perso").join("a.md"));
+        assert_eq!(report.deletions[0].proof.location.uid, 42);
+    }
+
+    #[test]
+    fn test_staged_proofs_keeps_only_files_with_complete_proof() {
+        let fx = route_fixture();
+        let proof = "---\nsubject: s\nsource:\n  identity:\n    account: perso\n    message_id: m1@example.org\n    header_fingerprint: abc123\n  location:\n    folder_raw: INBOX\n    folder_display: INBOX\n    uid_validity: 7\n    uid: 42\n---\ncorps\n";
+        fs::write(&fx.files[0], proof).unwrap();
+
+        let proofs = super::staged_proofs(&fx.files);
+
+        assert_eq!(proofs.len(), 1);
+        assert_eq!(proofs[0].0, fx.files[0]);
+    }
+
+    #[test]
+    fn test_apply_route_decisions_without_proof_yields_no_deletion() {
+        let fx = route_fixture();
+        let decisions = rows(&[(&fx.files[0], "Perso")]);
+        let mut allowed = allowed(&fx.files);
+
+        let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
+
+        assert!(report.deletions.is_empty());
     }
 
     #[test]
@@ -1150,6 +1485,7 @@ mod tests {
             moved: vec!["a.md".to_string()],
             missing: vec!["b.md".to_string()],
             failed: vec![],
+            deletions: vec![],
         };
 
         let message = report.error_message().unwrap();
@@ -1216,6 +1552,120 @@ mod tests {
         .unwrap()
     }
 
+    fn account_files(temp: &TempDir) -> (PathBuf, PathBuf, PathBuf) {
+        (
+            temp.path().join("accounts.yaml"),
+            temp.path().join("settings.yaml"),
+            temp.path().join(".env"),
+        )
+    }
+
+    #[test]
+    fn test_delete_account_removes_entry_override_and_passwords() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, env) = account_files(&temp);
+        fs::write(&accounts, VALID_ACCOUNTS).unwrap();
+        let mut data = account_data("Perso");
+        data.delete_after_export = Some(true);
+        save_account(data, &accounts, &settings).unwrap();
+        fs::write(
+            &env,
+            "PERSO_PASSWORD='a'\nPERSO_APPLICATION_PASSWORD='b'\nOTHER_PASSWORD='c'\n",
+        )
+        .unwrap();
+
+        let removed = delete_account("perso", &accounts, &settings, &env).unwrap();
+
+        assert_eq!(removed, 2);
+        assert!(load_raw_accounts(&accounts).unwrap().is_empty());
+        assert!(Settings::load(&settings).unwrap().accounts.is_empty());
+        assert_eq!(fs::read_to_string(&env).unwrap(), "OTHER_PASSWORD='c'\n");
+    }
+
+    #[test]
+    fn test_delete_account_unknown_name_changes_nothing() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, env) = account_files(&temp);
+        fs::write(&accounts, VALID_ACCOUNTS).unwrap();
+        fs::write(&env, "PERSO_PASSWORD='a'\n").unwrap();
+
+        let result = delete_account("Inconnu", &accounts, &settings, &env);
+
+        assert!(result.is_err());
+        assert_eq!(load_raw_accounts(&accounts).unwrap().len(), 1);
+        assert_eq!(fs::read_to_string(&env).unwrap(), "PERSO_PASSWORD='a'\n");
+    }
+
+    #[test]
+    fn test_remove_env_passwords_without_env_file_is_noop() {
+        let temp = TempDir::new().unwrap();
+        let env = temp.path().join(".env");
+
+        assert_eq!(remove_env_passwords(&env, "Perso").unwrap(), 0);
+        assert!(!env.exists());
+    }
+
+    #[test]
+    fn test_set_env_password_updates_application_password_key() {
+        let temp = TempDir::new().unwrap();
+        let env = temp.path().join(".env");
+        fs::write(&env, "PERSO_APPLICATION_PASSWORD='old'\nPERSO_PASSWORD='x'\n").unwrap();
+
+        set_env_password(&env, "Perso", "it's new").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&env).unwrap(),
+            "PERSO_APPLICATION_PASSWORD='it'\\''s new'\nPERSO_PASSWORD='x'\n"
+        );
+    }
+
+    #[test]
+    fn test_set_env_password_appends_plain_key_when_absent() {
+        let temp = TempDir::new().unwrap();
+        let env = temp.path().join(".env");
+        fs::write(&env, "OTHER_PASSWORD='c'\n").unwrap();
+
+        set_env_password(&env, "Mon Compte", "secret").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&env).unwrap(),
+            "OTHER_PASSWORD='c'\nMON_COMPTE_PASSWORD='secret'\n"
+        );
+    }
+
+    #[test]
+    fn test_save_account_create_refuses_existing_name() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, _) = account_files(&temp);
+        fs::write(&accounts, VALID_ACCOUNTS).unwrap();
+        let mut data = account_data("PERSO");
+        data.create = true;
+
+        assert!(save_account(data, &accounts, &settings).is_err());
+        assert_eq!(load_raw_accounts(&accounts).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_validate_new_account_name_rejects_forbidden_chars_and_empty() {
+        assert!(validate_new_account_name("", &[]).is_err());
+        assert!(validate_new_account_name("a/b", &[]).is_err());
+        assert!(validate_new_account_name(" pro", &[]).is_err());
+        assert!(validate_new_account_name("Pro", &[]).is_ok());
+    }
+
+    #[test]
+    fn test_validate_new_account_name_rejects_env_prefix_collision() {
+        let existing = vec![RawAccount {
+            name: "Mon Compte".to_string(),
+            server: "imap.example.org".to_string(),
+            port: 993,
+            username: "u".to_string(),
+            ignored_folders: Vec::new(),
+        }];
+
+        assert!(validate_new_account_name("Mon-Compte", &existing).is_err());
+    }
+
     #[test]
     fn test_save_settings_valid_keeps_unedited_fields() {
         let temp = TempDir::new().unwrap();
@@ -1252,6 +1702,35 @@ mod tests {
 
         assert!(format!("{:#}", err).contains("settings.yaml"));
         assert_eq!(fs::read(&path).unwrap(), INVALID_YAML.as_bytes());
+    }
+
+    #[test]
+    fn test_reload_outcome_valid_files_returns_accounts_and_settings() {
+        let temp = TempDir::new().unwrap();
+        let accounts_path = temp.path().join("accounts.yaml");
+        let settings_path = temp.path().join("settings.yaml");
+        fs::write(&accounts_path, VALID_ACCOUNTS).unwrap();
+
+        let outcome = reload_outcome(&settings_path, &accounts_path, None);
+
+        let reply: serde_json::Value = serde_json::from_str(&outcome.reply.unwrap()).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert!(reply["accounts"].as_array().is_some_and(|a| !a.is_empty()));
+        assert!(!outcome.should_close);
+    }
+
+    #[test]
+    fn test_reload_outcome_invalid_accounts_reports_error() {
+        let temp = TempDir::new().unwrap();
+        let accounts_path = temp.path().join("accounts.yaml");
+        let settings_path = temp.path().join("settings.yaml");
+        fs::write(&accounts_path, INVALID_YAML).unwrap();
+
+        let outcome = reload_outcome(&settings_path, &accounts_path, None);
+
+        let reply: serde_json::Value = serde_json::from_str(&outcome.reply.unwrap()).unwrap();
+        assert_eq!(reply["ok"], false);
+        assert!(reply["message"].as_str().unwrap().contains("accounts.yaml"));
     }
 
     #[test]

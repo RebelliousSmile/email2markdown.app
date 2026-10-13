@@ -241,6 +241,7 @@ fn parse_prefs_js(content: &str) -> Result<Vec<Account>> {
             skip_existing: true,
             collect_contacts: false,
             skip_signature_images: true,
+            batch_size: 0,
             delete_after_export: false,
             cleanup_empty_dirs: true,
         });

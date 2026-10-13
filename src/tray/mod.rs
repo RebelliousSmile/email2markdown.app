@@ -69,6 +69,7 @@ pub enum AppCommand {
         warning: Option<String>,
         progress_rx: mpsc::Receiver<ProgressUpdate>,
         on_close: Option<CloseCb>,
+        done_action: Option<ActionCb>,
         error_action: Option<ActionCb>,
         sender: Sender<ActionResult>,
         cancel_token: Option<Arc<AtomicBool>>,
@@ -83,14 +84,20 @@ pub enum AppCommand {
         window_id: WindowId,
         update: ProgressUpdate,
     },
-    /// IPC "action" from a progress window → run `error_action` then close.
-    ActionRequested {
+    /// Primary action offered after a successful progress completion.
+    DoneActionRequested {
+        window_id: WindowId,
+    },
+    /// Recovery action offered after a progress error.
+    ErrorActionRequested {
         window_id: WindowId,
     },
     /// Programmatic close (e.g. sent by an IPC handler after a save).
     CloseWindow {
         window_id: WindowId,
     },
+    /// Rebuild the tray menu (account submenus) after the account list changed.
+    RefreshMenu,
     /// Evaluate JS in the WebView of the given window.
     EvalScript {
         window_id: WindowId,
@@ -138,6 +145,7 @@ pub enum AppCommand {
 /// the parent HWND is destroyed), then window.
 struct ProgressState {
     on_close: Option<CloseCb>,
+    done_action: Option<ActionCb>,
     error_action: Option<ActionCb>,
     webview: WebView,
     // Kept alive for its Drop side-effect — webview must drop before window.

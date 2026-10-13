@@ -24,6 +24,7 @@ fn account() -> Account {
         skip_signature_images: false,
         delete_after_export: true,
         cleanup_empty_dirs: true,
+        batch_size: 0,
     }
 }
 
@@ -144,6 +145,7 @@ fn gmail_targeted_deletion_fixture() {
         skip_signature_images: false,
         delete_after_export: true,
         cleanup_empty_dirs: true,
+        batch_size: 0,
     };
     let mut exporter = ImapExporter::new(fixture, false);
     exporter.connect().unwrap();

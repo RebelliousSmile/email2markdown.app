@@ -67,6 +67,10 @@ pub struct AccountBehavior {
     pub delete_after_export: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cleanup_empty_dirs: Option<bool>,
+    /// Stop an export once this many messages were newly exported, so they can
+    /// be sorted before the next batch. `0` (or unset) disables batching.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -250,6 +254,10 @@ fn merge_account(raw: &RawAccount, settings: &Settings) -> Account {
             .and_then(|a| a.cleanup_empty_dirs)
             .or(def.cleanup_empty_dirs)
             .unwrap_or(true),
+        batch_size: per
+            .and_then(|a| a.batch_size)
+            .or(def.batch_size)
+            .unwrap_or(0),
     }
 }
 
@@ -287,6 +295,9 @@ pub struct Account {
     pub skip_signature_images: bool,
     pub delete_after_export: bool,
     pub cleanup_empty_dirs: bool,
+    /// Max newly-exported messages per run; `0` = no limit.
+    #[serde(default)]
+    pub batch_size: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -482,5 +493,44 @@ mod tests {
 
         let config = Config::load_with_settings(&accounts_path, &settings_path).unwrap();
         assert!(config.accounts[0].cleanup_empty_dirs);
+    }
+
+    fn load_batch_size(settings_yaml: &str) -> usize {
+        let temp = tempfile::TempDir::new().unwrap();
+        let accounts_path = temp.path().join("accounts.yaml");
+        let settings_path = temp.path().join("settings.yaml");
+        std::fs::write(
+            &accounts_path,
+            "accounts:\n  - name: Test\n    server: imap.example.com\n    port: 993\n    username: test@example.com\n",
+        )
+        .unwrap();
+        std::fs::write(&settings_path, settings_yaml).unwrap();
+        Config::load_with_settings(&accounts_path, &settings_path)
+            .unwrap()
+            .accounts[0]
+            .batch_size
+    }
+
+    #[test]
+    fn test_batch_size_default_zero() {
+        assert_eq!(load_batch_size("export_base_dir: /tmp/exports\n"), 0);
+    }
+
+    #[test]
+    fn test_batch_size_from_defaults() {
+        assert_eq!(
+            load_batch_size("export_base_dir: /tmp/exports\ndefaults:\n  batch_size: 100\n"),
+            100
+        );
+    }
+
+    #[test]
+    fn test_batch_size_per_account_override() {
+        assert_eq!(
+            load_batch_size(
+                "export_base_dir: /tmp/exports\ndefaults:\n  batch_size: 100\naccounts:\n  Test:\n    batch_size: 25\n"
+            ),
+            25
+        );
     }
 }

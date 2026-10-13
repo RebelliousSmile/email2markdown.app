@@ -156,6 +156,7 @@ Au premier lancement sans comptes configurés, le sous-menu **Export** est désa
 | Entrée | Action |
 |--------|--------|
 | Export compte › *Nom* | Exporte les emails du compte via IMAP, puis ouvre la fenêtre de revue du routage |
+| Reprendre le tri › *Nom* | Rouvre la revue pour les fichiers Markdown encore présents dans le répertoire d'arrivée |
 | Import Thunderbird | Importe comptes + mots de passe (dialog Oui/Non/Annuler) |
 | Choisir répertoire d'export… | Sélecteur de dossier → met à jour `settings.yaml` |
 | Paramètres… | Ouvre la fenêtre de configuration |
