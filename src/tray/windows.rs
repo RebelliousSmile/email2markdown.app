@@ -486,6 +486,9 @@ struct RuleCreatePayload {
     path: String,
     attr_kind: String,
     attr_value: String,
+    /// `true` = remove the same rule from the other destinations (user chose "move").
+    #[serde(default)]
+    move_rule: bool,
 }
 
 fn extract_addr_and_domain(from_raw: &str) -> (String, String) {
@@ -589,6 +592,7 @@ pub(super) fn build_route_window(
                 "date":          date,
                 "dest_path":     decision.rel_path,
                 "is_default":    decision.is_default,
+                "alternatives":  decision.alternatives,
                 "sender_email":  sender_email,
                 "sender_domain": sender_domain
             })
@@ -613,10 +617,31 @@ pub(super) fn build_route_window(
     // Inject data via initialization script to avoid NavigateToString's ~2 MB limit.
     // AddScriptToExecuteOnDocumentCreated (called by with_initialization_script) has no
     // such size restriction and runs before any page script, so the globals are ready.
+    // "kind:value" (lowercased) -> destinations already holding that rule, so the
+    // page can ask before the same rule is posted for a second destination.
+    let mut rule_owners: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for dest in crate::route::load_destinations() {
+        for rule in &dest.rules {
+            let key = match rule {
+                crate::route::MatchRule::Domain(v) => format!("domain:{}", v.to_lowercase()),
+                crate::route::MatchRule::From(v) => format!("from:{}", v.to_lowercase()),
+                _ => continue,
+            };
+            let owners = rule_owners.entry(key).or_default();
+            if !owners.contains(&dest.path) {
+                owners.push(dest.path.clone());
+            }
+        }
+    }
+    let rule_owners_json =
+        serde_json::to_string(&rule_owners).context("failed to serialize rule owners")?;
+
     let init_script = format!(
-        "window.__DECISIONS_DATA__={};window.__KNOWN_PATHS__={};",
+        "window.__DECISIONS_DATA__={};window.__KNOWN_PATHS__={};window.__RULE_OWNERS__={};",
         escape_json_for_script(&decisions_json),
-        escape_json_for_script(&known_paths_json)
+        escape_json_for_script(&known_paths_json),
+        escape_json_for_script(&rule_owners_json)
     );
 
     let html_template = include_str!("../../assets/route_review.html");
@@ -651,6 +676,7 @@ pub(super) fn build_route_window(
                                 dest_path: p.path,
                                 attr_kind: p.attr_kind,
                                 attr_value: p.attr_value,
+                                move_rule: p.move_rule,
                             });
                         }
                         Err(e) => {

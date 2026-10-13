@@ -621,6 +621,14 @@ pub fn export_to_markdown(
 fn html_to_markdown(html: &str) -> String {
     let converter = htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["head", "style", "script", "noscript", "title"])
+        .add_handler(vec!["td", "th"], crate::html_layout::cell_handler)
+        .add_handler(vec!["tr"], crate::html_layout::row_handler)
+        .add_handler(
+            vec!["span", "font"],
+            crate::html_layout::inline_style_handler,
+        )
+        .add_handler(vec!["p", "div"], crate::html_layout::block_style_handler)
+        .add_handler(vec!["a"], crate::html_layout::anchor_handler)
         .add_handler(
             vec!["img"],
             |handlers: &dyn htmd::element_handler::Handlers, element: htmd::Element| {
@@ -642,7 +650,7 @@ fn html_to_markdown(html: &str) -> String {
 
 /// True for an `<img>` that is invisible by construction (tracking pixel):
 /// a declared width or height of at most 2 pixels, or `display:none`.
-fn is_tracking_pixel(attrs: &[(&str, &str)]) -> bool {
+pub(crate) fn is_tracking_pixel(attrs: &[(&str, &str)]) -> bool {
     attrs.iter().any(|(name, raw)| {
         let value = raw.trim().trim_end_matches("px");
         match *name {
@@ -992,6 +1000,12 @@ static CID_IMAGE_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?i)!\[([^\]]*)\]\(\s*<?cid:([^)>\s]+)>?\s*\)").expect("static regex")
 });
 
+/// `[![alt](cid:id)](url)`: an embedded image wrapped in a link.
+static CID_LINKED_IMAGE_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)(\[\s*)(!\[[^\]]*\]\(\s*<?cid:[^)>\s]+>?\s*\))(\s*\]\([^)\s]*\))")
+        .expect("static regex")
+});
+
 /// Canonical form of a Content-ID, comparable with a `cid:` reference:
 /// no angle brackets, percent-decoded, lowercase.
 fn normalize_content_id(raw: &str) -> String {
@@ -1048,8 +1062,17 @@ fn inline_image_name(part: &ParsedMail, content_id: &str) -> Option<String> {
 /// that was filtered out or whose part is missing is dropped: a `cid:` link
 /// can never resolve in a standalone Markdown file.
 fn rewrite_cid_images(body: &str, saved: &HashMap<String, Option<String>>) -> String {
+    // A link wrapping only a dropped image would be left as `[](url)`: drop it too.
+    let body = CID_LINKED_IMAGE_RE.replace_all(body, |caps: &regex::Captures| {
+        let image = rewrite_cid_images(&caps[2], saved);
+        if image.is_empty() {
+            String::new()
+        } else {
+            format!("{}{}{}", &caps[1], image, &caps[3])
+        }
+    });
     CID_IMAGE_RE
-        .replace_all(body, |caps: &regex::Captures| {
+        .replace_all(&body, |caps: &regex::Captures| {
             match saved.get(&normalize_content_id(&caps[2])) {
                 Some(Some(file)) if file.contains([' ', '(', ')']) => {
                     format!("![{}](<{}>)", &caps[1], file)
@@ -1156,6 +1179,64 @@ pub struct ImapExporter {
     /// Set when the run stopped because `account.batch_size` was reached
     /// while messages remained to process.
     batch_full: bool,
+}
+
+/// Fetch the headers of one window of UIDs and drop the ones already exported
+/// or handled. Returns the UIDs still to download and the number skipped.
+///
+/// A failed header fetch keeps the whole window: the full fetch decides.
+fn prefilter_window(
+    session: &mut Session<Box<dyn ImapConnection>>,
+    window: &[u32],
+    exported: &ExportedIndex,
+    handled: &HashSet<String>,
+    mut contacts_collector: Option<&mut ContactsCollector>,
+    cancel_token: Option<&AtomicBool>,
+    debug_mode: bool,
+) -> (Vec<u32>, usize) {
+    if window.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let seq_set = window
+        .iter()
+        .map(|u| u.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let headers = match session.fetch(&seq_set, "RFC822.HEADER") {
+        Ok(headers) => headers,
+        Err(e) => {
+            if debug_mode {
+                eprintln!(
+                    "  Header pre-fetch failed, falling back to full fetch: {:#}",
+                    e
+                );
+            }
+            return (window.to_vec(), 0);
+        }
+    };
+    let mut skip_set = HashSet::new();
+    for message in headers.iter() {
+        if cancel_token.is_some_and(|t| t.load(Ordering::Relaxed)) {
+            break;
+        }
+        let (skip, analysis) =
+            should_skip_from_headers(message.header().unwrap_or(&[]), exported, handled);
+        if skip {
+            skip_set.insert(message.message);
+            // Collect contacts from skipped emails too
+            if let (Some(collector), Some(a)) = (contacts_collector.as_deref_mut(), analysis) {
+                for contact in a.contacts {
+                    collector.add(&a.email_type, contact);
+                }
+            }
+        }
+    }
+    let kept = window
+        .iter()
+        .filter(|u| !skip_set.contains(u))
+        .copied()
+        .collect();
+    (kept, skip_set.len())
 }
 
 fn progress_counts(
@@ -1825,233 +1906,226 @@ impl ImapExporter {
                 ));
             }
 
-            // Search for all messages
-            let uids = session.search("ALL")?;
-            let uids_vec: Vec<_> = uids.into_iter().collect();
+            // Search for all messages; the server answers with an unordered set.
+            let mut uids_vec: Vec<u32> = session.search("ALL")?.into_iter().collect();
+            uids_vec.sort_unstable();
 
-            // Pre-filter: batch fetch headers, skip already-exported without downloading body
-            let (filtered_uids, pre_skipped, _already_exported_uids) =
-                if self.account.skip_existing && !uids_vec.is_empty() {
-                    let seq_set = uids_vec
-                        .iter()
-                        .map(|u| u.to_string())
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    match session.fetch(&seq_set, "RFC822.HEADER") {
-                        Ok(headers) => {
-                            let mut skip_set = HashSet::new();
-                            for message in headers.iter() {
-                                if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
-                                    break;
-                                }
-                                let (skip, analysis) = should_skip_from_headers(
-                                    message.header().unwrap_or(&[]),
-                                    &exported,
-                                    &handled,
-                                );
-                                if skip {
-                                    skip_set.insert(message.message);
-                                    // Collect contacts from skipped emails too
-                                    if let (Some(collector), Some(a)) =
-                                        (contacts_collector.as_deref_mut(), analysis)
-                                    {
-                                        for contact in a.contacts {
-                                            collector.add(&a.email_type, contact);
-                                        }
-                                    }
-                                }
-                            }
-                            let skipped = skip_set.len();
-                            let already_exported: Vec<u32> = skip_set.iter().copied().collect();
-                            let filtered = uids_vec
-                                .iter()
-                                .filter(|u| !skip_set.contains(u))
-                                .copied()
-                                .collect::<Vec<_>>();
-                            (filtered, skipped, already_exported)
-                        }
-                        Err(e) => {
-                            if self.debug_mode {
-                                eprintln!(
-                                    "  Header pre-fetch failed, falling back to full fetch: {:#}",
-                                    e
-                                );
-                            }
-                            (uids_vec, 0, vec![])
-                        }
-                    }
-                } else {
-                    (uids_vec, 0, vec![])
-                };
+            // With a batch limit the headers are pre-fetched window by window: a
+            // run that stops after `batch_size` exports never reads the whole
+            // mailbox. Without a limit there is a single window.
+            let window_size = if self.account.batch_size > 0 {
+                crate::contextual_export::HEADER_UID_BATCH
+            } else {
+                uids_vec.len().max(1)
+            };
 
             // [3] Progress indicator
-            let total_to_process = filtered_uids.len();
+            let total_to_process = uids_vec.len();
             let mut progress = ProgressIndicator::new(&folder.display, total_to_process);
             let mut stats = ExportStats::default();
             let mut folder_decisions: Vec<(PathBuf, RouteDecision)> = Vec::new();
-            stats.skipped += pre_skipped;
             let mut last_reported_batch_exported = self.batch_exported;
+            let mut examined = 0usize;
+            let mut stop = false;
 
-            for (idx, uid) in filtered_uids.into_iter().enumerate() {
-                if idx % 10 == 0 {
-                    if let Some(s) = on_status {
-                        if self.account.batch_size > 0 {
-                            s(&format!(
-                                "{} — lot {}/{} exportés · {}/{} messages examinés",
-                                folder.display,
-                                self.batch_exported,
+            for window in uids_vec.chunks(window_size) {
+                if cancel_token.is_some_and(|t| t.load(Ordering::Relaxed)) {
+                    break;
+                }
+                // Pre-filter: fetch headers, skip already-exported without downloading body
+                let (filtered_uids, pre_skipped) = if self.account.skip_existing {
+                    prefilter_window(
+                        session,
+                        window,
+                        &exported,
+                        &handled,
+                        contacts_collector.as_deref_mut(),
+                        cancel_token,
+                        self.debug_mode,
+                    )
+                } else {
+                    (window.to_vec(), 0)
+                };
+                stats.skipped += pre_skipped;
+                examined += pre_skipped;
+                for _ in 0..pre_skipped {
+                    progress.inc();
+                }
+
+                for uid in filtered_uids {
+                    let idx = examined;
+                    examined += 1;
+                    if idx % 10 == 0 {
+                        if let Some(s) = on_status {
+                            if self.account.batch_size > 0 {
+                                s(&format!(
+                                    "{} — lot {}/{} exportés · {}/{} messages examinés",
+                                    folder.display,
+                                    self.batch_exported,
+                                    self.account.batch_size,
+                                    idx,
+                                    total_to_process
+                                ));
+                            } else {
+                                s(&format!(
+                                    "{} — {}/{} messages examinés, {} exportés",
+                                    folder.display, idx, total_to_process, stats.exported
+                                ));
+                            }
+                        }
+                        if let Some(f) = on_progress {
+                            let (current, total) = progress_counts(
                                 self.account.batch_size,
+                                self.batch_exported,
                                 idx,
-                                total_to_process
-                            ));
-                        } else {
-                            s(&format!(
-                                "{} — {}/{} messages examinés, {} exportés",
-                                folder.display, idx, total_to_process, stats.exported
-                            ));
+                                total_to_process,
+                            );
+                            f(current, total);
                         }
                     }
-                    if let Some(f) = on_progress {
-                        let (current, total) = progress_counts(
-                            self.account.batch_size,
-                            self.batch_exported,
-                            idx,
-                            total_to_process,
-                        );
-                        f(current, total);
+                    if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
+                        stop = true;
+                        break;
                     }
-                }
-                if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
-                    break;
-                }
-                if self.account.batch_size > 0 && self.batch_exported >= self.account.batch_size {
-                    self.batch_full = true;
-                    break;
-                }
+                    if self.account.batch_size > 0 && self.batch_exported >= self.account.batch_size
+                    {
+                        self.batch_full = true;
+                        stop = true;
+                        break;
+                    }
 
-                // [4] Retry logic for fetch
-                let fetch_result = with_retry(&self.network_config, "fetch", || {
-                    session.fetch(uid.to_string(), "(UID RFC822)")
-                });
+                    // [4] Retry logic for fetch
+                    let fetch_result = with_retry(&self.network_config, "fetch", || {
+                        session.fetch(uid.to_string(), "(UID RFC822)")
+                    });
 
-                let messages = match fetch_result {
-                    Ok(m) => m,
-                    Err(e) => {
-                        if self.debug_mode {
-                            println!("  Failed to fetch message {}: {:#}", uid, e);
-                        }
-                        stats.errors += 1;
-                        progress.inc();
-                        // A transport failure (read timeout, reset) leaves the session
-                        // unusable: stop here instead of timing out on every message.
-                        if matches!(e, imap::Error::Io(_)) {
-                            eprintln!(
+                    let messages = match fetch_result {
+                        Ok(m) => m,
+                        Err(e) => {
+                            if self.debug_mode {
+                                println!("  Failed to fetch message {}: {:#}", uid, e);
+                            }
+                            stats.errors += 1;
+                            progress.inc();
+                            // A transport failure (read timeout, reset) leaves the session
+                            // unusable: stop here instead of timing out on every message.
+                            if matches!(e, imap::Error::Io(_)) {
+                                eprintln!(
                                 "warning: connection to {} lost in {}, folder export aborted: {e}",
                                 self.account.server, folder.display
                             );
-                            break;
-                        }
-                        continue;
-                    }
-                };
-
-                // Gmail deletion targets X-GM-MSGID, which RFC822 does not carry.
-                let provider_id = if self.is_gmail {
-                    fetch_gmail_msgid(session, uid)
-                } else {
-                    None
-                };
-
-                for message in messages.iter() {
-                    if let Some(body) = message.body() {
-                        let source_proof = build_global_source_proof(
-                            &self.account.name,
-                            folder,
-                            mailbox_uid_validity,
-                            message.uid,
-                            body,
-                            provider_id.clone(),
-                            self.is_gmail,
-                        );
-                        if source_proof.is_none() {
-                            proofless += 1;
-                        }
-                        let already_handled = source_proof
-                            .as_ref()
-                            .and_then(|proof| proof.identity.message_id.as_ref())
-                            .is_some_and(|id| handled.contains(id));
-                        if already_handled {
-                            stats.skipped += 1;
+                                stop = true;
+                                break;
+                            }
                             continue;
                         }
-                        let mut ctx = ExportContext {
-                            export_directory: &export_directory,
-                            base_export_directory: &base_export_directory,
-                            account: &self.account,
-                            debug_mode: self.debug_mode,
-                            dests,
-                            source_proof: source_proof.as_ref(),
-                            organize_by_date,
-                            exported: Some(&mut exported),
-                        };
-                        let result = export_to_markdown(
-                            body,
-                            vec![folder.display.clone()],
-                            contacts_collector.as_deref_mut(),
-                            &mut ctx,
-                        );
+                    };
 
-                        match result {
-                            Ok(Some((path, decision))) => {
-                                stats.exported += 1;
-                                self.batch_exported += 1;
-                                folder_decisions.push((path, decision));
+                    // Gmail deletion targets X-GM-MSGID, which RFC822 does not carry.
+                    let provider_id = if self.is_gmail {
+                        fetch_gmail_msgid(session, uid)
+                    } else {
+                        None
+                    };
+
+                    for message in messages.iter() {
+                        if let Some(body) = message.body() {
+                            let source_proof = build_global_source_proof(
+                                &self.account.name,
+                                folder,
+                                mailbox_uid_validity,
+                                message.uid,
+                                body,
+                                provider_id.clone(),
+                                self.is_gmail,
+                            );
+                            if source_proof.is_none() {
+                                proofless += 1;
                             }
-                            Ok(None) => stats.skipped += 1,
-                            Err(e) => {
-                                // Malformed messages (RFC-invalid MIME, broken headers, etc.)
-                                // are counted as skipped rather than errored: they cannot be
-                                // exported by design and should not contribute to the error
-                                // count that signals transient/recoverable failures.
-                                let is_malformed =
-                                    e.downcast_ref::<mailparse::MailParseError>().is_some();
-                                if self.debug_mode {
-                                    let label = if is_malformed {
-                                        "Skipping malformed message"
-                                    } else {
-                                        "Error exporting message"
-                                    };
-                                    println!("  {} {}: {:#}", label, uid, e);
-                                    let dump_dir = base_export_directory.join("_failed");
-                                    if fs::create_dir_all(&dump_dir).is_ok() {
-                                        let dump_path = dump_dir.join(format!(
-                                            "{}_uid_{}.eml",
-                                            sanitize_filename(&folder.display),
-                                            uid
-                                        ));
-                                        let _ = fs::write(&dump_path, body);
-                                        println!("  Raw message dumped to {}", dump_path.display());
-                                    }
+                            let already_handled = source_proof
+                                .as_ref()
+                                .and_then(|proof| proof.identity.message_id.as_ref())
+                                .is_some_and(|id| handled.contains(id));
+                            if already_handled {
+                                stats.skipped += 1;
+                                continue;
+                            }
+                            let mut ctx = ExportContext {
+                                export_directory: &export_directory,
+                                base_export_directory: &base_export_directory,
+                                account: &self.account,
+                                debug_mode: self.debug_mode,
+                                dests,
+                                source_proof: source_proof.as_ref(),
+                                organize_by_date,
+                                exported: Some(&mut exported),
+                            };
+                            let result = export_to_markdown(
+                                body,
+                                vec![folder.display.clone()],
+                                contacts_collector.as_deref_mut(),
+                                &mut ctx,
+                            );
+
+                            match result {
+                                Ok(Some((path, decision))) => {
+                                    stats.exported += 1;
+                                    self.batch_exported += 1;
+                                    folder_decisions.push((path, decision));
                                 }
-                                if is_malformed {
-                                    stats.skipped += 1;
-                                } else {
-                                    stats.errors += 1;
+                                Ok(None) => stats.skipped += 1,
+                                Err(e) => {
+                                    // Malformed messages (RFC-invalid MIME, broken headers, etc.)
+                                    // are counted as skipped rather than errored: they cannot be
+                                    // exported by design and should not contribute to the error
+                                    // count that signals transient/recoverable failures.
+                                    let is_malformed =
+                                        e.downcast_ref::<mailparse::MailParseError>().is_some();
+                                    if self.debug_mode {
+                                        let label = if is_malformed {
+                                            "Skipping malformed message"
+                                        } else {
+                                            "Error exporting message"
+                                        };
+                                        println!("  {} {}: {:#}", label, uid, e);
+                                        let dump_dir = base_export_directory.join("_failed");
+                                        if fs::create_dir_all(&dump_dir).is_ok() {
+                                            let dump_path = dump_dir.join(format!(
+                                                "{}_uid_{}.eml",
+                                                sanitize_filename(&folder.display),
+                                                uid
+                                            ));
+                                            let _ = fs::write(&dump_path, body);
+                                            println!(
+                                                "  Raw message dumped to {}",
+                                                dump_path.display()
+                                            );
+                                        }
+                                    }
+                                    if is_malformed {
+                                        stats.skipped += 1;
+                                    } else {
+                                        stats.errors += 1;
+                                    }
                                 }
                             }
                         }
+                    }
+
+                    // [3] Update progress
+                    progress.inc();
+                    if self.account.batch_size > 0
+                        && self.batch_exported != last_reported_batch_exported
+                    {
+                        if let Some(f) = on_progress {
+                            f(self.batch_exported, self.account.batch_size);
+                        }
+                        last_reported_batch_exported = self.batch_exported;
                     }
                 }
 
-                // [3] Update progress
-                progress.inc();
-                if self.account.batch_size > 0
-                    && self.batch_exported != last_reported_batch_exported
-                {
-                    if let Some(f) = on_progress {
-                        f(self.batch_exported, self.account.batch_size);
-                    }
-                    last_reported_batch_exported = self.batch_exported;
+                if stop {
+                    break;
                 }
             }
 
@@ -3143,5 +3217,106 @@ abc123
             "should return None when no filename parameter: got {:?}",
             result
         );
+    }
+
+    #[test]
+    fn test_html_to_markdown_layout_table_cells_share_a_line() {
+        let out = html_to_markdown(
+            "<table><tr><td>Hello</td><td>World</td></tr><tr><td>Line2</td><td>x</td></tr></table>",
+        );
+        assert_eq!(out, "Hello World\n\nLine2 x");
+        assert!(!out.contains("HelloWorld"), "{out}");
+        assert!(!out.contains('|'), "{out}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_nested_layout_tables_flatten() {
+        let out = html_to_markdown(
+            "<table><tr><td><table><tr><td>Rue 1</td><td>75000</td></tr></table></td></tr></table>",
+        );
+        assert_eq!(out, "Rue 1 75000");
+        assert!(!out.contains("Rue 175000"), "{out}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_data_table_with_header_row_is_kept() {
+        let out = html_to_markdown(
+            "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
+        );
+        assert!(out.contains("| A | B |"), "{out}");
+        assert!(out.contains("| 1 | 2 |"), "{out}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_layout_cell_keeps_block_content_apart() {
+        let out =
+            html_to_markdown("<table><tr><td><p>One</p><p>Two</p></td><td>Side</td></tr></table>");
+        assert!(out.contains("One\n\nTwo"), "{out}");
+        assert!(out.contains("Side"), "{out}");
+        assert!(!out.contains("TwoSide"), "{out}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_css_bold_becomes_markdown_bold() {
+        let out = html_to_markdown(
+            "<p>a <span style=\"font-weight:bold\">Bold</span> b</p>\
+             <p style=\"font-weight:700\">Para</p>\
+             <p style=\"font-weight:400\">Plain</p>",
+        );
+        assert!(out.contains("a **Bold** b"), "{out}");
+        assert!(out.contains("**Para**"), "{out}");
+        assert!(out.contains("Plain"), "{out}");
+        assert!(!out.contains("**Plain**"), "{out}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_css_bold_does_not_double_wrap() {
+        let out = html_to_markdown(
+            "<p style=\"font-weight:bold\"><span style=\"font-weight:bold\">Hi</span> <b>there</b></p>",
+        );
+        assert!(!out.contains("****"), "{out}");
+        assert!(out.contains("Hi"), "{out}");
+    }
+
+    #[test]
+    fn test_is_bold_style_thresholds() {
+        use crate::html_layout::is_bold_style;
+        assert!(is_bold_style("color:red; font-weight: BOLD"));
+        assert!(is_bold_style("font-weight:600"));
+        assert!(!is_bold_style("font-weight:500"));
+        assert!(!is_bold_style("font-weight:normal"));
+        assert!(!is_bold_style("color:red"));
+    }
+
+    #[test]
+    fn test_html_to_markdown_link_wrapping_only_a_pixel_is_dropped() {
+        let out = html_to_markdown(
+            "<p>Hello <a href=\"https://t.test/o\"><img src=\"https://t.test/p.gif\" width=\"1\" height=\"1\"></a></p>",
+        );
+        assert_eq!(out, "Hello");
+        assert!(!out.contains("[]("), "{out}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_link_with_text_is_kept() {
+        let out = html_to_markdown("<a href=\"https://x.test/u\">Open <img src=\"https://x.test/i.png\" width=\"1\" height=\"1\"></a>");
+        assert!(out.contains("[Open"), "{out}");
+        assert!(out.contains("https://x.test/u"), "{out}");
+    }
+
+    #[test]
+    fn test_rewrite_cid_images_drops_link_around_missing_image() {
+        let out = rewrite_cid_images("a [![x](cid:zzz)](https://x.test/u) b", &HashMap::new());
+        assert!(!out.contains("[]("), "{out}");
+        assert!(!out.contains("x.test"), "{out}");
+        assert!(!out.contains("cid:"), "{out}");
+    }
+
+    #[test]
+    fn test_rewrite_cid_images_keeps_link_around_saved_image() {
+        let mut saved = HashMap::new();
+        saved.insert("a@x".to_string(), Some("inline_a.png".to_string()));
+        let out = rewrite_cid_images("[![x](cid:a@x)](https://x.test/u)", &saved);
+        assert_eq!(out, "[![x](inline_a.png)](https://x.test/u)");
     }
 }

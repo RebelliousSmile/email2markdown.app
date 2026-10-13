@@ -617,6 +617,9 @@ pub struct RouteDecision {
     pub matched_rule: Option<String>,
     /// `true` when no rule matched and the fallback path was used.
     pub is_default: bool,
+    /// Other destinations (bare paths) whose rules also matched. Empty when the
+    /// match is unambiguous.
+    pub alternatives: Vec<String>,
 }
 
 /// A match condition inside a `destinations.txt` entry.
@@ -808,33 +811,30 @@ pub fn route_email(
 
     // Evaluate destinations in file order; within each destination, evaluate rules in
     // declaration order. First match wins — no priority hierarchy between rule types.
+    // Every other destination that also matches is reported as an alternative so the
+    // review window can let the user pick instead of silently losing the tie.
+    let mut chosen: Option<(String, String)> = None;
+    let mut alternatives: Vec<String> = Vec::new();
     for dest in dests {
-        for rule in &dest.rules {
-            let matched = match rule {
-                MatchRule::Domain(d) => {
-                    let meta_domain = meta.domain.to_lowercase();
-                    let rule_domain = d.to_lowercase();
-                    // Exact match OR subdomain (suffix ".{d}") — avoids false positives
-                    // e.g. "notacme.com" must NOT match "acme.com".
-                    meta_domain == rule_domain
-                        || meta_domain.ends_with(&format!(".{}", rule_domain))
+        let Some(rule) = dest.rules.iter().find(|r| rule_matches(meta, r)) else {
+            continue;
+        };
+        match &chosen {
+            None => chosen = Some((dest.path.clone(), format!("{:?}", rule))),
+            Some((path, _)) => {
+                if dest.path != *path && !alternatives.contains(&dest.path) {
+                    alternatives.push(dest.path.clone());
                 }
-                MatchRule::From(a) => meta.from.eq_ignore_ascii_case(a),
-                MatchRule::Correspondent(a) => email_has_correspondent(meta, a),
-                // No Regex::new here — k is dynamic; str::contains is correct.
-                MatchRule::Subject(k) => meta.subject.to_lowercase().contains(&k.to_lowercase()),
-                MatchRule::Account(a) => meta.account == *a,
-            };
-
-            if matched {
-                let rule_desc = format!("{:?}", rule);
-                return RouteDecision {
-                    rel_path: dated(&dest.path),
-                    matched_rule: Some(rule_desc),
-                    is_default: false,
-                };
             }
         }
+    }
+    if let Some((path, rule_desc)) = chosen {
+        return RouteDecision {
+            rel_path: dated(&path),
+            matched_rule: Some(rule_desc),
+            is_default: false,
+            alternatives,
+        };
     }
 
     // No deterministic rule matched — look for a `default`-tagged entry.
@@ -843,6 +843,7 @@ pub fn route_email(
             rel_path: dated(&default_dest.path),
             matched_rule: None,
             is_default: true,
+            alternatives: Vec::new(),
         };
     }
 
@@ -851,7 +852,105 @@ pub fn route_email(
         rel_path: dated(DEFAULT_BASE),
         matched_rule: None,
         is_default: true,
+        alternatives: Vec::new(),
     }
+}
+
+/// True when `rule` matches the email described by `meta`.
+pub fn rule_matches(meta: &EmailMeta, rule: &MatchRule) -> bool {
+    match rule {
+        MatchRule::Domain(d) => {
+            let meta_domain = meta.domain.to_lowercase();
+            let rule_domain = d.to_lowercase();
+            // Exact match OR subdomain (suffix ".{d}") — avoids false positives
+            // e.g. "notacme.com" must NOT match "acme.com".
+            meta_domain == rule_domain || meta_domain.ends_with(&format!(".{}", rule_domain))
+        }
+        MatchRule::From(a) => meta.from.eq_ignore_ascii_case(a),
+        MatchRule::Correspondent(a) => email_has_correspondent(meta, a),
+        // No Regex::new here — k is dynamic; str::contains is correct.
+        MatchRule::Subject(k) => meta.subject.to_lowercase().contains(&k.to_lowercase()),
+        MatchRule::Account(a) => meta.account == *a,
+    }
+}
+
+/// True when two rules are the same condition (same kind, same value
+/// ignoring case — `Account` is case-sensitive like the matcher).
+pub fn same_rule(a: &MatchRule, b: &MatchRule) -> bool {
+    match (a, b) {
+        (MatchRule::Domain(x), MatchRule::Domain(y))
+        | (MatchRule::From(x), MatchRule::From(y))
+        | (MatchRule::Correspondent(x), MatchRule::Correspondent(y))
+        | (MatchRule::Subject(x), MatchRule::Subject(y)) => x.eq_ignore_ascii_case(y),
+        (MatchRule::Account(x), MatchRule::Account(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// Paths of the destinations, other than `target_path`, that already hold `rule`.
+/// A non-empty result means the rule would be posted for several destinations.
+pub fn rule_conflicts(
+    config: &crate::destinations::DestinationsConfig,
+    target_path: &str,
+    rule: &MatchRule,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in &config.destinations {
+        if entry.path.eq_ignore_ascii_case(target_path) || out.contains(&entry.path) {
+            continue;
+        }
+        if entry
+            .rules
+            .iter()
+            .any(|r| same_rule(&MatchRule::from(r), rule))
+        {
+            out.push(entry.path.clone());
+        }
+    }
+    out
+}
+
+/// Remove `rule` from every destination except `keep_path`. Returns how many
+/// destinations lost it. Used when the user chooses to move a rule.
+pub fn remove_rule_elsewhere(
+    config: &mut crate::destinations::DestinationsConfig,
+    keep_path: &str,
+    rule: &MatchRule,
+) -> usize {
+    let mut removed = 0;
+    for entry in config
+        .destinations
+        .iter_mut()
+        .filter(|e| !e.path.eq_ignore_ascii_case(keep_path))
+    {
+        let before = entry.rules.len();
+        entry
+            .rules
+            .retain(|r| !same_rule(&MatchRule::from(r), rule));
+        if entry.rules.len() != before {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// `upsert_rule` with an explicit conflict policy: when `move_rule` is true the
+/// same rule is first removed from every other destination.
+pub fn upsert_rule_exclusive(
+    destinations_file: &Path,
+    target_path: &str,
+    rule: MatchRule,
+    move_rule: bool,
+) -> Result<()> {
+    let mut config = crate::destinations::load_yaml(destinations_file)
+        .with_context(|| format!("failed to load {}", destinations_file.display()))?;
+    if move_rule {
+        remove_rule_elsewhere(&mut config, target_path, &rule);
+    }
+    let dest_rule = crate::destinations::DestinationRule::from(rule);
+    crate::destinations::upsert_entry(&mut config, target_path, &[dest_rule]);
+    crate::destinations::save_yaml(destinations_file, &config)
+        .with_context(|| format!("failed to save {}", destinations_file.display()))
 }
 
 /// Return the normalized form used for exact address comparisons.

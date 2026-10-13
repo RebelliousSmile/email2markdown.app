@@ -194,6 +194,9 @@ fn handle_add_rule(
         "account" => DestinationRule::Account(value.to_string()),
         _ => return DestGuiIpcResult::Noop,
     };
+    if data.get("move").and_then(Value::as_bool).unwrap_or(false) {
+        crate::route::remove_rule_elsewhere(cfg, path, &crate::route::MatchRule::from(&rule));
+    }
     crate::destinations::add_rule(cfg, path, rule);
     DestGuiIpcResult::StateChanged
 }

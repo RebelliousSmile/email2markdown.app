@@ -113,6 +113,8 @@ pub enum AppCommand {
         dest_path: String,
         attr_kind: String,
         attr_value: String,
+        /// Remove the same rule from other destinations before adding it here.
+        move_rule: bool,
     },
     /// Open the destinations management GUI window.
     OpenDestGui {

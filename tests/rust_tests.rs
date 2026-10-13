@@ -1763,6 +1763,72 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         // (already ensured by the is_err() check above)
     }
 
+    // ── rule conflicts ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_route_email_reports_alternatives_for_shared_rule() {
+        let content = "Perso/A | domain:acme.com\nPerso/B | domain:acme.com\nPerso/C | domain:other.com\n";
+        let dests = parse_destinations(content).unwrap();
+        let meta = make_meta(
+            "alice@acme.com",
+            "acme.com",
+            "Hello",
+            "personal",
+            "2026-06-15T10:00:00+00:00",
+        );
+        let decision = route_email(&meta, &dests, false);
+        // Inclusive: first destination wins, second is offered
+        assert_eq!(decision.rel_path, "Perso/A");
+        assert_eq!(decision.alternatives, vec!["Perso/B".to_string()]);
+        // Exclusive: the non-matching destination is not offered
+        assert!(!decision.alternatives.contains(&"Perso/C".to_string()));
+    }
+
+    #[test]
+    fn test_route_email_no_alternatives_when_unambiguous() {
+        let dests = parse_destinations("Perso/A | domain:acme.com\nPerso/B | domain:other.com\n")
+            .unwrap();
+        let meta = make_meta(
+            "alice@acme.com",
+            "acme.com",
+            "Hello",
+            "personal",
+            "2026-06-15T10:00:00+00:00",
+        );
+        let decision = route_email(&meta, &dests, false);
+        assert!(decision.alternatives.is_empty());
+    }
+
+    #[test]
+    fn test_rule_conflicts_and_move_rule() {
+        use email_to_markdown::destinations::{DestinationEntry, DestinationRule, DestinationsConfig};
+        let mut cfg = DestinationsConfig {
+            destinations: vec![
+                DestinationEntry {
+                    path: "Perso/A".into(),
+                    rules: vec![DestinationRule::Domain("acme.com".into())],
+                    ..Default::default()
+                },
+                DestinationEntry {
+                    path: "Perso/B".into(),
+                    ..Default::default()
+                },
+            ],
+        };
+        let rule = email_to_markdown::route::MatchRule::Domain("ACME.com".into());
+        // Inclusive: the other destination holding the rule is reported (case-insensitive)
+        assert_eq!(
+            email_to_markdown::route::rule_conflicts(&cfg, "Perso/B", &rule),
+            vec!["Perso/A".to_string()]
+        );
+        // Exclusive: the target itself is never its own conflict
+        assert!(email_to_markdown::route::rule_conflicts(&cfg, "Perso/A", &rule).is_empty());
+
+        let removed = email_to_markdown::route::remove_rule_elsewhere(&mut cfg, "Perso/B", &rule);
+        assert_eq!(removed, 1);
+        assert!(cfg.destinations[0].rules.is_empty());
+    }
+
     // ── route_email — domain matching ────────────────────────────────────────
 
     #[test]

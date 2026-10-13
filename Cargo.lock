@@ -903,6 +903,7 @@ dependencies = [
  "imap-proto",
  "libloading 0.8.9",
  "mailparse",
+ "markup5ever_rcdom",
  "md5",
  "native-tls",
  "open",

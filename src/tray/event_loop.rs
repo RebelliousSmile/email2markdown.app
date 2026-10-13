@@ -160,9 +160,10 @@ pub(super) fn run() -> Result<()> {
                 dest_path,
                 attr_kind,
                 attr_value,
-            }) => {
-                handle_persist_routing_rule(&windows, window_id, dest_path, attr_kind, attr_value)
-            }
+                move_rule,
+            }) => handle_persist_routing_rule(
+                &windows, window_id, dest_path, attr_kind, attr_value, move_rule,
+            ),
             Event::UserEvent(AppCommand::OpenRouteReview(decisions)) => {
                 handle_open_route_review(target, &proxy, &mut windows, decisions, &result_sender)
             }
@@ -369,6 +370,7 @@ fn handle_persist_routing_rule(
     dest_path: String,
     attr_kind: String,
     attr_value: String,
+    move_rule: bool,
 ) {
     // Resolve destinations.yaml path from settings (shared resolver).
     let dest_file = crate::route::destinations_path();
@@ -395,7 +397,7 @@ fn handle_persist_routing_rule(
         return;
     };
 
-    match crate::route::upsert_rule(&dest_file, &dest_path, rule) {
+    match crate::route::upsert_rule_exclusive(&dest_file, &dest_path, rule, move_rule) {
         Err(e) => {
             let msg = format!("{:#}", e);
             if let (Ok(js_str), Some(WState::Route(state))) =

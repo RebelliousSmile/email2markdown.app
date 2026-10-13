@@ -85,6 +85,19 @@
     gap: 2px;
     flex-shrink: 0;
   }
+  #dest-list li .rule-count { color: #888; font-size: 11px; }
+  #dest-list li .move-btn {
+    border: 1px solid #ccc;
+    background: #fff;
+    border-radius: 3px;
+    font-size: 10px;
+    line-height: 1;
+    padding: 3px 5px;
+    cursor: pointer;
+    color: #555;
+  }
+  #dest-list li .move-btn:hover:not(:disabled) { background: #e3f2fd; border-color: #1e88e5; }
+  #dest-list li .move-btn:disabled { opacity: 0.35; cursor: default; }
   /* ── Right panel ── */
   #detail-panel {
     flex: 1;
@@ -350,13 +363,6 @@
         </div>
       </div>
 
-      <div class="detail-section">
-        <h3>Ordre</h3>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-icon" id="btn-move-up">▲ Monter</button>
-          <button class="btn btn-icon" id="btn-move-down">▼ Descendre</button>
-        </div>
-      </div>
     </div>
   </main>
 </div>
@@ -475,7 +481,7 @@
     var ul = document.getElementById('dest-list');
     ul.innerHTML = '';
     ul.classList.toggle('select-mode', selectionMode);
-    state.destinations.forEach(function (entry) {
+    state.destinations.forEach(function (entry, index) {
       var li = document.createElement('li');
       if (selectionMode) {
         if (multiSelected.has(entry.path)) li.classList.add('multi-selected');
@@ -492,7 +498,11 @@
 
       var pathSpan = document.createElement('span');
       pathSpan.className = 'path';
-      pathSpan.textContent = entry.path;
+      pathSpan.textContent = entry.path + ' ';
+      var count = document.createElement('span');
+      count.className = 'rule-count';
+      count.textContent = '(' + (entry.rules || []).length + ')';
+      pathSpan.appendChild(count);
       li.appendChild(pathSpan);
 
       if (entry.default) {
@@ -500,6 +510,25 @@
         badge.className = 'badge-default';
         badge.textContent = 'défaut';
         li.appendChild(badge);
+      }
+
+      if (!selectionMode) {
+        var arrows = document.createElement('span');
+        arrows.className = 'btn-row';
+        [['▲', 'Monter', -1, index === 0], ['▼', 'Descendre', 1, index === state.destinations.length - 1]]
+          .forEach(function (spec) {
+            var b = document.createElement('button');
+            b.className = 'move-btn';
+            b.textContent = spec[0];
+            b.title = spec[1];
+            b.disabled = spec[3];
+            b.addEventListener('click', function (ev) {
+              ev.stopPropagation();
+              moveEntry(entry.path, spec[2]);
+            });
+            arrows.appendChild(b);
+          });
+        li.appendChild(arrows);
       }
 
       ul.appendChild(li);
@@ -603,28 +632,39 @@
     var kind = document.getElementById('rule-kind').value;
     var value = document.getElementById('rule-value').value.trim();
     if (!value) return;
-    send('add_rule', { path: selectedPath, kind: kind, value: value });
+    // Same rule already on another destination: let the user choose, never
+    // leave the tie to file order.
+    var lower = value.toLowerCase();
+    var owners = state.destinations.filter(function (e) {
+      return e.path !== selectedPath && (e.rules || []).some(function (r) {
+        var v = r[kind];
+        return typeof v === 'string' && (kind === 'account' ? v === value : v.toLowerCase() === lower);
+      });
+    }).map(function (e) { return e.path; });
+    var move = false;
+    if (owners.length) {
+      var names = owners.map(function (p) { return '« ' + p + ' »'; }).join(', ');
+      if (confirm('Cette règle (' + kind + ' : ' + value + ') est déjà posée sur ' + names + '.\n\n' +
+                  'OK = la déplacer vers « ' + selectedPath + ' »\nAnnuler = autre choix')) {
+        move = true;
+      } else if (!confirm('La garder sur les deux destinations ?\n(le premier de la liste l’emportera au tri)\n\n' +
+                          'OK = garder les deux\nAnnuler = abandonner')) {
+        return;
+      }
+    }
+    send('add_rule', { path: selectedPath, kind: kind, value: value, move: move });
     document.getElementById('rule-value').value = '';
   });
 
-  // Move up / down
-  document.getElementById('btn-move-up').addEventListener('click', function () {
-    if (!selectedPath) return;
-    var idx = state.destinations.findIndex(function (e) { return e.path === selectedPath; });
-    if (idx <= 0) return;
+  // Move up / down: arrows live on each list row.
+  function moveEntry(path, delta) {
+    var idx = state.destinations.findIndex(function (e) { return e.path === path; });
+    var target = idx + delta;
+    if (idx < 0 || target < 0 || target >= state.destinations.length) return;
     var order = state.destinations.map(function (e) { return e.path; });
-    order.splice(idx - 1, 0, order.splice(idx, 1)[0]);
+    order.splice(target, 0, order.splice(idx, 1)[0]);
     send('reorder', { order: order });
-  });
-
-  document.getElementById('btn-move-down').addEventListener('click', function () {
-    if (!selectedPath) return;
-    var idx = state.destinations.findIndex(function (e) { return e.path === selectedPath; });
-    if (idx < 0 || idx >= state.destinations.length - 1) return;
-    var order = state.destinations.map(function (e) { return e.path; });
-    order.splice(idx + 1, 0, order.splice(idx, 1)[0]);
-    send('reorder', { order: order });
-  });
+  }
 
   document.getElementById('btn-sort-alpha').addEventListener('click', function () {
     var order = state.destinations.map(function (e) { return e.path; })

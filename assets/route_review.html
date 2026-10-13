@@ -152,6 +152,22 @@
     color: #fff;
     vertical-align: middle;
   }
+  .badge-conflict {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #ef6c00;
+    color: #fff;
+    vertical-align: middle;
+  }
+  .alt-select {
+    display: block;
+    width: 100%;
+    margin-bottom: 4px;
+    border: 1px solid #ef6c00;
+  }
   .badge-rule {
     display: inline-block;
     padding: 1px 6px;
@@ -481,6 +497,7 @@
       full_path:     full,                    // exact router proposal, sent back if untouched
       orig_path:     stripYearMonth(full),  // original proposal for "modified" highlight
       is_default:    !!d.is_default,
+      alternatives:  Array.isArray(d.alternatives) ? d.alternatives.map(stripYearMonth) : [],
       matched_rule:  d.matched_rule  || '',
       checked:       false,
       source:        'default'  // "default" | "manual" | "rule"
@@ -569,6 +586,20 @@
         statusCell = '<span class="badge-auto" title="' + esc(row.matched_rule || 'Chemin proposé par destinations.txt') +
           '">auto</span>';
       }
+      if (row.alternatives.length) {
+        statusCell += ' <span class="badge-conflict" title="Plusieurs destinations correspondent : ' +
+          esc([row.orig_path].concat(row.alternatives).join(', ')) + '">⚠ conflit</span>';
+      }
+
+      // Conflict picker: the proposed destination plus every other one that matched.
+      var altSelect = '';
+      if (row.alternatives.length) {
+        altSelect = '<select class="alt-select" data-i="' + i + '" title="Plusieurs destinations correspondent — choisissez">' +
+          [row.orig_path].concat(row.alternatives).map(function (p) {
+            return '<option value="' + esc(p) + '"' + (p === row.dest_path ? ' selected' : '') + '>' +
+              esc(p) + '</option>';
+          }).join('') + '</select>';
+      }
 
       tr.innerHTML =
         '<td><input type="checkbox" class="row-check" data-i="' + i + '"' +
@@ -579,7 +610,7 @@
           twoLines(row.sender, row.recipient ? '→ ' + row.recipient : '') + '</td>' +
         '<td class="date" title="' + esc(row.date) + '">' +
           twoLines(fmtDate(row.date), fmtTime(row.date)) + '</td>' +
-        '<td class="dest">' +
+        '<td class="dest">' + altSelect +
           '<input type="text" class="dest-input' + modifiedClass + '" list="known-paths"' +
             ' data-i="' + i + '"' +
             ' value="' + esc(row.dest_path) + '"' +
@@ -632,6 +663,18 @@
         });
         td.appendChild(delBtn);
       }
+    });
+
+    // conflict picker: choosing an alternative fills the path input
+    document.querySelectorAll('select.alt-select').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        var i = parseInt(this.dataset.i, 10);
+        var inp = document.querySelector('input.dest-input[data-i="' + i + '"]');
+        if (inp) {
+          inp.value = this.value;
+          inp.dispatchEvent(new Event('input'));
+        }
+      });
     });
 
     // row-check listeners
@@ -742,22 +785,73 @@
       form.classList.remove('open');
       btn.textContent = '+ règle';
 
-      // Store pending rule for re-application after route_review_set_tree callback.
-      pendingRule = { path: destPath, attr_kind: attrKind, attr_value: attrValue };
-
-      var payload = JSON.stringify({
-        action:     'create_rule',
-        path:       destPath,
-        attr_kind:  attrKind,
-        attr_value: attrValue
+      // The same rule already posted for another destination: make the user choose.
+      var ownerKey = attrKind + ':' + attrValue.toLowerCase();
+      var others = (ruleOwners[ownerKey] || []).filter(function (p) {
+        return p.toLowerCase() !== destPath.toLowerCase();
       });
-      if (window.ipc && typeof window.ipc.postMessage === 'function') {
-        window.ipc.postMessage(payload);
+      if (others.length) {
+        askRuleConflict(attrKind, attrValue, destPath, others, function (choice) {
+          if (choice === 'cancel') { return; }
+          sendCreateRule(destPath, attrKind, attrValue, choice === 'move');
+        });
       } else {
-        pendingRule = null;
-        showError('IPC non disponible.');
+        sendCreateRule(destPath, attrKind, attrValue, false);
       }
     });
+  }
+
+  // Rule -> destinations map injected by the host; kept in sync after each creation.
+  var ruleOwners = window.__RULE_OWNERS__ || {};
+
+  function sendCreateRule(destPath, attrKind, attrValue, moveRule) {
+    // Store pending rule for re-application after route_review_set_tree callback.
+    pendingRule = { path: destPath, attr_kind: attrKind, attr_value: attrValue };
+
+    var payload = JSON.stringify({
+      action:     'create_rule',
+      path:       destPath,
+      attr_kind:  attrKind,
+      attr_value: attrValue,
+      move_rule:  !!moveRule
+    });
+    if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      window.ipc.postMessage(payload);
+      var key = attrKind + ':' + attrValue.toLowerCase();
+      ruleOwners[key] = moveRule ? [destPath] : (ruleOwners[key] || []).concat([destPath]);
+    } else {
+      pendingRule = null;
+      showError('IPC non disponible.');
+    }
+  }
+
+  // Modal: move the rule to the new destination, keep both, or cancel.
+  function askRuleConflict(attrKind, attrValue, destPath, others, done) {
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);' +
+      'display:flex;align-items:center;justify-content:center;z-index:9999';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:Canvas;color:CanvasText;border:1px solid GrayText;' +
+      'border-radius:8px;padding:16px 20px;max-width:520px;font:inherit';
+    var label = (attrKind === 'domain' ? 'Le domaine ' : "L'adresse ") + attrValue;
+    box.innerHTML =
+      '<p style="margin:0 0 8px"><strong>⚠ Règle déjà utilisée</strong></p>' +
+      '<p style="margin:0 0 8px">' + esc(label) + ' est déjà associé à : ' +
+        others.map(function (p) { return '<code>' + esc(p) + '</code>'; }).join(', ') + '.</p>' +
+      '<p style="margin:0 0 12px">Pour <code>' + esc(destPath) + '</code>, que faire ?</p>' +
+      '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">' +
+        '<button type="button" data-c="cancel">Annuler</button>' +
+        '<button type="button" data-c="both">Garder les deux (le premier de la liste gagne)</button>' +
+        '<button type="button" data-c="move">Déplacer la règle ici</button>' +
+      '</div>';
+    box.addEventListener('click', function (ev) {
+      var c = ev.target && ev.target.dataset && ev.target.dataset.c;
+      if (!c) { return; }
+      document.body.removeChild(overlay);
+      done(c);
+    });
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
   }
 
   function updateSummary() {

@@ -55,6 +55,8 @@ html-escape = "0.2"
 
 # HTML-to-Markdown conversion (for emails with no text/plain part)
 htmd = "0"
+# DOM node types exposed by htmd handlers (already a dependency of htmd)
+markup5ever_rcdom = "0.38"
 
 # URL parsing and validation (for cleaner pipeline)
 url = "2.5"
