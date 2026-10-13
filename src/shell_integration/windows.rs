@@ -9,11 +9,13 @@ const SELECTED_KEY: &str = r"Software\Classes\Directory\shell\EmailToMarkdownCon
 const BACKGROUND_KEY: &str =
     r"Software\Classes\Directory\Background\shell\EmailToMarkdownContextual";
 const COMMAND_CLSID: &str = email_to_markdown_shell_extension_contract::COMMAND_CLSID_BRACED;
-static CLSID_KEY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!(r"Software\Classes\CLSID\{COMMAND_CLSID}")
-});
-const MODERN_DLL_NAME: &str =
-    concat!("email-to-markdown-shell-extension-", env!("CARGO_PKG_VERSION"), ".dll");
+static CLSID_KEY: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!(r"Software\Classes\CLSID\{COMMAND_CLSID}"));
+const MODERN_DLL_NAME: &str = concat!(
+    "email-to-markdown-shell-extension-",
+    env!("CARGO_PKG_VERSION"),
+    ".dll"
+);
 const MAIL_ICON_NAME: &str = "email-to-markdown-mail.ico";
 const IDENTITY_PACKAGE_NAME: &str = "FXGuillois.EmailToMarkdown";
 const IDENTITY_PACKAGE_FILE: &str = "email-to-markdown-identity.msix";

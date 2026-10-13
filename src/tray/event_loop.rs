@@ -160,7 +160,9 @@ pub(super) fn run() -> Result<()> {
                 dest_path,
                 attr_kind,
                 attr_value,
-            }) => handle_persist_routing_rule(&windows, window_id, dest_path, attr_kind, attr_value),
+            }) => {
+                handle_persist_routing_rule(&windows, window_id, dest_path, attr_kind, attr_value)
+            }
             Event::UserEvent(AppCommand::OpenRouteReview(decisions)) => {
                 handle_open_route_review(target, &proxy, &mut windows, decisions, &result_sender)
             }
@@ -477,7 +479,10 @@ fn handle_push_dest_state(windows: &HashMap<WindowId, WState>, window_id: Window
     }
 }
 
-fn handle_contextual_destination_saved(windows: &mut HashMap<WindowId, WState>, window_id: WindowId) {
+fn handle_contextual_destination_saved(
+    windows: &mut HashMap<WindowId, WState>,
+    window_id: WindowId,
+) {
     // This command is only emitted by the standalone contextual
     // editor. Keep the regular tray loop defensive if received.
     if let Some(WState::DestGui(_)) = windows.remove(&window_id) {

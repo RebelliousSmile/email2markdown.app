@@ -52,7 +52,9 @@ pub(super) fn create_menu() -> Result<Menu> {
     let export_submenu = Submenu::new("Export compte", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::EXPORT_PREFIX, account);
-        if let Err(e) = export_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone())) {
+        if let Err(e) =
+            export_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone()))
+        {
             eprintln!("Menu export compte: {:#}", e);
         }
     }
@@ -63,7 +65,9 @@ pub(super) fn create_menu() -> Result<Menu> {
     let resume_submenu = Submenu::new("Reprendre le tri", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::RESUME_SORT_PREFIX, account);
-        if let Err(e) = resume_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone())) {
+        if let Err(e) =
+            resume_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone()))
+        {
             eprintln!("Menu reprendre le tri: {:#}", e);
         }
     }
@@ -74,7 +78,9 @@ pub(super) fn create_menu() -> Result<Menu> {
     let fixhtml_submenu = Submenu::new("Fix HTML→Markdown", has_accounts);
     for account in &accounts {
         let id = format!("{}{}", menu_ids::FIXHTML_PREFIX, account);
-        if let Err(e) = fixhtml_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone())) {
+        if let Err(e) =
+            fixhtml_submenu.append(&MenuItem::with_id(id, account, true, no_accel.clone()))
+        {
             eprintln!("Menu Fix HTML→Markdown: {:#}", e);
         }
     }

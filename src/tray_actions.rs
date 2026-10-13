@@ -252,8 +252,11 @@ pub fn run_contextual_search(
                 .or_else(|| candidate.to.first())
                 .cloned()
                 .unwrap_or_default();
-            let effective_target =
-                crate::contextual_export::candidate_target(&launch.target, candidate, organize_by_date);
+            let effective_target = crate::contextual_export::candidate_target(
+                &launch.target,
+                candidate,
+                organize_by_date,
+            );
             Ok(ContextualCandidateRow {
                 key: candidate.logical_key(),
                 date: candidate.date,

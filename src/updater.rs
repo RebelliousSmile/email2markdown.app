@@ -267,10 +267,16 @@ mod tests {
     #[test]
     fn test_select_release_equal_or_newer_current_returns_none() {
         let offers = [
-            select_release(gh_release("v0.10.0", &["SHA256SUMS", PLATFORM_ASSET]), "0.10.0")
-                .unwrap(),
-            select_release(gh_release("v0.10.0", &["SHA256SUMS", PLATFORM_ASSET]), "0.11.0")
-                .unwrap(),
+            select_release(
+                gh_release("v0.10.0", &["SHA256SUMS", PLATFORM_ASSET]),
+                "0.10.0",
+            )
+            .unwrap(),
+            select_release(
+                gh_release("v0.10.0", &["SHA256SUMS", PLATFORM_ASSET]),
+                "0.11.0",
+            )
+            .unwrap(),
         ];
 
         assert_eq!(offers, [None, None]);
@@ -343,7 +349,8 @@ mod tests {
 
         // SHA-256 of `abd`: the error names both sums.
         assert!(message.contains(ABC_SHA256));
-        assert!(message
-            .contains("a52d159f262b2c6ddb724a61840befc36eb30c88877a4030b65cbe86298449c9"));
+        assert!(
+            message.contains("a52d159f262b2c6ddb724a61840befc36eb30c88877a4030b65cbe86298449c9")
+        );
     }
 }

@@ -2648,7 +2648,12 @@ mod contextual_export_tests {
         let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
 
         let first = convert_raw_contextual(
-            &target, &account(&target), &candidate, &location, &raw, false,
+            &target,
+            &account(&target),
+            &candidate,
+            &location,
+            &raw,
+            false,
         )
         .unwrap();
         let (markdown, proof) = match first {
@@ -2665,7 +2670,12 @@ mod contextual_export_tests {
         }));
 
         let second = convert_raw_contextual(
-            &target, &account(&target), &candidate, &location, &raw, false,
+            &target,
+            &account(&target),
+            &candidate,
+            &location,
+            &raw,
+            false,
         )
         .unwrap();
         assert!(matches!(second, ConversionStatus::AlreadyPresent { .. }));
@@ -2733,7 +2743,12 @@ mod contextual_export_tests {
         let location = location("INBOX", 5);
         let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
         let first = convert_raw_contextual(
-            &target, &account(&target), &candidate, &location, &raw, false,
+            &target,
+            &account(&target),
+            &candidate,
+            &location,
+            &raw,
+            false,
         )
         .unwrap();
         let original = match first {
@@ -2755,7 +2770,12 @@ mod contextual_export_tests {
         .unwrap();
 
         let second = convert_raw_contextual(
-            &target, &account(&target), &candidate, &location, &raw, false,
+            &target,
+            &account(&target),
+            &candidate,
+            &location,
+            &raw,
+            false,
         )
         .unwrap();
         let second_path = match second {

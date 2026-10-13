@@ -791,7 +791,11 @@ pub const DEFAULT_BASE: &str = "Perso/Messy/Emails";
 /// Subject matching uses `str::contains()` (case-insensitive substring). The keyword
 /// `k` is dynamic (read from `destinations.txt`), so `static LazyLock<Regex>` is
 /// inapplicable. `contains()` is correct and sufficient here.
-pub fn route_email(meta: &EmailMeta, dests: &[Destination], organize_by_date: bool) -> RouteDecision {
+pub fn route_email(
+    meta: &EmailMeta,
+    dests: &[Destination],
+    organize_by_date: bool,
+) -> RouteDecision {
     let dated = |base: &str| -> String {
         if organize_by_date {
             let year = meta.date.format("%Y").to_string();

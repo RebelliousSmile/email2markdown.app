@@ -734,7 +734,11 @@ fn install_staged(
             if destination.file_name() != Some(name.as_os_str()) {
                 markdown_content = markdown_content.replace(
                     name.to_string_lossy().as_ref(),
-                    destination.file_name().unwrap_or(name.as_os_str()).to_string_lossy().as_ref(),
+                    destination
+                        .file_name()
+                        .unwrap_or(name.as_os_str())
+                        .to_string_lossy()
+                        .as_ref(),
                 );
             }
             fs::rename(&path, &destination)

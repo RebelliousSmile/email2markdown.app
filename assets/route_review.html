@@ -117,6 +117,8 @@
   tbody td.subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   tbody td.sender  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   tbody td.date, tbody td.status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  tbody td .line1, tbody td .line2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tbody td .line2 { color: #777; font-size: 11px; margin-top: 2px; }
   tbody td.dest    { overflow: hidden; }
   tbody td.dest input.dest-input {
     width: 100%;
@@ -314,7 +316,7 @@
       <tr>
         <th style="width:34px"><input type="checkbox" id="header-check"></th>
         <th data-col="subject" style="width:24%">Sujet</th>
-        <th data-col="sender" style="width:17%">Expéditeur</th>
+        <th data-col="sender" style="width:17%">Identités</th>
         <th data-col="date" style="width:96px">Date</th>
         <th data-col="dest_path">Chemin proposé</th>
         <th data-col="is_default" style="width:70px">Statut</th>
@@ -470,6 +472,8 @@
       file:          d.file          || '',
       subject:       d.subject       || '',
       sender:        d.sender        || '',
+      recipient:     d.recipient     || '',
+      attachments:   Array.isArray(d.attachments) ? d.attachments : [],
       sender_email:  d.sender_email  || '',
       sender_domain: d.sender_domain || '',
       date:          d.date          || '',
@@ -489,7 +493,7 @@
 
   var colLabels = {
     subject:    'Sujet',
-    sender:     'Expéditeur',
+    sender:     'Identités',
     date:       'Date',
     dest_path:  'Chemin proposé',
     is_default: 'Statut'
@@ -512,6 +516,18 @@
   function fmtDate(v) {
     var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || '');
     return m ? m[3] + '/' + m[2] + '/' + m[1] : (v || '');
+  }
+
+  // ISO timestamp -> HH:MM (as written in the frontmatter).
+  function fmtTime(v) {
+    var m = /[T ](\d{2}):(\d{2})/.exec(v || '');
+    return m ? m[1] + ':' + m[2] : '';
+  }
+
+  // Two-line cell: main value, then an optional muted detail line.
+  function twoLines(main, sub) {
+    return '<div class="line1">' + esc(main) + '</div>' +
+           '<div class="line2">' + (sub ? esc(sub) : '&nbsp;') + '</div>';
   }
 
   function updateSortIndicators() {
@@ -541,6 +557,7 @@
       tr.dataset.file = row.file;
 
       var modifiedClass = (row.dest_path !== row.orig_path) ? ' modified' : '';
+      var attList = row.attachments.length ? '📎 ' + row.attachments.join(', ') : '';
 
       // Status cell: show badge-default or badge-rule or nothing
       var statusCell = '';
@@ -556,9 +573,12 @@
       tr.innerHTML =
         '<td><input type="checkbox" class="row-check" data-i="' + i + '"' +
           (row.checked ? ' checked' : '') + '></td>' +
-        '<td class="subject" title="' + esc(row.subject) + '">' + esc(row.subject) + '</td>' +
-        '<td class="sender"  title="' + esc(row.sender)  + '">' + esc(row.sender)  + '</td>' +
-        '<td class="date" title="' + esc(row.date) + '">' + esc(fmtDate(row.date)) + '</td>' +
+        '<td class="subject" title="' + esc(row.subject + (attList ? '\n' + attList : '')) + '">' +
+          twoLines(row.subject, attList) + '</td>' +
+        '<td class="sender" title="' + esc(row.sender + (row.recipient ? '\n→ ' + row.recipient : '')) + '">' +
+          twoLines(row.sender, row.recipient ? '→ ' + row.recipient : '') + '</td>' +
+        '<td class="date" title="' + esc(row.date) + '">' +
+          twoLines(fmtDate(row.date), fmtTime(row.date)) + '</td>' +
         '<td class="dest">' +
           '<input type="text" class="dest-input' + modifiedClass + '" list="known-paths"' +
             ' data-i="' + i + '"' +

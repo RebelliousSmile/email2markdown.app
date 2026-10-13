@@ -356,7 +356,10 @@ fn should_skip_from_headers(
     };
 
     let message_id = crate::contextual_export::normalize_message_id(
-        &mail.headers.get_first_value("Message-ID").unwrap_or_default(),
+        &mail
+            .headers
+            .get_first_value("Message-ID")
+            .unwrap_or_default(),
     );
     let skip = message_id.as_ref().is_some_and(|id| handled.contains(id))
         || exported.contains_message(
@@ -445,7 +448,10 @@ pub fn export_to_markdown(
     // Check if email already exported
     if account.skip_existing {
         let message_id = crate::contextual_export::normalize_message_id(
-            &mail.headers.get_first_value("Message-ID").unwrap_or_default(),
+            &mail
+                .headers
+                .get_first_value("Message-ID")
+                .unwrap_or_default(),
         );
         let already_exported = match ctx.exported.as_deref() {
             Some(index) => index.contains_message(
@@ -615,18 +621,20 @@ pub fn export_to_markdown(
 fn html_to_markdown(html: &str) -> String {
     let converter = htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["head", "style", "script", "noscript", "title"])
-        .add_handler(vec!["img"], |handlers: &dyn htmd::element_handler::Handlers,
-                                   element: htmd::Element| {
-            let attrs: Vec<(&str, &str)> = element
-                .attrs
-                .iter()
-                .map(|attr| (&*attr.name.local, &*attr.value))
-                .collect();
-            if is_tracking_pixel(&attrs) {
-                return None;
-            }
-            handlers.fallback(element)
-        })
+        .add_handler(
+            vec!["img"],
+            |handlers: &dyn htmd::element_handler::Handlers, element: htmd::Element| {
+                let attrs: Vec<(&str, &str)> = element
+                    .attrs
+                    .iter()
+                    .map(|attr| (&*attr.name.local, &*attr.value))
+                    .collect();
+                if is_tracking_pixel(&attrs) {
+                    return None;
+                }
+                handlers.fallback(element)
+            },
+        )
         .build();
     let markdown = converter.convert(html).unwrap_or_default();
     collapse_blank_lines(&markdown)
@@ -1028,7 +1036,11 @@ fn inline_image_name(part: &ParsedMail, content_id: &str) -> Option<String> {
         .filter(|c| c.is_ascii_alphanumeric())
         .take(24)
         .collect();
-    let stem = if stem.is_empty() { "image".to_string() } else { stem };
+    let stem = if stem.is_empty() {
+        "image".to_string()
+    } else {
+        stem
+    };
     Some(format!("inline_{stem}.{extension}"))
 }
 
@@ -2166,8 +2178,7 @@ impl ImapExporter {
                     all_decisions.extend(folder_decisions);
                     results.insert(folder.display, stats);
 
-                    if self.batch_full
-                        || cancel_token.map_or(false, |t| t.load(Ordering::Relaxed))
+                    if self.batch_full || cancel_token.map_or(false, |t| t.load(Ordering::Relaxed))
                     {
                         break;
                     }
@@ -2584,11 +2595,17 @@ abc123
         let body = extract_body(&mail);
 
         assert!(body.contains("Connectez-vous \u{e0} Claude.ai"), "{body:?}");
-        assert!(body.contains("[Se connecter](https://example.com/magic)"), "{body:?}");
+        assert!(
+            body.contains("[Se connecter](https://example.com/magic)"),
+            "{body:?}"
+        );
         assert!(!body.contains("<html"), "{body:?}");
         assert!(!body.contains("<table"), "{body:?}");
         assert!(!body.contains("margin:0"), "style leaked: {body:?}");
-        assert!(!body.contains("open?x=1"), "tracking pixel leaked: {body:?}");
+        assert!(
+            !body.contains("open?x=1"),
+            "tracking pixel leaked: {body:?}"
+        );
     }
 
     #[test]
@@ -2603,7 +2620,10 @@ abc123
         let mail = mailparse::parse_mail(&raw).unwrap();
         let body = extract_body(&mail);
 
-        assert!(body.contains("Cliquez sur le bouton ci-dessous."), "{body:?}");
+        assert!(
+            body.contains("Cliquez sur le bouton ci-dessous."),
+            "{body:?}"
+        );
         assert!(!body.contains("<!doctype"), "{body:?}");
     }
 
@@ -2663,7 +2683,10 @@ abc123
         let saved = &attachments[0];
         assert!(saved.starts_with("2024-01-01_inline_photomail"), "{saved}");
         assert!(temp.path().join(saved).exists());
-        assert!(rewritten.contains(&format!("![vue]({saved})")), "{rewritten}");
+        assert!(
+            rewritten.contains(&format!("![vue]({saved})")),
+            "{rewritten}"
+        );
         assert!(!rewritten.contains("cid:"), "{rewritten}");
     }
 
@@ -2707,7 +2730,10 @@ abc123
             .unwrap();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
 
-        assert_eq!(name, "email_2024-01-01_AlicMart_Plan du projet – version finale.md");
+        assert_eq!(
+            name,
+            "email_2024-01-01_AlicMart_Plan du projet – version finale.md"
+        );
         assert!(!name.contains("_to_"), "{name}");
     }
 

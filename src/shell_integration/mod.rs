@@ -1,9 +1,9 @@
 //! Per-user file-manager integration for the standalone contextual window.
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::fs;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "linux")]
 mod linux;

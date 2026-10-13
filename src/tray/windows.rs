@@ -92,10 +92,8 @@ pub(super) fn build_contextual_window(
         match msg.action.as_str() {
             "search" => {
                 if let Some(account) = msg.account {
-                    let _ = ipc_proxy.send_event(AppCommand::ContextualSearchRequested {
-                        window_id,
-                        account,
-                    });
+                    let _ = ipc_proxy
+                        .send_event(AppCommand::ContextualSearchRequested { window_id, account });
                 }
             }
             "convert" => {
@@ -105,8 +103,8 @@ pub(super) fn build_contextual_window(
                 });
             }
             "retry_deletion" => {
-                let _ =
-                    ipc_proxy.send_event(AppCommand::ContextualRetryDeletionRequested { window_id });
+                let _ = ipc_proxy
+                    .send_event(AppCommand::ContextualRetryDeletionRequested { window_id });
             }
             "open_config" => {
                 let _ = ipc_proxy.send_event(AppCommand::ContextualOpenConfig);
@@ -290,7 +288,8 @@ pub(super) fn build_update_window(
                     let proxy_dl = proxy_ipc.clone();
                     thread::spawn(move || {
                         let result = updater::download_and_apply(&release, |msg| {
-                            let json = serde_json::json!({ "type": "msg", "text": msg }).to_string();
+                            let json =
+                                serde_json::json!({ "type": "msg", "text": msg }).to_string();
                             let _ = proxy_dl.send_event(AppCommand::UpdateMsg(json));
                         });
                         match result {
@@ -386,80 +385,89 @@ pub(super) fn build_dest_gui_window(
             if contextual_on_save { "true" } else { "false" },
         );
 
-    let (window, window_id) = build_gui_window(target, "Email to Markdown \u{2014} Destinations", (820.0, 560.0))?;
+    let (window, window_id) = build_gui_window(
+        target,
+        "Email to Markdown \u{2014} Destinations",
+        (820.0, 560.0),
+    )?;
 
     let proxy_ipc = proxy.clone();
     let cfg_ipc = Arc::clone(&cfg_arc);
     let dest_file_ipc = dest_file.to_path_buf();
 
-    let webview = attach_webview(&window, html, None, move |req: wry::http::Request<String>| {
-        let body = req.body();
-        let mut cfg_guard = match cfg_ipc.lock() {
-            Ok(g) => g,
-            Err(_) => {
-                eprintln!("dest-gui: mutex poisoned");
-                return;
+    let webview = attach_webview(
+        &window,
+        html,
+        None,
+        move |req: wry::http::Request<String>| {
+            let body = req.body();
+            let mut cfg_guard = match cfg_ipc.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    eprintln!("dest-gui: mutex poisoned");
+                    return;
+                }
+            };
+            let result = super::ipc::handle_dest_gui_ipc(body, &mut cfg_guard, &dest_file_ipc);
+            match result {
+                super::ipc::DestGuiIpcResult::StateChanged => {
+                    let json = super::ipc::state_json(&cfg_guard);
+                    drop(cfg_guard);
+                    let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
+                }
+                super::ipc::DestGuiIpcResult::Error(message) => {
+                    drop(cfg_guard);
+                    let json = serde_json::json!({"type": "error", "message": message}).to_string();
+                    let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
+                }
+                super::ipc::DestGuiIpcResult::Suggestions(items) => {
+                    drop(cfg_guard);
+                    let items_json = serde_json::json!({
+                        "type": "suggestions",
+                        "items": items.iter()
+                            .map(|(d, c)| serde_json::json!({"domain": d, "count": c}))
+                            .collect::<Vec<_>>()
+                    })
+                    .to_string();
+                    let _ = proxy_ipc.send_event(AppCommand::PushDestState {
+                        window_id,
+                        json: items_json,
+                    });
+                }
+                super::ipc::DestGuiIpcResult::FolderSuggestions {
+                    new_folders,
+                    orphans,
+                } => {
+                    drop(cfg_guard);
+                    let json = serde_json::json!({
+                        "type": "folder_suggestions",
+                        "paths": new_folders,
+                        "orphans": orphans,
+                    })
+                    .to_string();
+                    let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
+                }
+                super::ipc::DestGuiIpcResult::BrowseFolder => {
+                    drop(cfg_guard);
+                    let _ = proxy_ipc.send_event(AppCommand::BrowseDestFolder { window_id });
+                }
+                super::ipc::DestGuiIpcResult::Saved => {
+                    drop(cfg_guard);
+                    let command = if contextual_on_save {
+                        AppCommand::ContextualDestinationSaved { window_id }
+                    } else {
+                        AppCommand::CloseWindow { window_id }
+                    };
+                    let _ = proxy_ipc.send_event(command);
+                }
+                super::ipc::DestGuiIpcResult::Close => {
+                    drop(cfg_guard);
+                    let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
+                }
+                super::ipc::DestGuiIpcResult::Noop => {}
             }
-        };
-        let result = super::ipc::handle_dest_gui_ipc(body, &mut cfg_guard, &dest_file_ipc);
-        match result {
-            super::ipc::DestGuiIpcResult::StateChanged => {
-                let json = super::ipc::state_json(&cfg_guard);
-                drop(cfg_guard);
-                let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
-            }
-            super::ipc::DestGuiIpcResult::Error(message) => {
-                drop(cfg_guard);
-                let json = serde_json::json!({"type": "error", "message": message}).to_string();
-                let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
-            }
-            super::ipc::DestGuiIpcResult::Suggestions(items) => {
-                drop(cfg_guard);
-                let items_json = serde_json::json!({
-                    "type": "suggestions",
-                    "items": items.iter()
-                        .map(|(d, c)| serde_json::json!({"domain": d, "count": c}))
-                        .collect::<Vec<_>>()
-                })
-                .to_string();
-                let _ = proxy_ipc.send_event(AppCommand::PushDestState {
-                    window_id,
-                    json: items_json,
-                });
-            }
-            super::ipc::DestGuiIpcResult::FolderSuggestions {
-                new_folders,
-                orphans,
-            } => {
-                drop(cfg_guard);
-                let json = serde_json::json!({
-                    "type": "folder_suggestions",
-                    "paths": new_folders,
-                    "orphans": orphans,
-                })
-                .to_string();
-                let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
-            }
-            super::ipc::DestGuiIpcResult::BrowseFolder => {
-                drop(cfg_guard);
-                let _ = proxy_ipc.send_event(AppCommand::BrowseDestFolder { window_id });
-            }
-            super::ipc::DestGuiIpcResult::Saved => {
-                drop(cfg_guard);
-                let command = if contextual_on_save {
-                    AppCommand::ContextualDestinationSaved { window_id }
-                } else {
-                    AppCommand::CloseWindow { window_id }
-                };
-                let _ = proxy_ipc.send_event(command);
-            }
-            super::ipc::DestGuiIpcResult::Close => {
-                drop(cfg_guard);
-                let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
-            }
-            super::ipc::DestGuiIpcResult::Noop => {}
-        }
-    })?;
+        },
+    )?;
 
     Ok((window, webview, window_id, cfg_arc))
 }
@@ -554,21 +562,10 @@ pub(super) fn build_route_window(
         .map(|d| d.path)
         .collect();
 
-    // Build owned rows — extract frontmatter fields for display in the table.
-    let owned_rows: Vec<(
-        String,
-        String,
-        String,
-        String,
-        String,
-        bool,
-        String,
-        String,
-        String,
-    )> = decisions
+    // Build one JSON row per decision — frontmatter fields shown in the table.
+    let json_rows: Vec<serde_json::Value> = decisions
         .iter()
         .map(|(staging_path, decision)| {
-            let file = staging_path.to_string_lossy().into_owned();
             let subject = super::ipc::read_frontmatter_field(staging_path, "subject")
                 .unwrap_or_else(|| {
                     staging_path
@@ -578,55 +575,35 @@ pub(super) fn build_route_window(
                 });
             let from_raw =
                 super::ipc::read_frontmatter_field(staging_path, "from").unwrap_or_default();
+            let to = super::ipc::read_frontmatter_field(staging_path, "to").unwrap_or_default();
             let date = super::ipc::read_frontmatter_field(staging_path, "date").unwrap_or_default();
+            let attachments = super::ipc::read_frontmatter_list(staging_path, "attachments");
             let (sender_email, sender_domain) = extract_addr_and_domain(&from_raw);
-            (
-                file,
-                subject,
-                from_raw,
-                date,
-                decision.rel_path.clone(),
-                decision.is_default,
-                sender_email,
-                sender_domain,
-                decision.matched_rule.clone().unwrap_or_default(),
-            )
+            serde_json::json!({
+                "matched_rule":  decision.matched_rule.clone().unwrap_or_default(),
+                "file":          staging_path.to_string_lossy(),
+                "subject":       subject,
+                "sender":        from_raw,
+                "recipient":     to,
+                "attachments":   attachments,
+                "date":          date,
+                "dest_path":     decision.rel_path,
+                "is_default":    decision.is_default,
+                "sender_email":  sender_email,
+                "sender_domain": sender_domain
+            })
         })
         .collect();
 
     // Staging files this window may act on, as the exact strings sent to the page
     // so the comparison never depends on path normalisation.
     let allowed_files: std::cell::RefCell<std::collections::HashSet<String>> =
-        std::cell::RefCell::new(owned_rows.iter().map(|row| row.0.clone()).collect());
-
-    let json_rows: Vec<serde_json::Value> = owned_rows
-        .iter()
-        .map(
-            |(
-                file,
-                subject,
-                sender,
-                date,
-                dest_path,
-                is_default,
-                sender_email,
-                sender_domain,
-                matched_rule,
-            )| {
-                serde_json::json!({
-                    "matched_rule":  matched_rule,
-                    "file":          file,
-                    "subject":       subject,
-                    "sender":        sender,
-                    "date":          date,
-                    "dest_path":     dest_path,
-                    "is_default":    is_default,
-                    "sender_email":  sender_email,
-                    "sender_domain": sender_domain
-                })
-            },
-        )
-        .collect();
+        std::cell::RefCell::new(
+            decisions
+                .iter()
+                .map(|(path, _)| path.to_string_lossy().into_owned())
+                .collect(),
+        );
 
     let decisions_json =
         serde_json::to_string(&json_rows).context("failed to serialize decisions")?;
@@ -765,10 +742,8 @@ pub(super) fn build_route_window(
                 Ok(report) => {
                     // Drop the rows with nothing left to route, keep the failed ones.
                     if let Ok(js_arr) = serde_json::to_string(&report.settled_files()) {
-                        let js = format!(
-                            "route_review_applied({})",
-                            escape_json_for_script(&js_arr)
-                        );
+                        let js =
+                            format!("route_review_applied({})", escape_json_for_script(&js_arr));
                         let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
                     }
                     report.error_message().unwrap_or_default()

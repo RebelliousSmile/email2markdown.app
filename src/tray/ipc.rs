@@ -365,9 +365,12 @@ fn browse_error_json(error: &anyhow::Error) -> String {
 /// Fails when `picked` is the notes directory itself, lies outside it, or has a
 /// segment the router would reject.
 fn relative_destination(notes_dir: &Path, picked: &Path) -> anyhow::Result<String> {
-    let root = notes_dir
-        .canonicalize()
-        .with_context(|| format!("le dossier de notes est introuvable : {}", notes_dir.display()))?;
+    let root = notes_dir.canonicalize().with_context(|| {
+        format!(
+            "le dossier de notes est introuvable : {}",
+            notes_dir.display()
+        )
+    })?;
     let target = picked
         .canonicalize()
         .with_context(|| format!("le dossier choisi est introuvable : {}", picked.display()))?;
@@ -658,6 +661,42 @@ pub(super) fn read_frontmatter_field(path: &std::path::Path, field: &str) -> Opt
         }
     }
     None
+}
+
+/// Read a YAML frontmatter block list (`field:` followed by `- item` lines).
+/// Returns an empty list for `field: []`, a missing field or an unreadable file.
+pub(super) fn read_frontmatter_list(path: &std::path::Path, field: &str) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let content = raw.replace("\r\n", "\n");
+    let Some(rest) = content.strip_prefix("---\n") else {
+        return Vec::new();
+    };
+    let Some(end) = rest.find("\n---") else {
+        return Vec::new();
+    };
+    let key = format!("{field}:");
+    let mut items = Vec::new();
+    let mut in_list = false;
+    for line in rest[..end].lines() {
+        if in_list {
+            match line.trim_start().strip_prefix("- ") {
+                Some(item) => {
+                    let item = item.trim().trim_matches(|c| c == '"' || c == '\'');
+                    if !item.is_empty() {
+                        items.push(item.to_string());
+                    }
+                    continue;
+                }
+                None => break,
+            }
+        }
+        if let Some(value) = line.strip_prefix(&key) {
+            in_list = value.trim().is_empty();
+        }
+    }
+    items
 }
 
 #[derive(serde::Deserialize)]
@@ -1123,7 +1162,11 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
                 ),
             }
         }
-        "reload" => reload_outcome(&config::settings_path(), &config::accounts_yaml_path(), None),
+        "reload" => reload_outcome(
+            &config::settings_path(),
+            &config::accounts_yaml_path(),
+            None,
+        ),
         "delete_account" => {
             let name = msg
                 .data
@@ -1182,9 +1225,9 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_route_decisions, delete_account, delete_staged_emails, relative_destination,
-        reload_outcome, remove_env_passwords, save_account, save_outcome, save_settings,
-        scan_destinations, set_env_password, validate_new_account_name, AccountData,
+        apply_route_decisions, delete_account, delete_staged_emails, read_frontmatter_list,
+        relative_destination, reload_outcome, remove_env_passwords, save_account, save_outcome,
+        save_settings, scan_destinations, set_env_password, validate_new_account_name, AccountData,
         DestGuiIpcResult, RouteApplyReport, RouteDecisionRow, SettingsData,
     };
     use crate::config::{load_raw_accounts, RawAccount, Settings};
@@ -1375,7 +1418,12 @@ mod tests {
             (&fx.files[0], "Perso/Banque"),
             (&fx.files[1], "Perso/Banque/2026/06"),
         ]);
-        let dated = fx.notes.join("Perso").join("Banque").join("2026").join("06");
+        let dated = fx
+            .notes
+            .join("Perso")
+            .join("Banque")
+            .join("2026")
+            .join("06");
 
         apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), true).unwrap();
 
@@ -1452,7 +1500,10 @@ mod tests {
         let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
 
         assert_eq!(report.deletions.len(), 1);
-        assert_eq!(report.deletions[0].markdown, fx.notes.join("Perso").join("a.md"));
+        assert_eq!(
+            report.deletions[0].markdown,
+            fx.notes.join("Perso").join("a.md")
+        );
         assert_eq!(report.deletions[0].proof.location.uid, 42);
     }
 
@@ -1609,7 +1660,11 @@ mod tests {
     fn test_set_env_password_updates_application_password_key() {
         let temp = TempDir::new().unwrap();
         let env = temp.path().join(".env");
-        fs::write(&env, "PERSO_APPLICATION_PASSWORD='old'\nPERSO_PASSWORD='x'\n").unwrap();
+        fs::write(
+            &env,
+            "PERSO_APPLICATION_PASSWORD='old'\nPERSO_PASSWORD='x'\n",
+        )
+        .unwrap();
 
         set_env_password(&env, "Perso", "it's new").unwrap();
 
@@ -1779,5 +1834,30 @@ mod tests {
         assert!(format!("{:#}", err).contains("settings.yaml"));
         assert_eq!(fs::read(&accounts_path).unwrap(), VALID_ACCOUNTS.as_bytes());
         assert_eq!(fs::read(&settings_path).unwrap(), INVALID_YAML.as_bytes());
+    }
+
+    #[test]
+    fn test_read_frontmatter_list_with_items() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("note.md");
+        fs::write(
+            &path,
+            "---\nsubject: Hi\nattachments:\n- a.pdf\n- \"b c.png\"\ntags: []\n---\nbody\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_frontmatter_list(&path, "attachments"),
+            vec!["a.pdf".to_string(), "b c.png".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_read_frontmatter_list_empty() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("note.md");
+        fs::write(&path, "---\nattachments: []\n---\nbody\n").unwrap();
+
+        assert!(read_frontmatter_list(&path, "attachments").is_empty());
     }
 }

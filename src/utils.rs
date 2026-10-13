@@ -452,7 +452,13 @@ pub fn subject_filename_part(subject: &str) -> String {
 
     let cleaned: String = sanitize_filename(rest)
         .chars()
-        .map(|c| if c.is_control() && !c.is_whitespace() { '_' } else { c })
+        .map(|c| {
+            if c.is_control() && !c.is_whitespace() {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     let truncated: String = collapsed.chars().take(SUBJECT_FILENAME_MAX_CHARS).collect();
