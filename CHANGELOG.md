@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Frontmatter orienté note** : l'en-tête du courriel (sujet, expéditeur, destinataires, copie, date) et son corps passent dans un bloc ```` ```email ```` au format TOML, lu par le plugin Obsidian Notebook. Le frontmatter ne garde que les données de la note : `tags: [email]`, `subject_hash`, `attachments` (s'il y en a), `email_type` et `source`. Le dossier IMAP n'est plus écrit comme tag. Les notes déjà exportées restent lues : le frontmatter est prioritaire, le bloc complète. Nouvelle dépendance directe : `toml` (déjà présente en transitive) ; les outils Python utilisent `tomllib`, ou `tomli` avant Python 3.11.
+
+### Removed
+
+- **Intégration au gestionnaire de fichiers** : la commande `shell` (install, status, uninstall), la commande cachée `contextual-uri`, l'extension Explorer Windows 11 (DLL `shell-extension`, crate `shell-extension-contract`, paquet sparse/identité), l'action Finder macOS, le service menu Dolphin et le script Nautilus sont retirés, ainsi que la dépendance `winreg`. `email-to-markdown contextual <dossier>` reste disponible en ligne de commande et depuis le tray. L'installateur Windows n'enregistre plus rien dans l'Explorateur ; pour nettoyer une installation précédente, lancer `email-to-markdown shell uninstall` avec la version 0.18 avant de mettre à jour.
+
+### Fixed
+
+- **Fenêtre de revue du routage et rangement par date** : sujet, expéditeur, destinataire et date sont lus dans le bloc `email` quand le frontmatter ne les porte plus ; le dossier `<Année>/<Mois>` reste appliqué.
+
 ## [0.18.0] - 2026-10-12
 
 ### Added

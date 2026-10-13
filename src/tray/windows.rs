@@ -569,7 +569,7 @@ pub(super) fn build_route_window(
     let json_rows: Vec<serde_json::Value> = decisions
         .iter()
         .map(|(staging_path, decision)| {
-            let subject = super::ipc::read_frontmatter_field(staging_path, "subject")
+            let subject = super::ipc::read_note_header_field(staging_path, "subject")
                 .unwrap_or_else(|| {
                     staging_path
                         .file_stem()
@@ -577,9 +577,9 @@ pub(super) fn build_route_window(
                         .unwrap_or_default()
                 });
             let from_raw =
-                super::ipc::read_frontmatter_field(staging_path, "from").unwrap_or_default();
-            let to = super::ipc::read_frontmatter_field(staging_path, "to").unwrap_or_default();
-            let date = super::ipc::read_frontmatter_field(staging_path, "date").unwrap_or_default();
+                super::ipc::read_note_header_field(staging_path, "from").unwrap_or_default();
+            let to = super::ipc::read_note_header_field(staging_path, "to").unwrap_or_default();
+            let date = super::ipc::read_note_header_field(staging_path, "date").unwrap_or_default();
             let attachments = super::ipc::read_frontmatter_list(staging_path, "attachments");
             let (sender_email, sender_domain) = extract_addr_and_domain(&from_raw);
             serde_json::json!({

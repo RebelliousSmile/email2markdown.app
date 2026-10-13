@@ -91,9 +91,34 @@ Connecte les comptes IMAP configurés, exporte les emails en fichiers Markdown, 
 **Flux complet :**
 
 1. Connexion IMAP → téléchargement des emails
-2. Conversion en Markdown avec frontmatter YAML (répertoire d'export comme zone tampon)
+2. Conversion en Markdown : frontmatter YAML limité aux données de la note, en-tête et corps du courriel dans un bloc ```` ```email ```` TOML (répertoire d'export comme zone tampon)
 3. Calcul du chemin de destination selon les règles de `destinations.yaml`
 4. Déplacement automatique vers `notes_dir/<chemin>/<Année>/<Mois>`
+
+**Format d'une note exportée :**
+
+````markdown
+---
+tags:
+- email
+subject_hash: 60f25f
+email_type: mailing_list
+source: { identity: {...}, location: {...} }
+attachments: [...]   # seulement s'il y en a
+---
+
+```email
+subject = "Devis"
+from = "Alice <alice@example.com>"
+to = ["Bob <bob@example.com>"]
+date = 2026-07-02T10:18:19+00:00
+body = '''
+Bonjour, ...
+'''
+```
+````
+
+Les notes exportées avant ce format gardent leur frontmatter complet et restent lues.
 
 Si aucune règle ne correspond, l'email atterrit dans le dossier fourre-tout : `notes_dir/Perso/Messy/Emails/<Année>/<Mois>`.
 
@@ -190,30 +215,8 @@ dossier puis se ferme. Si `delete_after_export` est actif, seuls les messages
 portant une preuve Markdown locale complète sont supprimés du serveur.
 
 Le dossier doit être un répertoire local existant, non symbolique, situé sous
-`notes_dir` et correspondre exactement à une destination configurée. Une entrée
-de menu peut être visible ailleurs, mais l’application refuse alors le chemin
-avant toute connexion IMAP.
-
-### `shell` — Menu contextuel du gestionnaire de fichiers
-
-Le binaire doit avoir été construit avec `--features tray`.
-
-```bash
-email-to-markdown shell install
-email-to-markdown shell status
-email-to-markdown shell uninstall
-```
-
-- Windows : verbes Explorer par utilisateur sur le dossier sélectionné et le
-  fond du dossier courant (HKCU, sans élévation).
-- macOS : action rapide Finder `Email to Markdown` dans `~/Library/Services` ;
-  si nécessaire, l’activer dans Réglages Système → Extensions → Finder.
-- GNOME : script `Email to Markdown` dans le sous-menu Scripts de Nautilus.
-- KDE : service menu Dolphin pour les dossiers.
-
-`install` est idempotent et répare le chemin si le binaire a été déplacé.
-`status` compare l’artefact au binaire qui exécute la commande. `uninstall` ne
-retire que les deux clés/fichiers portant le nom géré par l’application.
+`notes_dir` et correspondre exactement à une destination configurée. L’application refuse tout autre
+chemin avant toute connexion IMAP.
 
 ---
 

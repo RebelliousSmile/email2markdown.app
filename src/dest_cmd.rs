@@ -589,20 +589,9 @@ fn walk_notes(
     Ok(())
 }
 
-/// Extract the `from:` value from a `.md`'s YAML frontmatter, if present.
+/// Sender of a note, from its frontmatter or its ```email block.
 fn parse_from(content: &str) -> Option<String> {
-    #[derive(serde::Deserialize)]
-    struct FromHead {
-        #[serde(default)]
-        from: String,
-    }
-    let rest = content.strip_prefix("---\n")?;
-    let end = rest.find("\n---")?;
-    let frontmatter = &rest[..end];
-    serde_yaml::from_str::<FromHead>(frontmatter)
-        .ok()
-        .map(|h| h.from)
-        .filter(|s| !s.is_empty())
+    crate::email_block::note_header_field(content, "from")
 }
 
 /// Extract the lowercase domain from a `From:` value.

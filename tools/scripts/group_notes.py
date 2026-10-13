@@ -30,13 +30,17 @@ import logging
 import frontmatter
 import yaml
 
+from src.email_block import with_block
+
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
 def _load(filepath: Path):
     post = frontmatter.load(filepath)
-    return dict(post.metadata or {}), post.content, filepath.name
+    # The header may live in the note's ```email block rather than the frontmatter.
+    meta, body = with_block(dict(post.metadata or {}), post.content)
+    return dict(meta), body, filepath.name
 
 
 def main() -> None:

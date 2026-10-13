@@ -147,17 +147,6 @@ if (-not (Test-Path $cargoPath)) {
 
 if ($LASTEXITCODE -eq 0) {
     if ($Features -match "(^|,)\s*tray\s*(,|$)") {
-        $extensionManifest = Join-Path $PSScriptRoot "..\packaging\windows\shell-extension\Cargo.toml"
-        $extensionArgs = @("build", "--manifest-path", $extensionManifest)
-        if ($Release) {
-            $extensionArgs += "--release"
-        }
-        & $cargoPath @extensionArgs
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Echec de la compilation de l'extension Explorer Windows 11" -ForegroundColor Red
-            exit $LASTEXITCODE
-        }
-
         $cargoTomlPath = Join-Path $PSScriptRoot "..\Cargo.toml"
         $cargoTomlContent = Get-Content -LiteralPath $cargoTomlPath -Raw
         $versionMatch = [regex]::Match($cargoTomlContent, '(?m)^version\s*=\s*"([^"]+)"')
@@ -167,25 +156,11 @@ if ($LASTEXITCODE -eq 0) {
         }
         $appVersion = $versionMatch.Groups[1].Value
 
-        $extensionMode = if ($Release) { "release" } else { "debug" }
-        $extensionSource = Join-Path $PSScriptRoot "..\packaging\windows\shell-extension\target\$extensionMode\email_to_markdown_shell_extension.dll"
-        $extensionDestination = Join-Path $PSScriptRoot "..\target\$extensionMode\email-to-markdown-shell-extension-$appVersion.dll"
-        Copy-Item -LiteralPath $extensionSource -Destination $extensionDestination -Force
-        Write-Host "Extension Explorer: $extensionDestination" -ForegroundColor Cyan
-
         $issPath = Join-Path $PSScriptRoot "..\packaging\windows\email-to-markdown.iss"
         $issContent = Get-Content -LiteralPath $issPath -Raw
         $issContent = $issContent -replace '#define AppVersion "[^"]+"', "#define AppVersion `"$appVersion`""
-        $issContent = $issContent -replace 'email-to-markdown-shell-extension-[^"]+\.dll', "email-to-markdown-shell-extension-$appVersion.dll"
         Set-Content -LiteralPath $issPath -Value $issContent -NoNewline
         Write-Host "email-to-markdown.iss mis a jour avec la version $appVersion" -ForegroundColor Cyan
-
-        $identityOutput = if ($Release) { "target\release" } else { "target\debug" }
-        & (Join-Path $PSScriptRoot "build-windows-identity.ps1") -OutputDir $identityOutput
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Echec de la construction du paquet d'identité Windows" -ForegroundColor Red
-            exit $LASTEXITCODE
-        }
     }
 
     Write-Host ""
