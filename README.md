@@ -118,6 +118,8 @@ Bonjour, ...
 ```
 ````
 
+Le plugin affiche le corps du bloc en texte brut : les images et les liens du message sont donc aussi listés sous le bloc (`### Images :`, `### Liens :`) pour rester affichables, avant la section `### Pieces jointes :`.
+
 Les notes exportées avant ce format gardent leur frontmatter complet et restent lues.
 
 Si aucune règle ne correspond, l'email atterrit dans le dossier fourre-tout : `notes_dir/Perso/Messy/Emails/<Année>/<Mois>`.

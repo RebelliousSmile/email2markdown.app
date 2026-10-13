@@ -6,7 +6,9 @@
 //! plugin. Readers that used to look at `from:`/`to:`/`subject:`/`date:` in the
 //! frontmatter fall back to this block via [`read_header`].
 
+use regex::Regex;
 use serde::Deserialize;
+use std::sync::LazyLock;
 
 /// Header fields of a message, as written in the block.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -142,6 +144,109 @@ pub fn render(header: &BlockHeader, body: &str) -> String {
     out.push_str(&fence);
     out.push('\n');
 
+    out
+}
+
+/// Images and links found in a Markdown body, as `(label, target)` pairs.
+#[derive(Debug, Default, PartialEq)]
+pub struct BodyMedia {
+    pub images: Vec<(String, String)>,
+    pub links: Vec<(String, String)>,
+}
+
+static MEDIA_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\[!\[(?P<ialt>[^\]]*)\]\((?P<iurl>[^)\s]+)[^)]*\)\]\((?P<lurl>[^)\s]+)[^)]*\)",
+        r"|!\[(?P<alt>[^\]]*)\]\((?P<src>[^)\s]+)[^)]*\)",
+        r"|\[(?P<text>[^\[\]]+)\]\((?P<href>[^)\s]+)[^)]*\)",
+    ))
+    .expect("static regex")
+});
+
+static REF_DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\[(?P<id>[^\]]+)\]:[ \t]*(?P<url>\S+)[ \t]*$").expect("static regex")
+});
+static REF_USE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?P<bang>!?)\[(?P<text>[^\[\]]*)\]\[(?P<id>[^\]]+)\]").expect("static regex")
+});
+static REF_WRAPPED_IMAGE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[(?P<image>!\[[^\]]*\]\([^)]*\))\]\[(?P<id>[^\]]+)\]").expect("static regex")
+});
+
+/// Turn reference-style images and links (`[text][1]` + `[1]: url`, what the
+/// HTML conversion emits) into inline ones, so one pattern reads both.
+fn inline_references(body: &str) -> String {
+    let defs: Vec<(String, String)> = REF_DEF_RE
+        .captures_iter(body)
+        .map(|c| (c["id"].to_string(), c["url"].to_string()))
+        .collect();
+    if defs.is_empty() {
+        return body.to_string();
+    }
+    let url_of = |id: &str| defs.iter().find(|(d, _)| d == id).map(|(_, u)| u.clone());
+    let first = REF_USE_RE.replace_all(body, |c: &regex::Captures| match url_of(&c["id"]) {
+        Some(url) => format!("{}[{}]({})", &c["bang"], &c["text"], url),
+        None => c[0].to_string(),
+    });
+    REF_WRAPPED_IMAGE_RE
+        .replace_all(&first, |c: &regex::Captures| match url_of(&c["id"]) {
+            Some(url) => format!("[{}]({})", &c["image"], url),
+            None => c[0].to_string(),
+        })
+        .into_owned()
+}
+
+/// The block body is shown as plain text by the plugin, so Markdown images and
+/// links inside it do not render. Collect them (deduplicated by target) to be
+/// listed after the block.
+pub fn body_media(body: &str) -> BodyMedia {
+    let body = inline_references(body);
+    let mut media = BodyMedia::default();
+    let push_image = |media: &mut BodyMedia, alt: &str, src: &str| {
+        if !src.starts_with("data:") && !media.images.iter().any(|(_, s)| s == src) {
+            media.images.push((alt.trim().to_string(), src.to_string()));
+        }
+    };
+    let push_link = |media: &mut BodyMedia, text: &str, href: &str| {
+        let wanted = href.starts_with("http://") || href.starts_with("https://");
+        if wanted && !media.links.iter().any(|(_, h)| h == href) {
+            media
+                .links
+                .push((text.trim().to_string(), href.to_string()));
+        }
+    };
+    for caps in MEDIA_RE.captures_iter(&body) {
+        if let (Some(alt), Some(src), Some(href)) =
+            (caps.name("ialt"), caps.name("iurl"), caps.name("lurl"))
+        {
+            push_image(&mut media, alt.as_str(), src.as_str());
+            push_link(&mut media, alt.as_str(), href.as_str());
+        } else if let (Some(alt), Some(src)) = (caps.name("alt"), caps.name("src")) {
+            push_image(&mut media, alt.as_str(), src.as_str());
+        } else if let (Some(text), Some(href)) = (caps.name("text"), caps.name("href")) {
+            push_link(&mut media, text.as_str(), href.as_str());
+        }
+    }
+    media
+}
+
+/// Sections listing the images then the links, each preceded by a blank line.
+/// Empty when the body has neither.
+pub fn render_media(media: &BodyMedia) -> String {
+    let mut out = String::new();
+    if !media.images.is_empty() {
+        out.push_str("\n\n### Images :\n");
+        for (alt, src) in &media.images {
+            out.push_str(&format!("\n![{alt}]({src})\n"));
+        }
+    }
+    if !media.links.is_empty() {
+        out.push_str("\n\n### Liens :\n");
+        for (text, href) in &media.links {
+            let label = if text.is_empty() { href } else { text };
+            out.push_str(&format!("- [{label}]({href})\n"));
+        }
+    }
     out
 }
 
@@ -315,6 +420,52 @@ mod tests {
     fn test_note_header_field_invalid_block_is_none() {
         let note = "---\ntags: []\n---\n\n```email\nsubject = \n```\n";
         assert_eq!(note_header_field(note, "subject"), None);
+    }
+
+    #[test]
+    fn test_body_media_collects_images_and_links_once() {
+        let body = "[devis](https://a.test/d) et encore [devis](https://a.test/d)\n\
+                    ![plan](https://a.test/p.png) ![](inline_x.png)\n\
+                    [![logo](inline_l.png)](https://a.test/home) [mail](mailto:a@b.c)";
+        let media = body_media(body);
+        assert_eq!(
+            media.images,
+            vec![
+                ("plan".to_string(), "https://a.test/p.png".to_string()),
+                (String::new(), "inline_x.png".to_string()),
+                ("logo".to_string(), "inline_l.png".to_string()),
+            ]
+        );
+        assert_eq!(
+            media.links,
+            vec![
+                ("devis".to_string(), "https://a.test/d".to_string()),
+                ("logo".to_string(), "https://a.test/home".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_body_media_resolves_reference_style() {
+        let body = "Voir [le devis][1]\n\n[![logo][2]][3]\n\n![plan][2]\n\n\
+                    [1]: https://a.test/devis\n[2]: https://a.test/logo.png\n[3]: https://a.test/home";
+        let media = body_media(body);
+        assert_eq!(
+            media.images,
+            vec![("logo".to_string(), "https://a.test/logo.png".to_string())]
+        );
+        assert_eq!(
+            media.links,
+            vec![
+                ("le devis".to_string(), "https://a.test/devis".to_string()),
+                ("logo".to_string(), "https://a.test/home".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_render_media_is_empty_without_media() {
+        assert_eq!(render_media(&body_media("Bonjour,\n\nMerci.")), "");
     }
 
     #[test]

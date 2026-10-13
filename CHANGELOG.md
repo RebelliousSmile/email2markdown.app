@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Frontmatter orienté note** : l'en-tête du courriel (sujet, expéditeur, destinataires, copie, date) et son corps passent dans un bloc ```` ```email ```` au format TOML, lu par le plugin Obsidian Notebook. Le frontmatter ne garde que les données de la note : `tags: [email]`, `subject_hash`, `attachments` (s'il y en a), `email_type` et `source`. Le dossier IMAP n'est plus écrit comme tag. Les notes déjà exportées restent lues : le frontmatter est prioritaire, le bloc complète. Nouvelle dépendance directe : `toml` (déjà présente en transitive) ; les outils Python utilisent `tomllib`, ou `tomli` avant Python 3.11.
+- **Images et liens sous le bloc `email`** : le plugin Notebook affiche le corps du bloc en texte brut ; les images et les liens du message sont listés après le bloc (`### Images :`, `### Liens :`, dédoublonnés), y compris ceux issus de la conversion HTML (références `[texte][1]`). Une image déjà en pièce jointe n'est pas répétée.
 
 ### Removed
 
