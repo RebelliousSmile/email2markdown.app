@@ -232,8 +232,49 @@ pub fn send_command(cmd: AppCommand) -> Result<()> {
 }
 
 /// Run the system tray application.
+///
+/// Only one tray may run at a time: a second launch shows an alert and exits.
 pub fn run_tray() -> Result<()> {
+    // Held for the whole process lifetime; the OS releases it on exit or crash.
+    let _instance_lock = match acquire_single_instance_lock() {
+        Ok(Some(lock)) => Some(lock),
+        Ok(None) => {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Info)
+                .set_title("Email to Markdown")
+                .set_description(
+                    "Le logiciel est déjà présent dans votre zone de notification (systray).",
+                )
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+            return Ok(());
+        }
+        Err(error) => {
+            // Never block startup on a lock-file problem.
+            eprintln!("warning: single-instance check failed: {error:#}");
+            None
+        }
+    };
     event_loop::run()
+}
+
+/// `Ok(None)` when another instance already holds the lock.
+fn acquire_single_instance_lock() -> Result<Option<std::fs::File>> {
+    use fs2::FileExt;
+
+    let dir = config::app_config_dir();
+    std::fs::create_dir_all(&dir).context("create config directory")?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join("tray.lock"))
+        .context("open tray lock file")?;
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(Some(file)),
+        Err(error) if error.kind() == fs2::lock_contended_error().kind() => Ok(None),
+        Err(error) => Err(error).context("lock tray lock file"),
+    }
 }
 
 /// Run one contextual export window as a standalone process. This is the entry
