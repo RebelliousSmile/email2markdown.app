@@ -36,7 +36,20 @@ pub(super) enum DestGuiIpcResult {
 }
 
 pub(super) fn state_json(cfg: &crate::destinations::DestinationsConfig) -> String {
-    let json = serde_json::json!({ "type": "state", "destinations": cfg.destinations });
+    // Entries whose folder no longer exists under `notes_dir`. Empty when
+    // `notes_dir` is unset or unreachable: nothing can be asserted then.
+    let missing: Vec<String> = Settings::load(&config::settings_path())
+        .ok()
+        .and_then(|s| s.notes_dir)
+        .map(std::path::PathBuf::from)
+        .filter(|dir| dir.is_dir())
+        .map(|dir| crate::dest_cmd::orphaned_entries(&dir, cfg))
+        .unwrap_or_default();
+    let json = serde_json::json!({
+        "type": "state",
+        "destinations": cfg.destinations,
+        "missing": missing,
+    });
     serde_json::to_string(&json).unwrap_or_default()
 }
 

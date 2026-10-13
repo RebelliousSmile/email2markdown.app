@@ -28,6 +28,14 @@
     gap: 12px;
   }
   header span { flex: 1; }
+  #missing-alert {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 16px; background: #fff3e0; color: #7a3e00;
+    border-bottom: 1px solid #ef6c00; font-size: 13px;
+  }
+  #missing-alert span { flex: 1; word-break: break-word; }
+  #dest-list li.missing .path { color: #c62828; }
+  #dest-list li .missing-flag { color: #c62828; font-size: 12px; margin-left: 4px; }
   .layout {
     flex: 1;
     display: flex;
@@ -295,6 +303,11 @@
   <button class="btn" id="btn-suggest">Suggérer</button>
 </header>
 
+<div id="missing-alert" role="alert" style="display:none">
+  <span id="missing-text"></span>
+  <button class="btn" id="btn-missing-remove" type="button">Retirer de la liste</button>
+</div>
+
 <div class="layout">
   <!-- Left panel: destination list -->
   <aside id="list-panel">
@@ -440,6 +453,8 @@
 
     if (data.type === 'state') {
       state.destinations = data.destinations || [];
+      state.missing = data.missing || [];
+      renderMissingAlert();
       render();
       return;
     }
@@ -470,6 +485,30 @@
       return;
     }
   };
+
+  // ── Missing folders alert ──────────────────────────────────────────────────
+  function renderMissingAlert() {
+    var box = document.getElementById('missing-alert');
+    var missing = state.missing || [];
+    if (!missing.length) {
+      box.style.display = 'none';
+      return;
+    }
+    var shown = missing.slice(0, 5).join(', ') + (missing.length > 5 ? '…' : '');
+    document.getElementById('missing-text').textContent =
+      '⚠ ' + missing.length + ' destination' + (missing.length > 1 ? 's' : '') +
+      ' pointe' + (missing.length > 1 ? 'nt' : '') + ' vers un dossier qui n’existe plus : ' + shown;
+    box.style.display = 'flex';
+  }
+
+  document.getElementById('btn-missing-remove').addEventListener('click', function () {
+    var missing = state.missing || [];
+    if (!missing.length) return;
+    if (!confirm('Retirer de la liste ' + missing.length + ' destination(s) dont le dossier n’existe plus ?\n' +
+                 missing.join('\n'))) return;
+    send('remove_entries', missing.map(function (p) { return { path: p }; }));
+    if (missing.indexOf(selectedPath) >= 0) selectedPath = null;
+  });
 
   // ── Render ─────────────────────────────────────────────────────────────────
   function render() {
@@ -503,6 +542,13 @@
       count.className = 'rule-count';
       count.textContent = '(' + (entry.rules || []).length + ')';
       pathSpan.appendChild(count);
+      if ((state.missing || []).indexOf(entry.path) >= 0) {
+        li.classList.add('missing');
+        var flag = document.createElement('span');
+        flag.className = 'missing-flag';
+        flag.textContent = '⚠ dossier introuvable';
+        pathSpan.appendChild(flag);
+      }
       li.appendChild(pathSpan);
 
       if (entry.default) {
