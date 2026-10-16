@@ -325,6 +325,8 @@ pub enum ConversionStatus {
     Written {
         markdown: PathBuf,
         proof: LocalSourceProof,
+        /// Images dropped by the signature filter and kept under `_skipped/`.
+        quarantined: usize,
     },
     AlreadyPresent {
         markdown: PathBuf,
@@ -430,7 +432,9 @@ pub fn build_deletion_batch(results: &[MessageConversionResult]) -> Vec<Deletion
     results
         .iter()
         .filter_map(|result| match &result.status {
-            Some(ConversionStatus::Written { markdown, proof })
+            Some(ConversionStatus::Written {
+                markdown, proof, ..
+            })
             | Some(ConversionStatus::AlreadyPresent { markdown, proof })
                 if proof_is_complete(proof)
                     && markdown.is_file()
@@ -679,6 +683,10 @@ pub(crate) fn convert_raw_contextual_unlocked(
             .as_nanos()
     ));
     fs::create_dir(&staging)?;
+    // The staging directory is removed below: skipped images go to the account's
+    // real export directory instead, so they outlive the server copy.
+    let quarantine_root = Path::new(&account.export_directory).join("_skipped");
+    let mut quarantined = 0usize;
 
     let result = (|| {
         let mut contextual_account = account.clone();
@@ -693,6 +701,12 @@ pub(crate) fn convert_raw_contextual_unlocked(
             source_proof: Some(&proof),
             organize_by_date,
             exported: None,
+            quarantine: account
+                .delete_after_export
+                .then(|| crate::email_export::Quarantine {
+                    root: &quarantine_root,
+                    count: &mut quarantined,
+                }),
         };
         let (markdown, _) = crate::email_export::export_to_markdown(
             raw_email,
@@ -701,7 +715,14 @@ pub(crate) fn convert_raw_contextual_unlocked(
             &mut context,
         )?
         .context("contextual converter skipped a selected message")?;
-        install_staged(&effective_target, &staging, &markdown, candidate, &proof)
+        install_staged(
+            &effective_target,
+            &staging,
+            &markdown,
+            candidate,
+            &proof,
+            quarantined,
+        )
     })();
     let _ = fs::remove_dir_all(&staging);
     result
@@ -713,6 +734,7 @@ fn install_staged(
     staged_markdown: &Path,
     candidate: &ContextualCandidate,
     proof: &LocalSourceProof,
+    quarantined: usize,
 ) -> Result<ConversionStatus> {
     let stable_key = &format!("{:x}", md5::compute(candidate.logical_key().as_bytes()))[..10];
     let original_name = staged_markdown
@@ -752,6 +774,7 @@ fn install_staged(
         Ok(ConversionStatus::Written {
             markdown: final_markdown,
             proof: proof.clone(),
+            quarantined,
         })
     })();
 

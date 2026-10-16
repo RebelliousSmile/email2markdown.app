@@ -411,6 +411,25 @@ pub struct ExportContext<'a> {
     /// Files already present in `export_directory`, shared by the whole pass.
     /// `None` makes each duplicate check walk the directory again.
     pub exported: Option<&'a mut ExportedIndex>,
+    /// Where images dropped by the signature filter are kept. `Some` only when
+    /// the message may be deleted from the server afterwards.
+    pub quarantine: Option<Quarantine<'a>>,
+}
+
+/// Directory receiving the images dropped by `skip_signature_images`, and the
+/// caller-owned count of images written there across the whole pass.
+pub struct Quarantine<'a> {
+    /// `_skipped` directory; each note gets a sub-directory named after its stem.
+    pub root: &'a Path,
+    pub count: &'a mut usize,
+}
+
+/// How `extract_attachments` treats the parts it walks.
+struct AttachmentPolicy<'q> {
+    skip_signature_images: bool,
+    debug_mode: bool,
+    /// Note-specific quarantine directory and the shared counter.
+    quarantine: Option<(PathBuf, &'q mut usize)>,
 }
 
 /// Export a single email to Markdown with frontmatter.
@@ -529,12 +548,23 @@ pub fn export_to_markdown(
     let referenced_cids = referenced_content_ids(&body);
     let mut inline_images: HashMap<String, Option<String>> = HashMap::new();
 
+    let note_stem = Path::new(&filename)
+        .file_stem()
+        .unwrap_or_default()
+        .to_os_string();
+    let mut policy = AttachmentPolicy {
+        skip_signature_images: account.skip_signature_images,
+        debug_mode,
+        quarantine: ctx
+            .quarantine
+            .as_mut()
+            .map(|q| (q.root.join(&note_stem), &mut *q.count)),
+    };
     extract_attachments(
         &mail,
         export_directory,
         &date_str,
-        account.skip_signature_images,
-        debug_mode,
+        &mut policy,
         &referenced_cids,
         &mut inline_images,
         &mut attachments,
@@ -944,12 +974,13 @@ fn collect_text_bodies(mail: &ParsedMail, plain: &mut Option<String>, html: &mut
 /// using the flat filename scheme `<stem>__<hash>_<safe_name>`. When two attachments share the
 /// same original name (identical hash), a numeric suffix `_2`, `_3`, … is appended to avoid
 /// clobbering. The bare filename (no directory prefix) is pushed into `attachments`.
+/// An image dropped by the signature filter is written to the policy's quarantine
+/// directory when there is one, and neither listed nor linked from the note.
 fn extract_attachments(
     mail: &ParsedMail,
     attachments_dir: &Path,
     name_prefix: &str,
-    skip_signature_images: bool,
-    debug_mode: bool,
+    policy: &mut AttachmentPolicy<'_>,
     referenced_cids: &HashSet<String>,
     inline_images: &mut HashMap<String, Option<String>>,
     attachments: &mut Vec<String>,
@@ -993,7 +1024,7 @@ fn extract_attachments(
                 let payload = part.get_body_raw().unwrap_or_default();
 
                 // Check if this is a signature image that should be skipped
-                if skip_signature_images
+                if policy.skip_signature_images
                     && should_skip_image(
                         referenced_cid.is_some(),
                         Some(&decoded_filename),
@@ -1005,12 +1036,20 @@ fn extract_attachments(
                     if let Some(id) = &referenced_cid {
                         inline_images.insert(id.clone(), None);
                     }
-                    if debug_mode {
+                    if policy.debug_mode {
                         println!(
                             "    Skipping signature image: '{}' ({} bytes)",
                             decoded_filename,
                             payload.len()
                         );
+                    }
+                    if let Some((dir, count)) = policy.quarantine.as_mut() {
+                        if !payload.is_empty() {
+                            fs::create_dir_all(&*dir)?;
+                            let name = unique_file_name(dir, &sanitize_filename(&decoded_filename));
+                            fs::write(dir.join(name), &payload)?;
+                            **count += 1;
+                        }
                     }
                     continue;
                 }
@@ -1022,18 +1061,7 @@ fn extract_attachments(
                     // safety pass in `route::move_email` handles cross-email collisions
                     // when several emails are routed into the same destination folder.
                     let base_full_filename = format!("{}_{}", name_prefix, safe_filename);
-
-                    // Numeric suffix loop on real path collision — suffix inserted before extension
-                    // so `invoice.pdf` → `invoice_2.pdf`, not `invoice.pdf_2`.
-                    let mut full_filename = base_full_filename.clone();
-                    let mut suffix = 2u32;
-                    while attachments_dir.join(&full_filename).exists() {
-                        full_filename = match base_full_filename.rsplit_once('.') {
-                            Some((stem, ext)) => format!("{}_{}.{}", stem, suffix, ext),
-                            None => format!("{}_{}", base_full_filename, suffix),
-                        };
-                        suffix += 1;
-                    }
+                    let full_filename = unique_file_name(attachments_dir, &base_full_filename);
 
                     let filepath = attachments_dir.join(&full_filename);
                     fs::write(&filepath, &payload)?;
@@ -1044,7 +1072,7 @@ fn extract_attachments(
                         inline_images.insert(id.clone(), Some(bare_link.clone()));
                     }
                     attachments.push(bare_link);
-                } else if debug_mode {
+                } else if policy.debug_mode {
                     println!(
                         "    Skipping attachment '{}' with empty payload",
                         decoded_filename
@@ -1059,8 +1087,7 @@ fn extract_attachments(
                 part,
                 attachments_dir,
                 name_prefix,
-                skip_signature_images,
-                debug_mode,
+                policy,
                 referenced_cids,
                 inline_images,
                 attachments,
@@ -1069,6 +1096,21 @@ fn extract_attachments(
     }
 
     Ok(())
+}
+
+/// `base` when it is free in `dir`, otherwise `base` with a numeric suffix
+/// inserted before the extension: `invoice.pdf` → `invoice_2.pdf`, not `invoice.pdf_2`.
+fn unique_file_name(dir: &Path, base: &str) -> String {
+    let mut name = base.to_string();
+    let mut suffix = 2u32;
+    while dir.join(&name).exists() {
+        name = match base.rsplit_once('.') {
+            Some((stem, ext)) => format!("{}_{}.{}", stem, suffix, ext),
+            None => format!("{}_{}", base, suffix),
+        };
+        suffix += 1;
+    }
+    name
 }
 
 /// Extract filename from an attachment part.
@@ -1991,6 +2033,8 @@ impl ImapExporter {
             let message_count = mailbox.exists as usize;
             let mailbox_uid_validity = mailbox.uid_validity;
             let mut proofless = 0usize;
+            let quarantine_root = base_export_directory.join("_skipped");
+            let mut quarantined = 0usize;
 
             if self.debug_mode {
                 println!("  {} messages in folder", message_count);
@@ -2156,6 +2200,10 @@ impl ImapExporter {
                                 source_proof: source_proof.as_ref(),
                                 organize_by_date,
                                 exported: Some(&mut exported),
+                                quarantine: self.account.delete_after_export.then(|| Quarantine {
+                                    root: &quarantine_root,
+                                    count: &mut quarantined,
+                                }),
                             };
                             let result = export_to_markdown(
                                 body,
@@ -2230,6 +2278,13 @@ impl ImapExporter {
                 eprintln!(
                     "warning: {proofless} message(s) of {} have no stable source proof and stay on the server",
                     folder.display
+                );
+            }
+            if quarantined > 0 {
+                eprintln!(
+                    "warning: {quarantined} image(s) skipped from {} kept in quarantine in {}",
+                    folder.display,
+                    quarantine_root.display()
                 );
             }
 
@@ -2629,6 +2684,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: Some(&mut index),
+            quarantine: None,
         };
         export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
@@ -2859,6 +2915,15 @@ abc123
         .into_bytes()
     }
 
+    /// Policy of an account with `skip_signature_images: true`.
+    fn signature_filter(quarantine: Option<(PathBuf, &mut usize)>) -> AttachmentPolicy<'_> {
+        AttachmentPolicy {
+            skip_signature_images: true,
+            debug_mode: false,
+            quarantine,
+        }
+    }
+
     #[test]
     fn test_extract_attachments_keeps_referenced_small_gmail_screenshot() {
         let temp = tempfile::TempDir::new().unwrap();
@@ -2878,8 +2943,7 @@ abc123
             &mail,
             temp.path(),
             "2024-01-01",
-            true,
-            false,
+            &mut signature_filter(None),
             &cids,
             &mut inline,
             &mut attachments,
@@ -2907,8 +2971,7 @@ abc123
             &mail,
             temp.path(),
             "2024-01-01",
-            true,
-            false,
+            &mut signature_filter(None),
             &cids,
             &mut inline,
             &mut attachments,
@@ -2960,6 +3023,7 @@ abc123
             source_proof: None,
             organize_by_date: false,
             exported: None,
+            quarantine: None,
         };
 
         let (path, _) = export_to_markdown(raw, vec![], None, &mut ctx)
@@ -3089,6 +3153,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: None,
+            quarantine: None,
         };
         let result = export_to_markdown(&raw, vec!["INBOX".to_string()], None, &mut ctx);
 
@@ -3154,6 +3219,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: None,
+            quarantine: None,
         };
         let (path, _) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
@@ -3197,6 +3263,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: None,
+            quarantine: None,
         };
         let (md_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
@@ -3243,6 +3310,16 @@ abc123
     }
 
     fn export_with_signature_filter(raw: &[u8], export_dir: &Path) -> String {
+        let (md_path, _) = export_with_quarantine(raw, export_dir, None);
+        fs::read_to_string(md_path).unwrap()
+    }
+
+    /// Export with `skip_signature_images: true`; returns the note path and its stem.
+    fn export_with_quarantine(
+        raw: &[u8],
+        export_dir: &Path,
+        quarantine: Option<Quarantine<'_>>,
+    ) -> (PathBuf, String) {
         let mut account = make_account(&export_dir.to_string_lossy());
         account.skip_signature_images = true;
         let mut ctx = ExportContext {
@@ -3254,11 +3331,103 @@ abc123
             source_proof: None,
             organize_by_date: false,
             exported: None,
+            quarantine,
         };
         let (md_path, _) = export_to_markdown(raw, vec![], None, &mut ctx)
             .unwrap()
             .expect("export should produce a file");
-        fs::read_to_string(md_path).unwrap()
+        let stem = md_path.file_stem().unwrap().to_string_lossy().into_owned();
+        (md_path, stem)
+    }
+
+    /// Plain-text mail carrying unreferenced inline images of 20 KB, the shape
+    /// `is_signature_image` drops.
+    fn mail_with_inline_logos(subject: &str, names: &[&str]) -> Vec<u8> {
+        let logo = "L".repeat(20 * 1024);
+        let mut raw = format!(
+            "From: a@b.com\r\nTo: c@d.com\r\nSubject: {subject}\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"MIX\"\r\n\r\n\
+--MIX\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBonjour, voici le devis.\r\n"
+        );
+        for name in names {
+            raw.push_str(&format!(
+                "--MIX\r\nContent-Type: image/png; name=\"{name}\"\r\nContent-Transfer-Encoding: 7bit\r\nContent-Disposition: inline; filename=\"{name}\"\r\n\r\n{logo}\r\n"
+            ));
+        }
+        raw.push_str("--MIX--\r\n");
+        raw.into_bytes()
+    }
+
+    #[test]
+    fn test_export_to_markdown_quarantines_skipped_logo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("_skipped");
+        let mut count = 0usize;
+        let (md_path, stem) = export_with_quarantine(
+            &mail_with_inline_logos("Devis", &["logo.png"]),
+            temp.path(),
+            Some(Quarantine {
+                root: &root,
+                count: &mut count,
+            }),
+        );
+        let md = fs::read_to_string(md_path).unwrap();
+
+        assert!(root.join(&stem).join("logo.png").exists());
+        assert_eq!(count, 1);
+        assert!(md.contains("voici le devis"), "{md}");
+        assert!(!md.contains("logo.png"), "{md}");
+        assert!(!temp.path().join("2024-01-01_logo.png").exists());
+    }
+
+    #[test]
+    fn test_export_to_markdown_quarantine_counter_spans_messages() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("_skipped");
+        let mut count = 0usize;
+        for subject in ["Devis", "Facture"] {
+            export_with_quarantine(
+                &mail_with_inline_logos(subject, &["logo.png"]),
+                temp.path(),
+                Some(Quarantine {
+                    root: &root,
+                    count: &mut count,
+                }),
+            );
+        }
+
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_export_to_markdown_without_quarantine_creates_no_skipped_dir() {
+        let temp = tempfile::TempDir::new().unwrap();
+        export_with_quarantine(
+            &mail_with_inline_logos("Devis", &["logo.png"]),
+            temp.path(),
+            None,
+        );
+
+        assert!(!temp.path().join("_skipped").exists());
+        assert!(!temp.path().join("2024-01-01_logo.png").exists());
+    }
+
+    #[test]
+    fn test_export_to_markdown_quarantine_keeps_same_named_images_apart() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("_skipped");
+        let mut count = 0usize;
+        let (_, stem) = export_with_quarantine(
+            &mail_with_inline_logos("Devis", &["image.png", "image.png"]),
+            temp.path(),
+            Some(Quarantine {
+                root: &root,
+                count: &mut count,
+            }),
+        );
+
+        assert!(root.join(&stem).join("image.png").exists());
+        assert!(root.join(&stem).join("image_2.png").exists());
+        assert_eq!(count, 2);
     }
 
     #[test]
@@ -3344,6 +3513,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: None,
+            quarantine: None,
         };
         let (first_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()

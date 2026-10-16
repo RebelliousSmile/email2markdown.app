@@ -310,6 +310,15 @@ pub fn run_contextual_batch(
             )
         })
         .count();
+    let quarantined: usize = conversions
+        .iter()
+        .filter_map(|result| match result.status {
+            Some(crate::contextual_export::ConversionStatus::Written { quarantined, .. }) => {
+                Some(quarantined)
+            }
+            _ => None,
+        })
+        .sum();
     let already_present = conversions
         .iter()
         .filter(|result| {
@@ -350,10 +359,18 @@ pub fn run_contextual_batch(
         retry_conversion,
         retry_deletion_count,
         stale_search,
-        message: if retry_deletion_count == 0 {
-            "Traitement terminé".into()
-        } else {
-            "Conversion locale terminée, suppression serveur à réessayer".into()
+        message: {
+            let mut message = if retry_deletion_count == 0 {
+                "Traitement terminé".to_string()
+            } else {
+                "Conversion locale terminée, suppression serveur à réessayer".to_string()
+            };
+            if quarantined > 0 {
+                message.push_str(&format!(
+                    " ; {quarantined} image(s) écartée(s) mise(s) en quarantaine dans _skipped"
+                ));
+            }
+            message
         },
         retry_deletion,
     })
@@ -753,16 +770,17 @@ pub fn action_resume_sort(account_name: String, result_sender: Sender<ActionResu
 }
 
 /// Directories created by the export pipeline that must never be treated as
-/// staged emails to re-sort: the delete bin, the failed-dump, and contacts.
+/// staged emails to re-sort: the delete bin, the failed-dump, the quarantine of
+/// skipped signature images, and contacts.
 fn is_excluded_staging_dir(name: &std::ffi::OsStr) -> bool {
     matches!(
         name.to_str(),
-        Some("_deleted") | Some("_failed") | Some("contacts")
+        Some("_deleted") | Some("_failed") | Some("_skipped") | Some("contacts")
     )
 }
 
 /// Walk an account's `export_directory` and rebuild `(staging_path, RouteDecision)`
-/// pairs for every `.md` note still there. Excludes `_deleted`/`_failed`/`contacts`.
+/// pairs for every `.md` note still there. Excludes `_deleted`/`_failed`/`_skipped`/`contacts`.
 fn scan_staged_decisions(account_name: &str) -> Result<Vec<(PathBuf, RouteDecision)>> {
     dotenvy::from_path(config::env_file_path()).ok();
 
@@ -1189,12 +1207,17 @@ pub fn get_account_names() -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{set_export_dir_in, set_notes_dir_in};
+    use super::{is_excluded_staging_dir, set_export_dir_in, set_notes_dir_in};
     use crate::config::Settings;
     use std::fs;
     use tempfile::TempDir;
 
     const INVALID_YAML: &str = "export_base_dir: [unclosed\naccounts: : :\n";
+
+    #[test]
+    fn test_is_excluded_staging_dir_with_quarantine() {
+        assert!(is_excluded_staging_dir(std::ffi::OsStr::new("_skipped")));
+    }
 
     #[test]
     fn test_set_export_dir_in_valid_keeps_other_fields() {

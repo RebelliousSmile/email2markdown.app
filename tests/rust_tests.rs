@@ -2676,6 +2676,45 @@ mod contextual_export_tests {
     }
 
     #[test]
+    fn test_convert_raw_contextual_quarantines_outside_staging() {
+        let temp = TempDir::new().unwrap();
+        let export = temp.path().join("export");
+        let target = export.join("Pro");
+        fs::create_dir_all(&target).unwrap();
+        let mut account = account(&export);
+        account.skip_signature_images = true;
+        account.delete_after_export = true;
+        let logo = "L".repeat(20 * 1024);
+        let raw = format!(
+            "Message-ID: <logo@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Devis\r\nContent-Type: multipart/mixed; boundary=BOUND\r\n\r\n--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody\r\n--BOUND\r\nContent-Type: image/png; name=logo.png\r\nContent-Disposition: inline; filename=logo.png\r\n\r\n{logo}\r\n--BOUND--\r\n"
+        )
+        .into_bytes();
+        let location = location("INBOX", 42);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+
+        let status =
+            convert_raw_contextual(&target, &account, &candidate, &location, &raw, false).unwrap();
+        let (markdown, quarantined) = match status {
+            ConversionStatus::Written {
+                markdown,
+                quarantined,
+                ..
+            } => (markdown, quarantined),
+            other => panic!("expected write, got {other:?}"),
+        };
+
+        let stem = markdown.file_stem().unwrap();
+        assert!(export.join("_skipped").join(stem).join("logo.png").exists());
+        assert_eq!(quarantined, 1);
+        assert!(!target.join("_skipped").exists());
+        assert!(!fs::read_dir(&target).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".email-to-markdown-tmp-")));
+    }
+
+    #[test]
     fn search_batches_are_safe_deduplicated_and_bounded() {
         let rules: Vec<_> = (0..250)
             .map(|index| MatchRule::Correspondent(format!("person{index}@example.com")))
@@ -2837,7 +2876,9 @@ mod contextual_export_tests {
         )
         .unwrap();
         let (markdown, proof) = match first {
-            ConversionStatus::Written { markdown, proof } => (markdown, proof),
+            ConversionStatus::Written {
+                markdown, proof, ..
+            } => (markdown, proof),
             other => panic!("expected write, got {other:?}"),
         };
         assert!(markdown.exists());

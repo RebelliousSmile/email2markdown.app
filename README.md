@@ -287,6 +287,21 @@ defaults:
 #     collect_contacts: true
 ```
 
+#### Images de signature
+
+Avec `skip_signature_images`, les logos et bannières de signature ne sont pas
+enregistrés à côté de la note. Une image collée dans le corps du message (une
+capture Gmail nommée `image.png`, par exemple) est conservée : quand le HTML
+intègre une image de contenu, c'est lui qui sert de corps, et seules les images
+placées dans le bloc de signature du client mail, celles dont le nom évoque un
+logo ou une signature, et les icônes de moins de 10 Ko sont écartées.
+
+Si `delete_after_export` est actif, une image écartée n'est pas perdue avec la
+suppression du message sur le serveur : elle est mise en quarantaine dans
+`<export_directory>/_skipped/<nom de la note>/`, y compris pour une sélection
+contextuelle. L'export signale le nombre d'images concernées. Une fois vérifié,
+ce dossier peut être vidé à la main ; la reprise du tri l'ignore.
+
 ### `destinations.yaml` — Arborescence de rangement
 
 Fichier YAML décrivant les chemins valides de votre second cerveau et les règles de correspondance. Édité à la main ou via la sous-commande `dest`.
