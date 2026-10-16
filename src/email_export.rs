@@ -722,6 +722,17 @@ fn html_to_markdown(html: &str) -> String {
                 if is_tracking_pixel(&attrs) {
                     return None;
                 }
+                // A signature logo is not content: dropping it here leaves its
+                // part unreferenced, so the signature filter can discard it.
+                let embedded = attrs.iter().any(|(name, value)| {
+                    *name == "src"
+                        && value
+                            .get(..4)
+                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("cid:"))
+                });
+                if embedded && crate::html_layout::in_signature_container(element.node) {
+                    return None;
+                }
                 handlers.fallback(element)
             },
         )
@@ -868,9 +879,12 @@ pub(crate) fn extract_md_body(content: &str) -> &str {
 
 /// Extract the body from a parsed email.
 ///
-/// A readable `text/plain` part wins; otherwise the `text/html` part is
-/// converted to Markdown. This holds for single-part messages too, and for a
-/// part mislabelled `text/plain` that actually carries an HTML document.
+/// The `text/html` part wins when its Markdown still embeds a `cid:` image
+/// (signature logos are dropped by the conversion): Gmail's `text/plain`
+/// replaces such images with `[image: name]` and loses them. Otherwise a
+/// readable `text/plain` part wins, and the `text/html` part is the fallback.
+/// This holds for single-part messages too, and for a part mislabelled
+/// `text/plain` that actually carries an HTML document.
 pub(crate) fn extract_body(mail: &ParsedMail) -> String {
     let mut plain: Option<String> = None;
     let mut html: Option<String> = None;
@@ -878,6 +892,14 @@ pub(crate) fn extract_body(mail: &ParsedMail) -> String {
 
     if let Some(text) = plain.take() {
         if !text.trim().is_empty() {
+            if let Some(raw) = html.as_deref() {
+                if raw.to_ascii_lowercase().contains("cid:") {
+                    let converted = html_to_markdown(raw);
+                    if !referenced_content_ids(&converted).is_empty() {
+                        return converted;
+                    }
+                }
+            }
             if looks_like_html(&text) {
                 let converted = html_to_markdown(&text);
                 if !converted.is_empty() {
@@ -2654,6 +2676,38 @@ abc123
         assert!(result.is_empty() || result.trim().is_empty());
     }
 
+    #[test]
+    fn test_html_to_markdown_keeps_cid_image_outside_signature() {
+        let result =
+            html_to_markdown(r#"<div><p>Capture :</p><img src="CID:shot@x" alt="shot"></div>"#);
+        assert!(result.contains("![shot](CID:shot@x)"), "{result}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_drops_cid_image_in_gmail_signature() {
+        let result = html_to_markdown(
+            r#"<p>Bonjour</p><div class="gmail_signature" data-smartmail="gmail_signature"><div><div><img src="cid:logo@x" alt="logo"></div></div></div>"#,
+        );
+        assert!(result.contains("Bonjour"), "{result}");
+        assert!(!result.contains("cid:"), "{result}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_drops_cid_image_in_outlook_signature() {
+        let result =
+            html_to_markdown(r#"<p>Bonjour</p><div id="Signature"><img src="cid:logo@x"></div>"#);
+        assert!(!result.contains("cid:"), "{result}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_keeps_remote_image_in_signature() {
+        // Only embedded parts are filtered: a remote image costs no attachment.
+        let result = html_to_markdown(
+            r#"<div class="gmail_signature"><img src="https://a.test/logo.png" alt="logo"></div>"#,
+        );
+        assert!(result.contains("https://a.test/logo.png"), "{result}");
+    }
+
     // ── Helper ──────────────────────────────────────────────────────────────────
 
     /// Build a minimal valid RFC 2822 raw email.
@@ -3140,6 +3194,100 @@ abc123
             "attachment link must not carry the old `__<hash>_` scheme: got {:?}",
             md
         );
+    }
+
+    /// The mail of issue #14: Gmail sends a pasted screenshot as
+    /// `multipart/mixed` > `multipart/alternative` + an inline `image.png`,
+    /// and replaces it with `[image: image.png]` in the `text/plain` part.
+    /// `signature_html` is appended to the HTML body, `extra_parts` to the
+    /// MIME tree.
+    fn gmail_screenshot_mail(signature_html: &str, extra_parts: &str) -> Vec<u8> {
+        let shot = "A".repeat(300_000);
+        format!(
+            "From: Alice <alice@gmail.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Capture\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"MIX\"\r\n\r\n\
+--MIX\r\nContent-Type: multipart/alternative; boundary=\"ALT\"\r\n\r\n\
+--ALT\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nVoici la capture\r\n\r\n[image: image.png]\r\n\r\nMerci\r\n\
+--ALT\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<div dir=\"ltr\"><div>Voici la capture</div><div><img src=\"cid:ii_xyz\" alt=\"image.png\" width=\"562\" height=\"271\"><br></div><div>Merci</div>{signature_html}</div>\r\n\
+--ALT--\r\n\
+--MIX\r\nContent-Type: image/png; name=\"image.png\"\r\nContent-Disposition: inline; filename=\"image.png\"\r\nContent-Transfer-Encoding: 7bit\r\nContent-ID: <ii_xyz>\r\nX-Attachment-Id: ii_xyz\r\n\r\n{shot}\r\n\
+{extra_parts}--MIX--\r\n"
+        )
+        .into_bytes()
+    }
+
+    fn export_with_signature_filter(raw: &[u8], export_dir: &Path) -> String {
+        let mut account = make_account(&export_dir.to_string_lossy());
+        account.skip_signature_images = true;
+        let mut ctx = ExportContext {
+            export_directory: export_dir,
+            base_export_directory: export_dir,
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+            source_proof: None,
+            organize_by_date: false,
+            exported: None,
+        };
+        let (md_path, _) = export_to_markdown(raw, vec![], None, &mut ctx)
+            .unwrap()
+            .expect("export should produce a file");
+        fs::read_to_string(md_path).unwrap()
+    }
+
+    #[test]
+    fn test_export_to_markdown_keeps_gmail_inline_screenshot() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let md = export_with_signature_filter(&gmail_screenshot_mail("", ""), temp.path());
+
+        assert!(temp.path().join("2024-01-01_image.png").exists());
+        assert!(md.contains("attachments:"), "{md}");
+        assert!(md.contains("](2024-01-01_image.png)"), "{md}");
+        assert!(md.contains("Voici la capture"), "{md}");
+        assert!(!md.contains("[image: image.png]"), "{md}");
+        assert!(!md.contains("cid:"), "{md}");
+    }
+
+    #[test]
+    fn test_export_to_markdown_drops_gmail_signature_logo_with_screenshot() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let logo = "L".repeat(8_000);
+        let raw = gmail_screenshot_mail(
+            "<div class=\"gmail_signature\"><div><img src=\"cid:logo_sig\" alt=\"logo_sig\"></div></div>",
+            &format!("--MIX\r\nContent-Type: image/png; name=\"logo_sig.png\"\r\nContent-Disposition: inline; filename=\"logo_sig.png\"\r\nContent-Transfer-Encoding: 7bit\r\nContent-ID: <logo_sig>\r\n\r\n{logo}\r\n"),
+        );
+        let md = export_with_signature_filter(&raw, temp.path());
+
+        assert!(temp.path().join("2024-01-01_image.png").exists());
+        assert!(!temp.path().join("2024-01-01_logo_sig.png").exists());
+        assert!(md.contains("](2024-01-01_image.png)"), "{md}");
+        assert!(!md.contains("logo_sig"), "{md}");
+    }
+
+    #[test]
+    fn test_extract_body_keeps_plain_when_html_embeds_only_a_signature_logo() {
+        let raw = make_multipart_email(
+            "Hello plain text",
+            "<p>Hello HTML</p><div class=\"gmail_signature\"><img src=\"cid:logo@x\"></div>",
+        );
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        assert!(body.contains("Hello plain text"), "{body}");
+        assert!(!body.contains("Hello HTML"), "{body}");
+    }
+
+    #[test]
+    fn test_extract_body_prefers_html_embedding_a_content_image() {
+        let raw = make_multipart_email(
+            "Hello plain text [image: image.png]",
+            "<p>Hello HTML</p><img src=\"cid:shot@x\" alt=\"image.png\">",
+        );
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        assert!(body.contains("Hello HTML"), "{body}");
+        assert!(body.contains("cid:shot@x"), "{body}");
+        assert!(!body.contains("[image: image.png]"), "{body}");
     }
 
     #[test]

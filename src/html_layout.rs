@@ -24,15 +24,37 @@ fn parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     weak.and_then(|w| w.upgrade())
 }
 
-fn style_of(node: &Rc<Node>) -> Option<String> {
+fn attr_of(node: &Rc<Node>, attr: &str) -> Option<String> {
     match &node.data {
         NodeData::Element { attrs, .. } => attrs
             .borrow()
             .iter()
-            .find(|a| a.name.local.as_ref() == "style")
+            .find(|a| a.name.local.as_ref() == attr)
             .map(|a| a.value.to_string()),
         _ => None,
     }
+}
+
+fn style_of(node: &Rc<Node>) -> Option<String> {
+    attr_of(node, "style")
+}
+
+/// True when an ancestor is a mail-client signature block: an `id` or `class`
+/// containing `signature` (Gmail `gmail_signature`, Outlook web `Signature`,
+/// Thunderbird `moz-signature`, Apple Mail `AppleMailSignature`).
+pub(crate) fn in_signature_container(node: &Rc<Node>) -> bool {
+    let mut current = parent(node);
+    while let Some(ancestor) = current {
+        let marked = ["id", "class"].iter().any(|attr| {
+            attr_of(&ancestor, attr)
+                .is_some_and(|value| value.to_ascii_lowercase().contains("signature"))
+        });
+        if marked {
+            return true;
+        }
+        current = parent(&ancestor);
+    }
+    false
 }
 
 /// True for a `font-weight` declaration of `bold`, `bolder` or a weight >= 600.
