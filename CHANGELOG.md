@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-16
+
+### Added
+
+- **Quarantaine des images écartées** : avec `delete_after_export: true`, une image jugée logo de signature n'est plus perdue avec le message supprimé du serveur. Elle est écrite sous `<export_directory>/_skipped/<nom de la note>/`, comptée et signalée en fin de dossier ou dans le résumé de l'export contextuel. En export contextuel, la quarantaine vit dans le dossier du compte, pas dans le dossier temporaire. Si l'écriture de la note échoue, ses images en quarantaine sont retirées pour qu'une reprise ne les duplique pas. La reprise du tri ignore `_skipped/`.
+
+### Fixed
+
+- **Captures collées dans un mail Gmail perdues** (#14) : Gmail remplace chaque image par `[image: image.png]` dans la partie texte ; le corps HTML est désormais retenu dès qu'il intègre une image de contenu, qui est écrite à côté de la note, référencée dans le corps et listée dans `attachments`.
+- **Images référencées jugées sur leur taille** : une image citée par le corps n'est plus écartée comme signature qu'en raison d'un nom typique ou d'une taille d'icône (moins de 10 Ko). Une pièce jointe qui n'est pas une image n'est jamais écartée, et le type MIME est comparé sans tenir compte de la casse.
+- **Logos de signature dans le corps** : les images placées dans un bloc de signature Gmail, Outlook, Thunderbird ou Apple Mail sont retirées du corps. Seuls les marqueurs connus de ces clients sont reconnus : un bloc dont la classe contient simplement « signature » (par exemple une demande de signature électronique) garde ses images.
+
 ## [0.19.0] - 2026-10-13
 
 ### Changed
