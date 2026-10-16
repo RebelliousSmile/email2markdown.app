@@ -705,6 +705,81 @@ mod edge_case_tests {
             Some("attachment")
         ));
     }
+
+    #[test]
+    fn test_should_skip_image_keeps_referenced_generic_screenshot() {
+        for size in [30 * 1024, 80 * 1024] {
+            assert!(!should_skip_image(
+                true,
+                Some("image.png"),
+                "image/png",
+                size,
+                Some("inline")
+            ));
+        }
+    }
+
+    #[test]
+    fn test_should_skip_image_drops_referenced_logo_name() {
+        assert!(should_skip_image(
+            true,
+            Some("logo.png"),
+            "image/png",
+            30 * 1024,
+            Some("inline")
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_image_drops_referenced_icon() {
+        assert!(should_skip_image(
+            true,
+            Some("image.png"),
+            "image/png",
+            4 * 1024,
+            Some("inline")
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_image_keeps_large_unreferenced_inline() {
+        assert!(!should_skip_image(
+            false,
+            Some("photo.jpg"),
+            "image/jpeg",
+            400 * 1024,
+            Some("inline")
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_image_drops_small_unreferenced_inline() {
+        assert!(should_skip_image(
+            false,
+            Some("vacances.jpg"),
+            "image/jpeg",
+            60 * 1024,
+            Some("inline")
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_image_keeps_non_image_attachments() {
+        assert!(!should_skip_image(
+            false,
+            Some("contrat.pdf"),
+            "application/pdf",
+            40 * 1024,
+            Some("inline")
+        ));
+        assert!(!should_skip_image(
+            false,
+            Some("company.docx"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            20 * 1024,
+            Some("attachment")
+        ));
+    }
 }
 
 // [3][4] Tests pour le module network

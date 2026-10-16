@@ -332,16 +332,9 @@ fn base64_decode_simple(input: &str) -> Option<Vec<u8>> {
     Some(output)
 }
 
-/// Check if a filename represents a signature image.
-pub fn is_signature_image(
-    attachment_filename: Option<&str>,
-    content_type: &str,
-    payload_size: usize,
-    content_disposition: Option<&str>,
-) -> bool {
-    let filename_lower = attachment_filename.unwrap_or("").to_lowercase();
-
-    // Common signature image patterns
+/// True when `filename_lower` carries a typical signature/logo name and the
+/// payload stays under that name's size limit.
+fn has_signature_name(filename_lower: &str, payload_size: usize) -> bool {
     let signature_patterns = [
         "signature",
         "logo",
@@ -355,7 +348,6 @@ pub fn is_signature_image(
         "entreprise",
     ];
 
-    // Check 1: Common signature filenames (only if small)
     for pattern in &signature_patterns {
         if filename_lower.contains(pattern) {
             let size_limit = if filename_lower.contains("signature") {
@@ -372,15 +364,36 @@ pub fn is_signature_image(
         }
     }
 
+    false
+}
+
+/// Check if a filename represents a signature image.
+pub fn is_signature_image(
+    attachment_filename: Option<&str>,
+    content_type: &str,
+    payload_size: usize,
+    content_disposition: Option<&str>,
+) -> bool {
+    let filename_lower = attachment_filename.unwrap_or("").to_lowercase();
+
+    // Check 1: Common signature filenames (only if small)
+    if has_signature_name(&filename_lower, payload_size) {
+        return true;
+    }
+
     // Check 2: Very small image files (likely logos/signatures)
     if content_type.starts_with("image/") && payload_size < 50 * 1024 {
         return true;
     }
 
-    // Check 3: Inline disposition (embedded images)
+    // Check 3: Small inline images. A large one is content (pasted photo,
+    // screenshot), and an inline document (Apple Mail PDF) is never a logo.
     if let Some(disposition) = content_disposition {
         let disposition_lower = disposition.to_lowercase();
-        if disposition_lower.contains("inline") {
+        if disposition_lower.contains("inline")
+            && content_type.to_ascii_lowercase().starts_with("image/")
+            && payload_size < 100 * 1024
+        {
             return true;
         }
     }
@@ -403,6 +416,35 @@ pub fn is_signature_image(
     }
 
     false
+}
+
+/// Whether `skip_signature_images` discards this attachment.
+///
+/// Only `image/*` parts are ever discarded. An image the body references
+/// (`cid:`) is content: only a typical signature name or an icon size
+/// (< 10 KB) discards it, never its disposition or a generic name such as
+/// Gmail's `image.png`. An unreferenced image goes through
+/// [`is_signature_image`].
+pub fn should_skip_image(
+    referenced: bool,
+    attachment_filename: Option<&str>,
+    content_type: &str,
+    payload_size: usize,
+    content_disposition: Option<&str>,
+) -> bool {
+    if !content_type.to_ascii_lowercase().starts_with("image/") {
+        return false;
+    }
+    if referenced {
+        let filename_lower = attachment_filename.unwrap_or("").to_lowercase();
+        return has_signature_name(&filename_lower, payload_size) || payload_size < 10 * 1024;
+    }
+    is_signature_image(
+        attachment_filename,
+        content_type,
+        payload_size,
+        content_disposition,
+    )
 }
 
 /// Extract a CamelCase subject snippet for use in filenames.

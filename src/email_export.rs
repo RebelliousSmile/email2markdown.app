@@ -3,7 +3,7 @@ use crate::network::{with_retry, NetworkConfig, ProgressIndicator}; // [3][4]
 use crate::route::{route_email, Destination, EmailMeta, MatchRule, RouteDecision};
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
-    is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename,
+    limit_quote_depth, normalize_line_breaks, sanitize_filename, should_skip_image,
     subject_filename_part,
 };
 use anyhow::{Context, Result};
@@ -992,21 +992,14 @@ fn extract_attachments(
 
                 let payload = part.get_body_raw().unwrap_or_default();
 
-                // An image the body embeds is content: the "inline" disposition
-                // alone must not make it look like a mail signature.
-                let disposition_for_filter = if referenced_cid.is_some() {
-                    ""
-                } else {
-                    content_disposition.as_str()
-                };
-
                 // Check if this is a signature image that should be skipped
                 if skip_signature_images
-                    && is_signature_image(
+                    && should_skip_image(
+                        referenced_cid.is_some(),
                         Some(&decoded_filename),
                         &content_type,
                         payload.len(),
-                        Some(disposition_for_filter),
+                        Some(&content_disposition),
                     )
                 {
                     if let Some(id) = &referenced_cid {
@@ -2864,6 +2857,40 @@ abc123
 --{boundary}--\r\n"
         )
         .into_bytes()
+    }
+
+    #[test]
+    fn test_extract_attachments_keeps_referenced_small_gmail_screenshot() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let shot = "A".repeat(30 * 1024);
+        let raw = format!(
+            "From: a@b.com\r\nTo: c@d.com\r\nSubject: S\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/related; boundary=\"REL\"\r\n\r\n\
+--REL\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Voici <img src=\"cid:ii_abc\" alt=\"image.png\"></p>\r\n\
+--REL\r\nContent-Type: image/png; name=\"image.png\"\r\nContent-Transfer-Encoding: 7bit\r\nContent-ID: <ii_abc>\r\nContent-Disposition: inline; filename=\"image.png\"\r\n\r\n{shot}\r\n\
+--REL--\r\n"
+        )
+        .into_bytes();
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let cids = referenced_content_ids(&extract_body(&mail));
+        let mut inline = HashMap::new();
+        let mut attachments = Vec::new();
+        extract_attachments(
+            &mail,
+            temp.path(),
+            "2024-01-01",
+            true,
+            false,
+            &cids,
+            &mut inline,
+            &mut attachments,
+        )
+        .unwrap();
+
+        assert!(temp.path().join("2024-01-01_image.png").exists());
+        assert_eq!(
+            inline.get("ii_abc"),
+            Some(&Some("2024-01-01_image.png".to_string()))
+        );
     }
 
     #[test]
