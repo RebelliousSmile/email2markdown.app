@@ -375,6 +375,7 @@ pub fn is_signature_image(
     content_disposition: Option<&str>,
 ) -> bool {
     let filename_lower = attachment_filename.unwrap_or("").to_lowercase();
+    let is_image = content_type.to_ascii_lowercase().starts_with("image/");
 
     // Check 1: Common signature filenames (only if small)
     if has_signature_name(&filename_lower, payload_size) {
@@ -382,7 +383,7 @@ pub fn is_signature_image(
     }
 
     // Check 2: Very small image files (likely logos/signatures)
-    if content_type.starts_with("image/") && payload_size < 50 * 1024 {
+    if is_image && payload_size < 50 * 1024 {
         return true;
     }
 
@@ -390,10 +391,7 @@ pub fn is_signature_image(
     // screenshot), and an inline document (Apple Mail PDF) is never a logo.
     if let Some(disposition) = content_disposition {
         let disposition_lower = disposition.to_lowercase();
-        if disposition_lower.contains("inline")
-            && content_type.to_ascii_lowercase().starts_with("image/")
-            && payload_size < 100 * 1024
-        {
+        if disposition_lower.contains("inline") && is_image && payload_size < 100 * 1024 {
             return true;
         }
     }
@@ -406,13 +404,11 @@ pub fn is_signature_image(
         .iter()
         .any(|ext| filename_lower.ends_with(ext))
         && payload_size < 100 * 1024
-    {
-        if generic_names
+        && generic_names
             .iter()
             .any(|name| filename_lower.starts_with(name))
-        {
-            return true;
-        }
+    {
+        return true;
     }
 
     false

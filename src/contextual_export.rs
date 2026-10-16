@@ -226,7 +226,7 @@ fn extract_addresses(value: &str) -> Vec<String> {
 pub fn candidate_matches_rules(candidate: &ContextualCandidate, rules: &[MatchRule]) -> bool {
     rules.iter().any(|rule| match rule {
         MatchRule::Correspondent(address) => {
-            normalize_address(address).ok().map_or(false, |wanted| {
+            normalize_address(address).ok().is_some_and(|wanted| {
                 candidate
                     .from
                     .iter()
@@ -236,13 +236,13 @@ pub fn candidate_matches_rules(candidate: &ContextualCandidate, rules: &[MatchRu
                     .any(|actual| actual == &wanted)
             })
         }
-        MatchRule::From(address) => normalize_address(address).ok().map_or(false, |wanted| {
-            candidate.from.iter().any(|actual| actual == &wanted)
-        }),
+        MatchRule::From(address) => normalize_address(address)
+            .ok()
+            .is_some_and(|wanted| candidate.from.iter().any(|actual| actual == &wanted)),
         MatchRule::Domain(domain) => {
             let domain = domain.trim().to_lowercase();
             candidate.from.iter().any(|address| {
-                address.rsplit_once('@').map_or(false, |(_, actual)| {
+                address.rsplit_once('@').is_some_and(|(_, actual)| {
                     actual == domain || actual.ends_with(&format!(".{domain}"))
                 })
             })
@@ -288,8 +288,11 @@ pub fn merge_candidates(candidates: Vec<ContextualCandidate>) -> Vec<ContextualC
     result
 }
 
+/// One fetched message: `(uid, Gmail provider id, raw bytes)`.
+pub type FetchedMessage = (u32, Option<String>, Vec<u8>);
+
 /// Parse a raw low-level UID FETCH response, including Gmail's provider id.
-pub fn parse_uid_fetch_response(raw: &[u8]) -> Result<Vec<(u32, Option<String>, Vec<u8>)>> {
+pub fn parse_uid_fetch_response(raw: &[u8]) -> Result<Vec<FetchedMessage>> {
     let mut remaining = raw;
     let mut result = Vec::new();
     while !remaining.is_empty() {
@@ -491,6 +494,7 @@ impl ContextualLock {
         let path = target.join(format!(".email-to-markdown-{account_key}.lock"));
         let mut file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&path)
@@ -686,7 +690,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
     // The staging directory is removed below: skipped images go to the account's
     // real export directory instead, so they outlive the server copy.
     let quarantine_root = Path::new(&account.export_directory).join("_skipped");
-    let mut quarantined = 0usize;
+    let mut quarantined: Vec<PathBuf> = Vec::new();
 
     let result = (|| {
         let mut contextual_account = account.clone();
@@ -705,7 +709,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
                 .delete_after_export
                 .then(|| crate::email_export::Quarantine {
                     root: &quarantine_root,
-                    count: &mut quarantined,
+                    written: &mut quarantined,
                 }),
         };
         let (markdown, _) = crate::email_export::export_to_markdown(
@@ -721,10 +725,14 @@ pub(crate) fn convert_raw_contextual_unlocked(
             &markdown,
             candidate,
             &proof,
-            quarantined,
+            quarantined.len(),
         )
     })();
     let _ = fs::remove_dir_all(&staging);
+    if result.is_err() {
+        // No note was installed: its quarantined images would be orphans.
+        crate::email_export::discard_quarantined(&mut quarantined, 0);
+    }
     result
 }
 

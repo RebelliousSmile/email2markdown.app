@@ -266,7 +266,7 @@ pub fn reorder_destinations(config: &mut DestinationsConfig, order: &[&str]) {
             reordered.push(config.destinations.swap_remove(pos));
         }
     }
-    reordered.extend(config.destinations.drain(..));
+    reordered.append(&mut config.destinations);
     config.destinations = reordered;
 }
 

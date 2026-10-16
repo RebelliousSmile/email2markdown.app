@@ -303,8 +303,10 @@ mod settings_tests {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("settings.yaml");
 
-        let mut s = Settings::default();
-        s.export_base_dir = Some("/tmp/emails".to_string());
+        let mut s = Settings {
+            export_base_dir: Some("/tmp/emails".to_string()),
+            ..Settings::default()
+        };
         s.defaults.quote_depth = Some(2);
         s.defaults.skip_existing = Some(false);
         s.save(&path).unwrap();
@@ -780,6 +782,18 @@ mod edge_case_tests {
             Some("attachment")
         ));
     }
+
+    #[test]
+    fn test_should_skip_image_with_uppercase_content_type() {
+        // MIME types are case-insensitive: `IMAGE/PNG` is a small image too.
+        assert!(should_skip_image(
+            false,
+            Some("capture.dat"),
+            "IMAGE/PNG",
+            20 * 1024,
+            None
+        ));
+    }
 }
 
 // [3][4] Tests pour le module network
@@ -796,18 +810,16 @@ mod network_tests {
 
     #[test]
     fn test_progress_indicator_create() {
-        let _progress = ProgressIndicator::new("Test", 100);
         // Just verify it creates without panic
-        assert!(true);
+        let _progress = ProgressIndicator::new("Test", 100);
     }
 
     #[test]
     fn test_progress_indicator_update() {
         let mut progress = ProgressIndicator::new("Test", 10);
         progress.update(5);
-        progress.inc();
         // Verify it updates without panic
-        assert!(true);
+        progress.inc();
     }
 }
 
@@ -1099,22 +1111,30 @@ attachments:
         let md = new_dir.join("note.md");
         fs::write(
             &md,
-            format!("---
+            format!(
+                "---
 tags:
   - email
 attachments:
   - a.pdf
 ---
 
-{block}"),
+{block}"
+            ),
         )
         .unwrap();
 
         email_to_markdown::route::rewrite_attachment_paths(&md, &old_dir, &new_dir).unwrap();
 
         let content = fs::read_to_string(&md).unwrap();
-        assert!(content.ends_with(block), "block must be unchanged: {content:?}");
-        assert!(content.contains("  - ../../staging/a.pdf"), "got {content:?}");
+        assert!(
+            content.ends_with(block),
+            "block must be unchanged: {content:?}"
+        );
+        assert!(
+            content.contains("  - ../../staging/a.pdf"),
+            "got {content:?}"
+        );
         assert!(!content.contains("  - a.pdf"));
     }
 
@@ -1881,7 +1901,8 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 
     #[test]
     fn test_route_email_reports_alternatives_for_shared_rule() {
-        let content = "Perso/A | domain:acme.com\nPerso/B | domain:acme.com\nPerso/C | domain:other.com\n";
+        let content =
+            "Perso/A | domain:acme.com\nPerso/B | domain:acme.com\nPerso/C | domain:other.com\n";
         let dests = parse_destinations(content).unwrap();
         let meta = make_meta(
             "alice@acme.com",
@@ -1900,8 +1921,8 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 
     #[test]
     fn test_route_email_no_alternatives_when_unambiguous() {
-        let dests = parse_destinations("Perso/A | domain:acme.com\nPerso/B | domain:other.com\n")
-            .unwrap();
+        let dests =
+            parse_destinations("Perso/A | domain:acme.com\nPerso/B | domain:other.com\n").unwrap();
         let meta = make_meta(
             "alice@acme.com",
             "acme.com",
@@ -1915,7 +1936,9 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 
     #[test]
     fn test_rule_conflicts_and_move_rule() {
-        use email_to_markdown::destinations::{DestinationEntry, DestinationRule, DestinationsConfig};
+        use email_to_markdown::destinations::{
+            DestinationEntry, DestinationRule, DestinationsConfig,
+        };
         let mut cfg = DestinationsConfig {
             destinations: vec![
                 DestinationEntry {
@@ -3463,7 +3486,7 @@ mod suggest_tests {
 
         let groups = scan_domains(temp.path()).unwrap();
         assert!(
-            groups.get("hidden.com").is_none(),
+            !groups.contains_key("hidden.com"),
             "dot-dir must be skipped"
         );
         assert_eq!(groups.get("visible.com"), Some(&1));
@@ -3478,7 +3501,7 @@ mod suggest_tests {
 
         let groups = scan_domains(temp.path()).unwrap();
         assert!(
-            groups.get("gone.com").is_none(),
+            !groups.contains_key("gone.com"),
             "underscore-dir must be skipped"
         );
         assert_eq!(groups.get("here.com"), Some(&1));
@@ -3498,7 +3521,7 @@ mod suggest_tests {
 
         let groups = scan_domains(&root).unwrap();
         assert!(
-            groups.get("external.com").is_none(),
+            !groups.contains_key("external.com"),
             "symlink must not be followed"
         );
         assert_eq!(groups.get("inside.com"), Some(&1));
@@ -3518,7 +3541,7 @@ mod suggest_tests {
         if std::os::windows::fs::symlink_dir(&outside, root.join("link")).is_ok() {
             let groups = scan_domains(&root).unwrap();
             assert!(
-                groups.get("external.com").is_none(),
+                !groups.contains_key("external.com"),
                 "symlink must not be followed"
             );
             assert_eq!(groups.get("inside.com"), Some(&1));
