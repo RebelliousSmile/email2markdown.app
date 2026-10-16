@@ -68,13 +68,19 @@ where
     }
 }
 
+/// Progress callback shared across threads: `(current, total, label)`.
+pub type ProgressCallback = dyn Fn(usize, usize, &str) + Send + Sync;
+
+/// Owned progress callback of a [`ProgressIndicator`].
+pub type ProgressSink = Box<dyn Fn(usize, usize, &str) + Send>;
+
 /// [3] Simple progress indicator for terminal
 pub struct ProgressIndicator {
     total: usize,
     current: usize,
     label: String,
     show_percentage: bool,
-    on_progress: Option<Box<dyn Fn(usize, usize, &str) + Send>>,
+    on_progress: Option<ProgressSink>,
 }
 
 impl ProgressIndicator {
@@ -88,7 +94,7 @@ impl ProgressIndicator {
         }
     }
 
-    pub fn with_callback(mut self, cb: Box<dyn Fn(usize, usize, &str) + Send>) -> Self {
+    pub fn with_callback(mut self, cb: ProgressSink) -> Self {
         self.on_progress = Some(cb);
         self
     }
@@ -214,9 +220,11 @@ mod tests {
 
     #[test]
     fn test_with_retry_failure() {
-        let mut config = NetworkConfig::default();
-        config.max_retries = 2;
-        config.initial_retry_delay = Duration::from_millis(10);
+        let config = NetworkConfig {
+            max_retries: 2,
+            initial_retry_delay: Duration::from_millis(10),
+            ..NetworkConfig::default()
+        };
 
         let mut attempts = 0;
         let result: Result<i32, &str> = with_retry(&config, "test", || {
@@ -230,9 +238,11 @@ mod tests {
 
     #[test]
     fn test_with_retry_eventual_success() {
-        let mut config = NetworkConfig::default();
-        config.max_retries = 3;
-        config.initial_retry_delay = Duration::from_millis(10);
+        let config = NetworkConfig {
+            max_retries: 3,
+            initial_retry_delay: Duration::from_millis(10),
+            ..NetworkConfig::default()
+        };
 
         let mut attempts = 0;
         let result: Result<i32, &str> = with_retry(&config, "test", || {

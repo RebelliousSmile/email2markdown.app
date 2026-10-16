@@ -287,6 +287,34 @@ defaults:
 #     collect_contacts: true
 ```
 
+#### Images de signature
+
+Avec `skip_signature_images`, les logos et bannières de signature ne sont pas
+enregistrés à côté de la note. Une image collée dans le corps du message (une
+capture Gmail nommée `image.png`, par exemple) est conservée : quand le HTML
+intègre une image de contenu, c'est lui qui sert de corps, et seules les images
+placées dans le bloc de signature du client mail, celles dont le nom évoque un
+logo ou une signature, et les icônes de moins de 10 Ko sont écartées.
+
+Le bloc de signature est reconnu à ses marqueurs connus : la classe
+`gmail_signature` (Gmail) ou `moz-signature` (Thunderbird), l'identifiant
+`Signature` (Outlook web), `AppleMailSignature` ou `ms-outlook-mobile-signature`.
+Une image intégrée dans ce bloc est retirée du corps de la note quelle que soit
+la valeur de `skip_signature_images`. Avec `skip_signature_images: false`, le
+fichier reste enregistré et listé dans `attachments`, mais n'apparaît plus dans
+le corps.
+
+Si `delete_after_export` est actif, une image écartée n'est pas perdue avec la
+suppression du message sur le serveur : elle est mise en quarantaine dans
+`<export_directory>/_skipped/<nom de la note>/`, y compris pour une sélection
+contextuelle. L'export signale le nombre d'images concernées. Une fois vérifié,
+ce dossier peut être vidé à la main ; la reprise du tri l'ignore. Le nom du
+sous-dossier est celui de la note au moment de l'export : si la note est
+renommée ensuite (collision lors du rangement ou d'une sélection contextuelle),
+les deux noms peuvent différer. Si l'écriture de la note échoue, ses images
+sont retirées de la quarantaine, pour qu'une nouvelle tentative ne les duplique
+pas.
+
 ### `destinations.yaml` — Arborescence de rangement
 
 Fichier YAML décrivant les chemins valides de votre second cerveau et les règles de correspondance. Édité à la main ou via la sous-commande `dest`.

@@ -21,7 +21,8 @@ use crate::contextual_export::{
     DeletionPreflight, DeletionRequest,
 };
 use crate::email_export::{self, ImapExporter};
-use crate::route::{self, EmailMeta, RouteDecision};
+use crate::network::ProgressCallback;
+use crate::route::{self, EmailMeta, RouteDecisions};
 use crate::thunderbird;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -310,6 +311,15 @@ pub fn run_contextual_batch(
             )
         })
         .count();
+    let quarantined: usize = conversions
+        .iter()
+        .filter_map(|result| match result.status {
+            Some(crate::contextual_export::ConversionStatus::Written { quarantined, .. }) => {
+                Some(quarantined)
+            }
+            _ => None,
+        })
+        .sum();
     let already_present = conversions
         .iter()
         .filter(|result| {
@@ -350,13 +360,25 @@ pub fn run_contextual_batch(
         retry_conversion,
         retry_deletion_count,
         stale_search,
-        message: if retry_deletion_count == 0 {
-            "Traitement terminé".into()
-        } else {
-            "Conversion locale terminée, suppression serveur à réessayer".into()
-        },
+        message: contextual_summary_message(retry_deletion_count, quarantined),
         retry_deletion,
     })
+}
+
+/// Summary line of a contextual selection: the deletion outcome, then the
+/// images kept in quarantine when there are some.
+fn contextual_summary_message(retry_deletion_count: usize, quarantined: usize) -> String {
+    let mut message = if retry_deletion_count == 0 {
+        "Traitement terminé".to_string()
+    } else {
+        "Conversion locale terminée, suppression serveur à réessayer".to_string()
+    };
+    if quarantined > 0 {
+        message.push_str(&format!(
+            " ; {quarantined} image(s) écartée(s) mise(s) en quarantaine dans _skipped"
+        ));
+    }
+    message
 }
 
 enum ImmediateServerDeletion {
@@ -663,10 +685,10 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
 /// In GUI mode the caller opens the route review window; no files are moved here (D6).
 fn run_export(
     account_name: &str,
-    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+    on_progress: Option<&ProgressCallback>,
     on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
     cancel_token: Arc<AtomicBool>,
-) -> Result<(String, Vec<(PathBuf, RouteDecision)>, bool)> {
+) -> Result<(String, RouteDecisions, bool)> {
     dotenvy::from_path(config::env_file_path()).ok();
 
     let config =
@@ -753,17 +775,18 @@ pub fn action_resume_sort(account_name: String, result_sender: Sender<ActionResu
 }
 
 /// Directories created by the export pipeline that must never be treated as
-/// staged emails to re-sort: the delete bin, the failed-dump, and contacts.
+/// staged emails to re-sort: the delete bin, the failed-dump, the quarantine of
+/// skipped signature images, and contacts.
 fn is_excluded_staging_dir(name: &std::ffi::OsStr) -> bool {
     matches!(
         name.to_str(),
-        Some("_deleted") | Some("_failed") | Some("contacts")
+        Some("_deleted") | Some("_failed") | Some("_skipped") | Some("contacts")
     )
 }
 
 /// Walk an account's `export_directory` and rebuild `(staging_path, RouteDecision)`
-/// pairs for every `.md` note still there. Excludes `_deleted`/`_failed`/`contacts`.
-fn scan_staged_decisions(account_name: &str) -> Result<Vec<(PathBuf, RouteDecision)>> {
+/// pairs for every `.md` note still there. Excludes `_deleted`/`_failed`/`_skipped`/`contacts`.
+fn scan_staged_decisions(account_name: &str) -> Result<RouteDecisions> {
     dotenvy::from_path(config::env_file_path()).ok();
 
     let config =
@@ -1145,10 +1168,7 @@ pub fn action_fix_html(account_name: String, result_sender: Sender<ActionResult>
     });
 }
 
-fn run_fix_html(
-    account_name: &str,
-    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
-) -> Result<String> {
+fn run_fix_html(account_name: &str, on_progress: Option<&ProgressCallback>) -> Result<String> {
     dotenvy::from_path(config::env_file_path()).ok();
 
     let config =
@@ -1189,12 +1209,36 @@ pub fn get_account_names() -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{set_export_dir_in, set_notes_dir_in};
+    use super::{
+        contextual_summary_message, is_excluded_staging_dir, set_export_dir_in, set_notes_dir_in,
+    };
     use crate::config::Settings;
     use std::fs;
     use tempfile::TempDir;
 
     const INVALID_YAML: &str = "export_base_dir: [unclosed\naccounts: : :\n";
+
+    #[test]
+    fn test_is_excluded_staging_dir_with_quarantine() {
+        assert!(is_excluded_staging_dir(std::ffi::OsStr::new("_skipped")));
+    }
+
+    #[test]
+    fn test_contextual_summary_message_with_quarantine() {
+        assert_eq!(
+            contextual_summary_message(0, 2),
+            "Traitement terminé ; 2 image(s) écartée(s) mise(s) en quarantaine dans _skipped"
+        );
+    }
+
+    #[test]
+    fn test_contextual_summary_message_with_retry_and_no_quarantine() {
+        let message = contextual_summary_message(1, 0);
+        assert_eq!(
+            message,
+            "Conversion locale terminée, suppression serveur à réessayer"
+        );
+    }
 
     #[test]
     fn test_set_export_dir_in_valid_keeps_other_fields() {

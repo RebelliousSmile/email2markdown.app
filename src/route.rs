@@ -234,7 +234,7 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
         // 2. Fallback: legacy centralized export — attachment stored relative to the
         //    account root (parent of old_parent), e.g. "attachments/Sent/email_…".
         let (att_src, legacy) = {
-            let in_source = att_src_primary.parent().map_or(false, |p| p == old_parent);
+            let in_source = att_src_primary.parent() == Some(old_parent);
             if in_source {
                 (att_src_primary, false)
             } else {
@@ -244,7 +244,7 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
                         // Security: resolved path must stay within account_root.
                         let safe = fallback
                             .parent()
-                            .map_or(false, |p| p.starts_with(account_root));
+                            .is_some_and(|p| p.starts_with(account_root));
                         if safe {
                             (fallback, true)
                         } else {
@@ -451,7 +451,7 @@ pub fn delete_email(md_path: &Path) -> Result<()> {
         let att_src = old_parent.join(link.replace('/', std::path::MAIN_SEPARATOR_STR));
 
         // Only move files actually inside the source directory.
-        let in_source = att_src.parent().map_or(false, |p| p == old_parent);
+        let in_source = att_src.parent() == Some(old_parent);
         if !in_source {
             eprintln!(
                 "warning: attachment {:?} resolves outside source dir {}; skipping",
@@ -621,6 +621,9 @@ pub struct RouteDecision {
     /// match is unambiguous.
     pub alternatives: Vec<String>,
 }
+
+/// Route proposals of exported notes: `(staging_path, decision)` pairs.
+pub type RouteDecisions = Vec<(PathBuf, RouteDecision)>;
 
 /// A match condition inside a `destinations.txt` entry.
 #[derive(Debug, Clone, PartialEq)]
@@ -1120,9 +1123,7 @@ pub fn resolve_contextual_destination(
             .collect();
         let allowed_accounts: Vec<String> = configured_accounts
             .iter()
-            .filter(|name| {
-                account_rules.is_empty() || account_rules.iter().any(|rule| *rule == name.as_str())
-            })
+            .filter(|name| account_rules.is_empty() || account_rules.contains(&name.as_str()))
             .cloned()
             .collect();
         if allowed_accounts.is_empty() {
@@ -1266,7 +1267,7 @@ pub fn repair_legacy_attachments(
                 continue;
             }
         }
-        if path.extension().map_or(false, |e| e == "md") {
+        if path.extension().is_some_and(|e| e == "md") {
             total += repair_one_md(path, account_root, dry_run)?;
         }
     }
@@ -1306,7 +1307,7 @@ fn repair_one_md(md_path: &Path, account_root: &Path, dry_run: bool) -> Result<u
         // Security: canonical parent must start with account_root.
         // We use the pre-join canonical form of account_root to guard against
         // any residual '..' in the assembled path.
-        let safe = att_src.parent().map_or(false, |p| {
+        let safe = att_src.parent().is_some_and(|p| {
             // Normalize by stripping the non-'..' suffix components manually —
             // canonicalize() requires the path to already exist.
             let canonical_account = account_root.components().collect::<PathBuf>();
@@ -1337,19 +1338,16 @@ fn repair_one_md(md_path: &Path, account_root: &Path, dry_run: bool) -> Result<u
                 att_src.display(),
                 att_dest.display()
             );
-        } else {
-            if fs::rename(&att_src, &att_dest).is_err() {
-                fs::copy(&att_src, &att_dest).with_context(|| {
-                    format!(
-                        "failed to copy {} to {}",
-                        att_src.display(),
-                        att_dest.display()
-                    )
-                })?;
-                fs::remove_file(&att_src).with_context(|| {
-                    format!("failed to remove {} after copy", att_src.display())
-                })?;
-            }
+        } else if fs::rename(&att_src, &att_dest).is_err() {
+            fs::copy(&att_src, &att_dest).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    att_src.display(),
+                    att_dest.display()
+                )
+            })?;
+            fs::remove_file(&att_src)
+                .with_context(|| format!("failed to remove {} after copy", att_src.display()))?;
         }
         renamed.push((link.clone(), final_name));
     }

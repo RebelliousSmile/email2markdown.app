@@ -1,9 +1,9 @@
 use crate::config::Account;
-use crate::network::{with_retry, NetworkConfig, ProgressIndicator}; // [3][4]
-use crate::route::{route_email, Destination, EmailMeta, MatchRule, RouteDecision};
+use crate::network::{with_retry, NetworkConfig, ProgressCallback, ProgressIndicator}; // [3][4]
+use crate::route::{route_email, Destination, EmailMeta, MatchRule, RouteDecision, RouteDecisions};
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
-    is_signature_image, limit_quote_depth, normalize_line_breaks, sanitize_filename,
+    limit_quote_depth, normalize_line_breaks, sanitize_filename, should_skip_image,
     subject_filename_part,
 };
 use anyhow::{Context, Result};
@@ -411,6 +411,55 @@ pub struct ExportContext<'a> {
     /// Files already present in `export_directory`, shared by the whole pass.
     /// `None` makes each duplicate check walk the directory again.
     pub exported: Option<&'a mut ExportedIndex>,
+    /// Where images dropped by the signature filter are kept. `Some` only when
+    /// the message may be deleted from the server afterwards.
+    pub quarantine: Option<Quarantine<'a>>,
+}
+
+/// Routing settings read once per account and shared by every folder export.
+#[derive(Clone, Copy)]
+pub struct FolderRouting<'a> {
+    /// Destinations parsed from `destinations.txt`.
+    pub dests: &'a [Destination],
+    /// Whether notes go into `YYYY/MM` sub-directories.
+    pub organize_by_date: bool,
+}
+
+/// Directory receiving the images dropped by `skip_signature_images`, and the
+/// caller-owned list of images written there across the whole pass.
+pub struct Quarantine<'a> {
+    /// `_skipped` directory; each note gets a sub-directory named after its stem.
+    pub root: &'a Path,
+    /// Every image written so far; its length is the quarantined count.
+    pub written: &'a mut Vec<PathBuf>,
+}
+
+/// Remove the quarantined images from `from` on, written for a note that was
+/// not produced, so a retry does not duplicate them as `_2`. Their directory
+/// goes too once empty; a non-empty one (stem shared by another note) stays.
+pub fn discard_quarantined(written: &mut Vec<PathBuf>, from: usize) {
+    let from = from.min(written.len());
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for path in written.drain(from..) {
+        let _ = fs::remove_file(&path);
+        if let Some(dir) = path.parent() {
+            if !dirs.iter().any(|known| known == dir) {
+                dirs.push(dir.to_path_buf());
+            }
+        }
+    }
+    for dir in dirs {
+        // `remove_dir` only removes an empty directory.
+        let _ = fs::remove_dir(&dir);
+    }
+}
+
+/// How `extract_attachments` treats the parts it walks.
+struct AttachmentPolicy<'q> {
+    skip_signature_images: bool,
+    debug_mode: bool,
+    /// Note-specific quarantine directory and the shared list of written images.
+    quarantine: Option<(PathBuf, &'q mut Vec<PathBuf>)>,
 }
 
 /// Export a single email to Markdown with frontmatter.
@@ -529,16 +578,34 @@ pub fn export_to_markdown(
     let referenced_cids = referenced_content_ids(&body);
     let mut inline_images: HashMap<String, Option<String>> = HashMap::new();
 
-    extract_attachments(
+    let note_stem = Path::new(&filename)
+        .file_stem()
+        .unwrap_or_default()
+        .to_os_string();
+    let quarantine_start = ctx.quarantine.as_ref().map_or(0, |q| q.written.len());
+    let mut policy = AttachmentPolicy {
+        skip_signature_images: account.skip_signature_images,
+        debug_mode,
+        quarantine: ctx
+            .quarantine
+            .as_mut()
+            .map(|q| (q.root.join(&note_stem), &mut *q.written)),
+    };
+    let extracted = extract_attachments(
         &mail,
         export_directory,
         &date_str,
-        account.skip_signature_images,
-        debug_mode,
+        &mut policy,
         &referenced_cids,
         &mut inline_images,
         &mut attachments,
-    )?;
+    );
+    if let Err(error) = extracted {
+        if let Some(q) = ctx.quarantine.as_mut() {
+            discard_quarantined(q.written, quarantine_start);
+        }
+        return Err(error);
+    }
     let body = if referenced_cids.is_empty() {
         body
     } else {
@@ -611,13 +678,12 @@ pub fn export_to_markdown(
 
     // Write file
     let filepath = export_directory.join(&filename);
-    let mut file = File::create(&filepath)?;
-
-    writeln!(file, "---")?;
-    let yaml = serde_yaml::to_string(&frontmatter)?;
-    write!(file, "{}", yaml)?;
-    writeln!(file, "---\n")?;
-    write!(file, "{}", note_body)?;
+    if let Err(error) = write_note(&filepath, &frontmatter, &note_body) {
+        if let Some(q) = ctx.quarantine.as_mut() {
+            discard_quarantined(q.written, quarantine_start);
+        }
+        return Err(error);
+    }
 
     // A later duplicate in the same pass must find this file.
     if let Some(index) = ctx.exported.as_deref_mut() {
@@ -652,6 +718,27 @@ pub fn export_to_markdown(
     let decision = route_email(&meta, dests, ctx.organize_by_date);
 
     Ok(Some((filepath, decision)))
+}
+
+/// End-of-folder warning for the images kept in quarantine, `None` when there is none.
+fn quarantine_warning(count: usize, folder: &str, root: &Path) -> Option<String> {
+    (count > 0).then(|| {
+        format!(
+            "warning: {count} image(s) skipped from {folder} kept in quarantine in {}",
+            root.display()
+        )
+    })
+}
+
+/// Write the note: YAML frontmatter, then the body.
+fn write_note(filepath: &Path, frontmatter: &EmailFrontmatter, note_body: &str) -> Result<()> {
+    let yaml = serde_yaml::to_string(frontmatter)?;
+    let mut file = File::create(filepath)?;
+    writeln!(file, "---")?;
+    write!(file, "{}", yaml)?;
+    writeln!(file, "---\n")?;
+    write!(file, "{}", note_body)?;
+    Ok(())
 }
 
 /// Split an address header into its addresses, keeping each display name.
@@ -722,6 +809,17 @@ fn html_to_markdown(html: &str) -> String {
                 if is_tracking_pixel(&attrs) {
                     return None;
                 }
+                // A signature logo is not content: dropping it here leaves its
+                // part unreferenced, so the signature filter can discard it.
+                let embedded = attrs.iter().any(|(name, value)| {
+                    *name == "src"
+                        && value
+                            .get(..4)
+                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("cid:"))
+                });
+                if embedded && crate::html_layout::in_signature_container(element.node) {
+                    return None;
+                }
                 handlers.fallback(element)
             },
         )
@@ -790,7 +888,7 @@ pub struct FixHtmlStats {
 pub fn fix_html_bodies(
     directory: &Path,
     dry_run: bool,
-    on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+    on_progress: Option<&ProgressCallback>,
 ) -> anyhow::Result<FixHtmlStats> {
     let mut stats = FixHtmlStats {
         fixed: 0,
@@ -802,7 +900,7 @@ pub fn fix_html_bodies(
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .map(|e| e.path().to_path_buf())
         .collect();
 
@@ -837,7 +935,7 @@ pub fn fix_html_bodies(
         if !dry_run {
             let front = &content[..content.len() - body.len()];
             let new_content = format!("{}{}", front, converted);
-            if let Err(_) = fs::write(path, &new_content) {
+            if fs::write(path, &new_content).is_err() {
                 stats.errors += 1;
                 continue;
             }
@@ -868,9 +966,12 @@ pub(crate) fn extract_md_body(content: &str) -> &str {
 
 /// Extract the body from a parsed email.
 ///
-/// A readable `text/plain` part wins; otherwise the `text/html` part is
-/// converted to Markdown. This holds for single-part messages too, and for a
-/// part mislabelled `text/plain` that actually carries an HTML document.
+/// The `text/html` part wins when its Markdown still embeds a `cid:` image
+/// (signature logos are dropped by the conversion): Gmail's `text/plain`
+/// replaces such images with `[image: name]` and loses them. Otherwise a
+/// readable `text/plain` part wins, and the `text/html` part is the fallback.
+/// This holds for single-part messages too, and for a part mislabelled
+/// `text/plain` that actually carries an HTML document.
 pub(crate) fn extract_body(mail: &ParsedMail) -> String {
     let mut plain: Option<String> = None;
     let mut html: Option<String> = None;
@@ -878,6 +979,14 @@ pub(crate) fn extract_body(mail: &ParsedMail) -> String {
 
     if let Some(text) = plain.take() {
         if !text.trim().is_empty() {
+            if let Some(raw) = html.as_deref() {
+                if raw.to_ascii_lowercase().contains("cid:") {
+                    let converted = html_to_markdown(raw);
+                    if !referenced_content_ids(&converted).is_empty() {
+                        return converted;
+                    }
+                }
+            }
             if looks_like_html(&text) {
                 let converted = html_to_markdown(&text);
                 if !converted.is_empty() {
@@ -922,12 +1031,13 @@ fn collect_text_bodies(mail: &ParsedMail, plain: &mut Option<String>, html: &mut
 /// using the flat filename scheme `<stem>__<hash>_<safe_name>`. When two attachments share the
 /// same original name (identical hash), a numeric suffix `_2`, `_3`, … is appended to avoid
 /// clobbering. The bare filename (no directory prefix) is pushed into `attachments`.
+/// An image dropped by the signature filter is written to the policy's quarantine
+/// directory when there is one, and neither listed nor linked from the note.
 fn extract_attachments(
     mail: &ParsedMail,
     attachments_dir: &Path,
     name_prefix: &str,
-    skip_signature_images: bool,
-    debug_mode: bool,
+    policy: &mut AttachmentPolicy<'_>,
     referenced_cids: &HashSet<String>,
     inline_images: &mut HashMap<String, Option<String>>,
     attachments: &mut Vec<String>,
@@ -970,32 +1080,34 @@ fn extract_attachments(
 
                 let payload = part.get_body_raw().unwrap_or_default();
 
-                // An image the body embeds is content: the "inline" disposition
-                // alone must not make it look like a mail signature.
-                let disposition_for_filter = if referenced_cid.is_some() {
-                    ""
-                } else {
-                    content_disposition.as_str()
-                };
-
                 // Check if this is a signature image that should be skipped
-                if skip_signature_images
-                    && is_signature_image(
+                if policy.skip_signature_images
+                    && should_skip_image(
+                        referenced_cid.is_some(),
                         Some(&decoded_filename),
                         &content_type,
                         payload.len(),
-                        Some(disposition_for_filter),
+                        Some(&content_disposition),
                     )
                 {
                     if let Some(id) = &referenced_cid {
                         inline_images.insert(id.clone(), None);
                     }
-                    if debug_mode {
+                    if policy.debug_mode {
                         println!(
                             "    Skipping signature image: '{}' ({} bytes)",
                             decoded_filename,
                             payload.len()
                         );
+                    }
+                    if let Some((dir, written)) = policy.quarantine.as_mut() {
+                        if !payload.is_empty() {
+                            fs::create_dir_all(&*dir)?;
+                            let name = unique_file_name(dir, &sanitize_filename(&decoded_filename));
+                            let path = dir.join(name);
+                            fs::write(&path, &payload)?;
+                            written.push(path);
+                        }
                     }
                     continue;
                 }
@@ -1007,18 +1119,7 @@ fn extract_attachments(
                     // safety pass in `route::move_email` handles cross-email collisions
                     // when several emails are routed into the same destination folder.
                     let base_full_filename = format!("{}_{}", name_prefix, safe_filename);
-
-                    // Numeric suffix loop on real path collision — suffix inserted before extension
-                    // so `invoice.pdf` → `invoice_2.pdf`, not `invoice.pdf_2`.
-                    let mut full_filename = base_full_filename.clone();
-                    let mut suffix = 2u32;
-                    while attachments_dir.join(&full_filename).exists() {
-                        full_filename = match base_full_filename.rsplit_once('.') {
-                            Some((stem, ext)) => format!("{}_{}.{}", stem, suffix, ext),
-                            None => format!("{}_{}", base_full_filename, suffix),
-                        };
-                        suffix += 1;
-                    }
+                    let full_filename = unique_file_name(attachments_dir, &base_full_filename);
 
                     let filepath = attachments_dir.join(&full_filename);
                     fs::write(&filepath, &payload)?;
@@ -1029,7 +1130,7 @@ fn extract_attachments(
                         inline_images.insert(id.clone(), Some(bare_link.clone()));
                     }
                     attachments.push(bare_link);
-                } else if debug_mode {
+                } else if policy.debug_mode {
                     println!(
                         "    Skipping attachment '{}' with empty payload",
                         decoded_filename
@@ -1044,8 +1145,7 @@ fn extract_attachments(
                 part,
                 attachments_dir,
                 name_prefix,
-                skip_signature_images,
-                debug_mode,
+                policy,
                 referenced_cids,
                 inline_images,
                 attachments,
@@ -1054,6 +1154,21 @@ fn extract_attachments(
     }
 
     Ok(())
+}
+
+/// `base` when it is free in `dir`, otherwise `base` with a numeric suffix
+/// inserted before the extension: `invoice.pdf` → `invoice_2.pdf`, not `invoice.pdf_2`.
+fn unique_file_name(dir: &Path, base: &str) -> String {
+    let mut name = base.to_string();
+    let mut suffix = 2u32;
+    while dir.join(&name).exists() {
+        name = match base.rsplit_once('.') {
+            Some((stem, ext)) => format!("{}_{}.{}", stem, suffix, ext),
+            None => format!("{}_{}", base, suffix),
+        };
+        suffix += 1;
+    }
+    name
 }
 
 /// Extract filename from an attachment part.
@@ -1428,11 +1543,11 @@ impl ImapExporter {
                         r
                     }
                 }
-                let mut auth = PlainAuth {
+                let auth = PlainAuth {
                     username: self.account.username.clone(),
                     password: password.to_string(),
                 };
-                client.authenticate("PLAIN", &mut auth).map_err(|(e, _)| {
+                client.authenticate("PLAIN", &auth).map_err(|(e, _)| {
                     anyhow::anyhow!("Authentication failed (LOGIN: {login_err} / PLAIN: {e})")
                 })?
             }
@@ -1946,11 +2061,10 @@ impl ImapExporter {
         folder: &FolderName,
         mut contacts_collector: Option<&mut ContactsCollector>,
         cancel_token: Option<&AtomicBool>,
-        dests: &[Destination],
-        organize_by_date: bool,
+        routing: FolderRouting<'_>,
         on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
         on_progress: Option<&(dyn Fn(usize, usize) + Send + Sync)>,
-    ) -> Result<(ExportStats, Vec<(PathBuf, RouteDecision)>)> {
+    ) -> Result<(ExportStats, RouteDecisions)> {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
         let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
         // One walk of the export directory for the whole folder.
@@ -1976,6 +2090,8 @@ impl ImapExporter {
             let message_count = mailbox.exists as usize;
             let mailbox_uid_validity = mailbox.uid_validity;
             let mut proofless = 0usize;
+            let quarantine_root = base_export_directory.join("_skipped");
+            let mut quarantined: Vec<PathBuf> = Vec::new();
 
             if self.debug_mode {
                 println!("  {} messages in folder", message_count);
@@ -2005,7 +2121,7 @@ impl ImapExporter {
             let total_to_process = uids_vec.len();
             let mut progress = ProgressIndicator::new(&folder.display, total_to_process);
             let mut stats = ExportStats::default();
-            let mut folder_decisions: Vec<(PathBuf, RouteDecision)> = Vec::new();
+            let mut folder_decisions: RouteDecisions = Vec::new();
             let mut last_reported_batch_exported = self.batch_exported;
             let mut examined = 0usize;
             let mut stop = false;
@@ -2037,7 +2153,7 @@ impl ImapExporter {
                 for uid in filtered_uids {
                     let idx = examined;
                     examined += 1;
-                    if idx % 10 == 0 {
+                    if idx.is_multiple_of(10) {
                         if let Some(s) = on_status {
                             if self.account.batch_size > 0 {
                                 s(&format!(
@@ -2065,7 +2181,7 @@ impl ImapExporter {
                             f(current, total);
                         }
                     }
-                    if cancel_token.map_or(false, |t| t.load(Ordering::Relaxed)) {
+                    if cancel_token.is_some_and(|t| t.load(Ordering::Relaxed)) {
                         stop = true;
                         break;
                     }
@@ -2137,10 +2253,14 @@ impl ImapExporter {
                                 base_export_directory: &base_export_directory,
                                 account: &self.account,
                                 debug_mode: self.debug_mode,
-                                dests,
+                                dests: routing.dests,
                                 source_proof: source_proof.as_ref(),
-                                organize_by_date,
+                                organize_by_date: routing.organize_by_date,
                                 exported: Some(&mut exported),
+                                quarantine: self.account.delete_after_export.then(|| Quarantine {
+                                    root: &quarantine_root,
+                                    written: &mut quarantined,
+                                }),
                             };
                             let result = export_to_markdown(
                                 body,
@@ -2217,6 +2337,11 @@ impl ImapExporter {
                     folder.display
                 );
             }
+            if let Some(warning) =
+                quarantine_warning(quarantined.len(), &folder.display, &quarantine_root)
+            {
+                eprintln!("{warning}");
+            }
 
             // [3] Finish progress indicator
             progress.finish_with_message(&format!(
@@ -2246,10 +2371,10 @@ impl ImapExporter {
     /// emails fall through to the default path with a warning.
     pub fn export_account(
         &mut self,
-        on_progress: Option<&(dyn Fn(usize, usize, &str) + Send + Sync)>,
+        on_progress: Option<&ProgressCallback>,
         on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
         cancel_token: Option<&AtomicBool>,
-    ) -> Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> {
+    ) -> Result<(HashMap<String, ExportStats>, RouteDecisions)> {
         // ── Parse destinations.txt ONCE (before the folder loop) ──────────────
         // Shared with the tray "Reprendre le tri" scan via `route::load_destinations`.
         let dests: Vec<Destination> = crate::route::load_destinations();
@@ -2261,100 +2386,100 @@ impl ImapExporter {
         self.batch_full = false;
 
         // Run the existing body in an IIFE so cleanup can run on every exit path.
-        let run_result: Result<(HashMap<String, ExportStats>, Vec<(PathBuf, RouteDecision)>)> =
-            (|| {
-                let mut results = HashMap::new();
-                let mut all_decisions: Vec<(PathBuf, RouteDecision)> = Vec::new();
-                let mut contacts_collector = if self.account.collect_contacts {
-                    Some(ContactsCollector::new())
-                } else {
-                    None
-                };
+        let run_result: Result<(HashMap<String, ExportStats>, RouteDecisions)> = (|| {
+            let mut results = HashMap::new();
+            let mut all_decisions: RouteDecisions = Vec::new();
+            let mut contacts_collector = if self.account.collect_contacts {
+                Some(ContactsCollector::new())
+            } else {
+                None
+            };
 
-                let folders = self.list_folders()?;
-                let total_folders = folders.len();
-                let mut folder_index = 0usize;
-                let batch_size = self.account.batch_size;
+            let folders = self.list_folders()?;
+            let total_folders = folders.len();
+            let mut folder_index = 0usize;
+            let batch_size = self.account.batch_size;
 
-                for folder in folders {
-                    // Skip ignored folders (matched against the decoded display name)
-                    if self.account.ignored_folders.contains(&folder.display) {
-                        println!("Ignored folder: {}", folder.display);
-                        continue;
+            for folder in folders {
+                // Skip ignored folders (matched against the decoded display name)
+                if self.account.ignored_folders.contains(&folder.display) {
+                    println!("Ignored folder: {}", folder.display);
+                    continue;
+                }
+
+                folder_index += 1;
+                if let Some(cb) = on_progress {
+                    if batch_size > 0 {
+                        cb(self.batch_exported, batch_size, &folder.display);
+                    } else {
+                        cb(
+                            (folder_index - 1) * PROGRESS_STEPS_PER_FOLDER,
+                            total_folders * PROGRESS_STEPS_PER_FOLDER,
+                            &folder.display,
+                        );
                     }
+                }
 
-                    folder_index += 1;
+                println!("Exporting {} ...", folder.display);
+
+                // Progress inside the folder: scale each folder to 1000 steps so
+                // the bar moves per message instead of per folder.
+                let label = folder.display.clone();
+                let base = (folder_index - 1) * PROGRESS_STEPS_PER_FOLDER;
+                let grand_total = total_folders * PROGRESS_STEPS_PER_FOLDER;
+                let on_folder_progress = move |current: usize, total: usize| {
                     if let Some(cb) = on_progress {
                         if batch_size > 0 {
-                            cb(self.batch_exported, batch_size, &folder.display);
+                            cb(current, total, &label);
                         } else {
-                            cb(
-                                (folder_index - 1) * PROGRESS_STEPS_PER_FOLDER,
-                                total_folders * PROGRESS_STEPS_PER_FOLDER,
-                                &folder.display,
-                            );
+                            let fraction = current as f32 / total.max(1) as f32;
+                            let inner = (fraction.clamp(0.0, 1.0)
+                                * PROGRESS_STEPS_PER_FOLDER as f32)
+                                as usize;
+                            cb(base + inner, grand_total, &label);
                         }
                     }
-
-                    println!("Exporting {} ...", folder.display);
-
-                    // Progress inside the folder: scale each folder to 1000 steps so
-                    // the bar moves per message instead of per folder.
-                    let label = folder.display.clone();
-                    let base = (folder_index - 1) * PROGRESS_STEPS_PER_FOLDER;
-                    let grand_total = total_folders * PROGRESS_STEPS_PER_FOLDER;
-                    let on_folder_progress = move |current: usize, total: usize| {
-                        if let Some(cb) = on_progress {
-                            if batch_size > 0 {
-                                cb(current, total, &label);
-                            } else {
-                                let fraction = current as f32 / total.max(1) as f32;
-                                let inner = (fraction.clamp(0.0, 1.0)
-                                    * PROGRESS_STEPS_PER_FOLDER as f32)
-                                    as usize;
-                                cb(base + inner, grand_total, &label);
-                            }
-                        }
-                    };
-                    let (stats, folder_decisions) = self.export_folder(
-                        &folder,
-                        contacts_collector.as_mut(),
-                        cancel_token,
-                        &dests,
+                };
+                let (stats, folder_decisions) = self.export_folder(
+                    &folder,
+                    contacts_collector.as_mut(),
+                    cancel_token,
+                    FolderRouting {
+                        dests: &dests,
                         organize_by_date,
-                        on_status,
-                        Some(&on_folder_progress),
-                    )?;
-                    if let Some(s) = on_status {
-                        s(&format!(
-                            "{} — {} exportés, {} déjà connus localement, {} erreurs",
-                            folder.display, stats.exported, stats.skipped, stats.errors
-                        ));
-                    }
-                    all_decisions.extend(folder_decisions);
-                    results.insert(folder.display, stats);
-
-                    if self.batch_full || cancel_token.map_or(false, |t| t.load(Ordering::Relaxed))
-                    {
-                        break;
-                    }
+                    },
+                    on_status,
+                    Some(&on_folder_progress),
+                )?;
+                if let Some(s) = on_status {
+                    s(&format!(
+                        "{} — {} exportés, {} déjà connus localement, {} erreurs",
+                        folder.display, stats.exported, stats.skipped, stats.errors
+                    ));
                 }
+                all_decisions.extend(folder_decisions);
+                results.insert(folder.display, stats);
 
-                // Generate contacts file if enabled — centralized in _local/contacts/
-                if let Some(collector) = contacts_collector {
-                    let export_dir = PathBuf::from(&self.account.export_directory);
-                    let contacts_dir = export_dir
-                        .parent()
-                        .unwrap_or(&export_dir)
-                        .join("_local")
-                        .join("contacts");
-                    fs::create_dir_all(&contacts_dir)?;
-                    let filepath = collector.generate_csv(&contacts_dir, &self.account.name)?;
-                    println!("Generated contacts file: {}", filepath.display());
+                if self.batch_full || cancel_token.is_some_and(|t| t.load(Ordering::Relaxed)) {
+                    break;
                 }
+            }
 
-                Ok((results, all_decisions))
-            })();
+            // Generate contacts file if enabled — centralized in _local/contacts/
+            if let Some(collector) = contacts_collector {
+                let export_dir = PathBuf::from(&self.account.export_directory);
+                let contacts_dir = export_dir
+                    .parent()
+                    .unwrap_or(&export_dir)
+                    .join("_local")
+                    .join("contacts");
+                fs::create_dir_all(&contacts_dir)?;
+                let filepath = collector.generate_csv(&contacts_dir, &self.account.name)?;
+                println!("Generated contacts file: {}", filepath.display());
+            }
+
+            Ok((results, all_decisions))
+        })();
 
         if self.account.cleanup_empty_dirs {
             let _ =
@@ -2614,6 +2739,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: Some(&mut index),
+            quarantine: None,
         };
         export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
@@ -2652,6 +2778,55 @@ abc123
     fn test_html_to_markdown_empty() {
         let result = html_to_markdown("");
         assert!(result.is_empty() || result.trim().is_empty());
+    }
+
+    #[test]
+    fn test_html_to_markdown_keeps_cid_image_outside_signature() {
+        let result =
+            html_to_markdown(r#"<div><p>Capture :</p><img src="CID:shot@x" alt="shot"></div>"#);
+        assert!(result.contains("![shot](CID:shot@x)"), "{result}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_drops_cid_image_in_gmail_signature() {
+        let result = html_to_markdown(
+            r#"<p>Bonjour</p><div class="gmail_signature" data-smartmail="gmail_signature"><div><div><img src="cid:logo@x" alt="logo"></div></div></div>"#,
+        );
+        assert!(result.contains("Bonjour"), "{result}");
+        assert!(!result.contains("cid:"), "{result}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_drops_cid_image_in_outlook_signature() {
+        let result =
+            html_to_markdown(r#"<p>Bonjour</p><div id="Signature"><img src="cid:logo@x"></div>"#);
+        assert!(!result.contains("cid:"), "{result}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_drops_cid_image_in_thunderbird_signature() {
+        let result = html_to_markdown(
+            r#"<p>Bonjour</p><div class="moz-signature"><img src="cid:logo@x"></div>"#,
+        );
+        assert!(!result.contains("cid:"), "{result}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_keeps_cid_image_in_signature_like_class() {
+        // An e-signature request is content, not a mail-client signature block.
+        let result = html_to_markdown(
+            r#"<div class="signature-request" id="esignature"><img src="cid:doc@x" alt="doc"></div>"#,
+        );
+        assert!(result.contains("![doc](cid:doc@x)"), "{result}");
+    }
+
+    #[test]
+    fn test_html_to_markdown_keeps_remote_image_in_signature() {
+        // Only embedded parts are filtered: a remote image costs no attachment.
+        let result = html_to_markdown(
+            r#"<div class="gmail_signature"><img src="https://a.test/logo.png" alt="logo"></div>"#,
+        );
+        assert!(result.contains("https://a.test/logo.png"), "{result}");
     }
 
     // ── Helper ──────────────────────────────────────────────────────────────────
@@ -2812,6 +2987,49 @@ abc123
         .into_bytes()
     }
 
+    /// Policy of an account with `skip_signature_images: true`.
+    fn signature_filter(quarantine: Option<(PathBuf, &mut Vec<PathBuf>)>) -> AttachmentPolicy<'_> {
+        AttachmentPolicy {
+            skip_signature_images: true,
+            debug_mode: false,
+            quarantine,
+        }
+    }
+
+    #[test]
+    fn test_extract_attachments_keeps_referenced_small_gmail_screenshot() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let shot = "A".repeat(30 * 1024);
+        let raw = format!(
+            "From: a@b.com\r\nTo: c@d.com\r\nSubject: S\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/related; boundary=\"REL\"\r\n\r\n\
+--REL\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Voici <img src=\"cid:ii_abc\" alt=\"image.png\"></p>\r\n\
+--REL\r\nContent-Type: image/png; name=\"image.png\"\r\nContent-Transfer-Encoding: 7bit\r\nContent-ID: <ii_abc>\r\nContent-Disposition: inline; filename=\"image.png\"\r\n\r\n{shot}\r\n\
+--REL--\r\n"
+        )
+        .into_bytes();
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let cids = referenced_content_ids(&extract_body(&mail));
+        let mut inline = HashMap::new();
+        let mut attachments = Vec::new();
+        extract_attachments(
+            &mail,
+            temp.path(),
+            "2024-01-01",
+            &mut signature_filter(None),
+            &cids,
+            &mut inline,
+            &mut attachments,
+        )
+        .unwrap();
+
+        assert!(temp.path().join("2024-01-01_image.png").exists());
+        assert_eq!(attachments, vec!["2024-01-01_image.png".to_string()]);
+        assert_eq!(
+            inline.get("ii_abc"),
+            Some(&Some("2024-01-01_image.png".to_string()))
+        );
+    }
+
     #[test]
     fn test_extract_attachments_saves_and_relinks_referenced_cid_image() {
         let temp = tempfile::TempDir::new().unwrap();
@@ -2826,8 +3044,7 @@ abc123
             &mail,
             temp.path(),
             "2024-01-01",
-            true,
-            false,
+            &mut signature_filter(None),
             &cids,
             &mut inline,
             &mut attachments,
@@ -2879,6 +3096,7 @@ abc123
             source_proof: None,
             organize_by_date: false,
             exported: None,
+            quarantine: None,
         };
 
         let (path, _) = export_to_markdown(raw, vec![], None, &mut ctx)
@@ -3008,6 +3226,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: None,
+            quarantine: None,
         };
         let result = export_to_markdown(&raw, vec!["INBOX".to_string()], None, &mut ctx);
 
@@ -3073,6 +3292,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: None,
+            quarantine: None,
         };
         let (path, _) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
@@ -3116,6 +3336,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: None,
+            quarantine: None,
         };
         let (md_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()
@@ -3140,6 +3361,297 @@ abc123
             "attachment link must not carry the old `__<hash>_` scheme: got {:?}",
             md
         );
+    }
+
+    /// The mail of issue #14: Gmail sends a pasted screenshot as
+    /// `multipart/mixed` > `multipart/alternative` + an inline `image.png`,
+    /// and replaces it with `[image: image.png]` in the `text/plain` part.
+    /// `signature_html` is appended to the HTML body, `extra_parts` to the
+    /// MIME tree.
+    /// The screenshot weighs 30 KB: under every size threshold of
+    /// `is_signature_image`, it is kept only because the body references it.
+    fn gmail_screenshot_mail(signature_html: &str, extra_parts: &str) -> Vec<u8> {
+        let shot = "A".repeat(30 * 1024);
+        format!(
+            "From: Alice <alice@gmail.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Capture\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"MIX\"\r\n\r\n\
+--MIX\r\nContent-Type: multipart/alternative; boundary=\"ALT\"\r\n\r\n\
+--ALT\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nVoici la capture\r\n\r\n[image: image.png]\r\n\r\nMerci\r\n\
+--ALT\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<div dir=\"ltr\"><div>Voici la capture</div><div><img src=\"cid:ii_xyz\" alt=\"image.png\" width=\"562\" height=\"271\"><br></div><div>Merci</div>{signature_html}</div>\r\n\
+--ALT--\r\n\
+--MIX\r\nContent-Type: image/png; name=\"image.png\"\r\nContent-Disposition: inline; filename=\"image.png\"\r\nContent-Transfer-Encoding: 7bit\r\nContent-ID: <ii_xyz>\r\nX-Attachment-Id: ii_xyz\r\n\r\n{shot}\r\n\
+{extra_parts}--MIX--\r\n"
+        )
+        .into_bytes()
+    }
+
+    fn export_with_signature_filter(raw: &[u8], export_dir: &Path) -> String {
+        let (md_path, _) = export_with_quarantine(raw, export_dir, None);
+        fs::read_to_string(md_path).unwrap()
+    }
+
+    /// Export with `skip_signature_images: true`; returns the note path and its stem.
+    fn export_with_quarantine(
+        raw: &[u8],
+        export_dir: &Path,
+        quarantine: Option<Quarantine<'_>>,
+    ) -> (PathBuf, String) {
+        let mut account = make_account(&export_dir.to_string_lossy());
+        account.skip_signature_images = true;
+        let mut ctx = ExportContext {
+            export_directory: export_dir,
+            base_export_directory: export_dir,
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+            source_proof: None,
+            organize_by_date: false,
+            exported: None,
+            quarantine,
+        };
+        let (md_path, _) = export_to_markdown(raw, vec![], None, &mut ctx)
+            .unwrap()
+            .expect("export should produce a file");
+        let stem = md_path.file_stem().unwrap().to_string_lossy().into_owned();
+        (md_path, stem)
+    }
+
+    /// Plain-text mail carrying unreferenced inline images of 20 KB, the shape
+    /// `is_signature_image` drops.
+    fn mail_with_inline_logos(subject: &str, names: &[&str]) -> Vec<u8> {
+        let logo = "L".repeat(20 * 1024);
+        let mut raw = format!(
+            "From: a@b.com\r\nTo: c@d.com\r\nSubject: {subject}\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"MIX\"\r\n\r\n\
+--MIX\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBonjour, voici le devis.\r\n"
+        );
+        for name in names {
+            raw.push_str(&format!(
+                "--MIX\r\nContent-Type: image/png; name=\"{name}\"\r\nContent-Transfer-Encoding: 7bit\r\nContent-Disposition: inline; filename=\"{name}\"\r\n\r\n{logo}\r\n"
+            ));
+        }
+        raw.push_str("--MIX--\r\n");
+        raw.into_bytes()
+    }
+
+    #[test]
+    fn test_export_to_markdown_quarantines_skipped_logo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("_skipped");
+        let mut written = Vec::new();
+        let (md_path, stem) = export_with_quarantine(
+            &mail_with_inline_logos("Devis", &["logo.png"]),
+            temp.path(),
+            Some(Quarantine {
+                root: &root,
+                written: &mut written,
+            }),
+        );
+        let md = fs::read_to_string(md_path).unwrap();
+
+        assert!(root.join(&stem).join("logo.png").exists());
+        assert_eq!(written.len(), 1);
+        assert!(md.contains("voici le devis"), "{md}");
+        assert!(!md.contains("logo.png"), "{md}");
+        assert!(!temp.path().join("2024-01-01_logo.png").exists());
+    }
+
+    #[test]
+    fn test_export_to_markdown_quarantine_counter_spans_messages() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("_skipped");
+        let mut written = Vec::new();
+        for subject in ["Devis", "Facture"] {
+            export_with_quarantine(
+                &mail_with_inline_logos(subject, &["logo.png"]),
+                temp.path(),
+                Some(Quarantine {
+                    root: &root,
+                    written: &mut written,
+                }),
+            );
+        }
+
+        assert_eq!(written.len(), 2);
+    }
+
+    #[test]
+    fn test_export_to_markdown_discards_quarantine_when_export_fails() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("_skipped");
+        // The logo reaches the quarantine, then writing the PDF fails: a file
+        // name component over 255 bytes is refused by every filesystem.
+        let long = format!("{}.pdf", "a".repeat(300));
+        let raw = String::from_utf8(mail_with_inline_logos("Devis", &["logo.png"]))
+            .unwrap()
+            .replace(
+                "--MIX--\r\n",
+                &format!("--MIX\r\nContent-Type: application/pdf; name=\"{long}\"\r\nContent-Disposition: attachment; filename=\"{long}\"\r\n\r\nPDF\r\n--MIX--\r\n"),
+            );
+        let mut account = make_account(&temp.path().to_string_lossy());
+        account.skip_signature_images = true;
+        let mut written = Vec::new();
+        let mut ctx = ExportContext {
+            export_directory: temp.path(),
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+            source_proof: None,
+            organize_by_date: false,
+            exported: None,
+            quarantine: Some(Quarantine {
+                root: &root,
+                written: &mut written,
+            }),
+        };
+        let result = export_to_markdown(raw.as_bytes(), vec![], None, &mut ctx);
+
+        assert!(result.is_err());
+        assert!(written.is_empty(), "{written:?}");
+        assert!(
+            root.exists(),
+            "the logo must have reached the quarantine first"
+        );
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_discard_quarantined_keeps_directory_shared_with_another_note() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join("email_stem");
+        fs::create_dir_all(&dir).unwrap();
+        let earlier = dir.join("logo.png");
+        let failed = dir.join("logo_2.png");
+        fs::write(&earlier, "a").unwrap();
+        fs::write(&failed, "b").unwrap();
+        let mut written = vec![earlier.clone(), failed.clone()];
+
+        discard_quarantined(&mut written, 1);
+
+        assert_eq!(written, vec![earlier.clone()]);
+        assert!(earlier.exists());
+        assert!(!failed.exists());
+    }
+
+    #[test]
+    fn test_discard_quarantined_removes_emptied_directory() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join("email_stem");
+        fs::create_dir_all(&dir).unwrap();
+        let logo = dir.join("logo.png");
+        fs::write(&logo, "a").unwrap();
+        let mut written = vec![logo];
+
+        discard_quarantined(&mut written, 0);
+
+        assert!(written.is_empty());
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn test_quarantine_warning_with_images() {
+        let warning = quarantine_warning(3, "INBOX", Path::new("out/_skipped"));
+        let warning = warning.expect("a warning for 3 images");
+        assert!(
+            warning.contains("3 image(s) skipped from INBOX"),
+            "{warning}"
+        );
+        assert!(warning.contains("_skipped"), "{warning}");
+    }
+
+    #[test]
+    fn test_quarantine_warning_empty() {
+        assert_eq!(
+            quarantine_warning(0, "INBOX", Path::new("out/_skipped")),
+            None
+        );
+    }
+
+    #[test]
+    fn test_export_to_markdown_without_quarantine_creates_no_skipped_dir() {
+        let temp = tempfile::TempDir::new().unwrap();
+        export_with_quarantine(
+            &mail_with_inline_logos("Devis", &["logo.png"]),
+            temp.path(),
+            None,
+        );
+
+        assert!(!temp.path().join("_skipped").exists());
+        assert!(!temp.path().join("2024-01-01_logo.png").exists());
+    }
+
+    #[test]
+    fn test_export_to_markdown_quarantine_keeps_same_named_images_apart() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("_skipped");
+        let mut written = Vec::new();
+        let (_, stem) = export_with_quarantine(
+            &mail_with_inline_logos("Devis", &["image.png", "image.png"]),
+            temp.path(),
+            Some(Quarantine {
+                root: &root,
+                written: &mut written,
+            }),
+        );
+
+        assert!(root.join(&stem).join("image.png").exists());
+        assert!(root.join(&stem).join("image_2.png").exists());
+        assert_eq!(written.len(), 2);
+    }
+
+    #[test]
+    fn test_export_to_markdown_keeps_gmail_inline_screenshot() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let md = export_with_signature_filter(&gmail_screenshot_mail("", ""), temp.path());
+
+        assert!(temp.path().join("2024-01-01_image.png").exists());
+        assert!(md.contains("attachments:"), "{md}");
+        assert!(md.contains("](2024-01-01_image.png)"), "{md}");
+        assert!(md.contains("Voici la capture"), "{md}");
+        assert!(!md.contains("[image: image.png]"), "{md}");
+        assert!(!md.contains("cid:"), "{md}");
+    }
+
+    #[test]
+    fn test_export_to_markdown_drops_gmail_signature_logo_with_screenshot() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let logo = "L".repeat(8_000);
+        let raw = gmail_screenshot_mail(
+            "<div class=\"gmail_signature\"><div><img src=\"cid:logo_sig\" alt=\"logo_sig\"></div></div>",
+            &format!("--MIX\r\nContent-Type: image/png; name=\"logo_sig.png\"\r\nContent-Disposition: inline; filename=\"logo_sig.png\"\r\nContent-Transfer-Encoding: 7bit\r\nContent-ID: <logo_sig>\r\n\r\n{logo}\r\n"),
+        );
+        let md = export_with_signature_filter(&raw, temp.path());
+
+        assert!(temp.path().join("2024-01-01_image.png").exists());
+        assert!(!temp.path().join("2024-01-01_logo_sig.png").exists());
+        assert!(md.contains("](2024-01-01_image.png)"), "{md}");
+        assert!(!md.contains("logo_sig"), "{md}");
+    }
+
+    #[test]
+    fn test_extract_body_keeps_plain_when_html_embeds_only_a_signature_logo() {
+        let raw = make_multipart_email(
+            "Hello plain text",
+            "<p>Hello HTML</p><div class=\"gmail_signature\"><img src=\"cid:logo@x\"></div>",
+        );
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        assert!(body.contains("Hello plain text"), "{body}");
+        assert!(!body.contains("Hello HTML"), "{body}");
+    }
+
+    #[test]
+    fn test_extract_body_prefers_html_embedding_a_content_image() {
+        let raw = make_multipart_email(
+            "Hello plain text [image: image.png]",
+            "<p>Hello HTML</p><img src=\"cid:shot@x\" alt=\"image.png\">",
+        );
+        let mail = mailparse::parse_mail(&raw).unwrap();
+        let body = extract_body(&mail);
+
+        assert!(body.contains("Hello HTML"), "{body}");
+        assert!(body.contains("cid:shot@x"), "{body}");
+        assert!(!body.contains("[image: image.png]"), "{body}");
     }
 
     #[test]
@@ -3169,6 +3681,7 @@ abc123
             source_proof: None,
             organize_by_date: true,
             exported: None,
+            quarantine: None,
         };
         let (first_path, _decision) = export_to_markdown(&raw, vec![], None, &mut ctx)
             .unwrap()

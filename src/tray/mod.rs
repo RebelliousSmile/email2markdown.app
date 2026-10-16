@@ -19,7 +19,7 @@ use wry::WebView;
 
 use crate::config;
 use crate::progress::ProgressUpdate;
-use crate::route::RouteDecision;
+use crate::route::RouteDecisions;
 use crate::tray_actions::{self, ActionResult};
 
 mod event_loop;
@@ -105,7 +105,7 @@ pub enum AppCommand {
     },
     /// Open the route review window after an Export.
     /// Carries the list of (staging_path, RouteDecision) produced by export_account.
-    OpenRouteReview(Vec<(PathBuf, RouteDecision)>),
+    OpenRouteReview(RouteDecisions),
     /// Persist a new routing rule into destinations.txt and re-inject the updated tree.
     /// IO is done in the event loop (not in the webview IPC callback).
     PersistRoutingRule {

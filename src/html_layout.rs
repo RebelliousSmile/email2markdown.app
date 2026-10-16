@@ -24,15 +24,57 @@ fn parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     weak.and_then(|w| w.upgrade())
 }
 
-fn style_of(node: &Rc<Node>) -> Option<String> {
+fn attr_of(node: &Rc<Node>, attr: &str) -> Option<String> {
     match &node.data {
         NodeData::Element { attrs, .. } => attrs
             .borrow()
             .iter()
-            .find(|a| a.name.local.as_ref() == "style")
+            .find(|a| a.name.local.as_ref() == attr)
             .map(|a| a.value.to_string()),
         _ => None,
     }
+}
+
+fn style_of(node: &Rc<Node>) -> Option<String> {
+    attr_of(node, "style")
+}
+
+/// Class tokens mail clients put on their signature block.
+const SIGNATURE_CLASSES: [&str; 2] = ["gmail_signature", "moz-signature"];
+
+/// Ids mail clients put on their signature block.
+const SIGNATURE_IDS: [&str; 3] = [
+    "Signature",
+    "AppleMailSignature",
+    "ms-outlook-mobile-signature",
+];
+
+/// True when an ancestor is a mail-client signature block, recognised by a
+/// known marker only: class token `gmail_signature` (Gmail) or `moz-signature`
+/// (Thunderbird), id `Signature` (Outlook web), `AppleMailSignature` or
+/// `ms-outlook-mobile-signature`. A merely similar name (`signature-request`)
+/// is content.
+pub(crate) fn in_signature_container(node: &Rc<Node>) -> bool {
+    let mut current = parent(node);
+    while let Some(ancestor) = current {
+        let by_class = attr_of(&ancestor, "class").is_some_and(|value| {
+            value.split_ascii_whitespace().any(|token| {
+                SIGNATURE_CLASSES
+                    .iter()
+                    .any(|known| token.eq_ignore_ascii_case(known))
+            })
+        });
+        let by_id = attr_of(&ancestor, "id").is_some_and(|value| {
+            SIGNATURE_IDS
+                .iter()
+                .any(|known| value.trim().eq_ignore_ascii_case(known))
+        });
+        if by_class || by_id {
+            return true;
+        }
+        current = parent(&ancestor);
+    }
+    false
 }
 
 /// True for a `font-weight` declaration of `bold`, `bolder` or a weight >= 600.

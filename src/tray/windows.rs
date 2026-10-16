@@ -10,7 +10,7 @@ use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
 use tao::window::{Window, WindowBuilder, WindowId};
 use wry::{WebView, WebViewBuilder};
 
-use crate::route::RouteDecision;
+use crate::route::RouteDecisions;
 use crate::tray_actions::{self, ActionResult};
 use crate::updater;
 
@@ -549,7 +549,7 @@ pub(super) fn escape_json_for_script(json: &str) -> String {
 pub(super) fn build_route_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
-    decisions: Vec<(PathBuf, RouteDecision)>,
+    decisions: RouteDecisions,
 ) -> Result<(Window, WebView, WindowId)> {
     let settings_path = crate::config::settings_path();
     let settings = crate::config::Settings::load(&settings_path).unwrap_or_default();

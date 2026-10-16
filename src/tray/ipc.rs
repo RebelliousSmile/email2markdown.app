@@ -1226,10 +1226,11 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails, read_frontmatter_list,
-        relative_destination, reload_outcome, remove_env_passwords, save_account, save_outcome,
-        save_settings, scan_destinations, set_env_password, validate_new_account_name, AccountData,
-        DestGuiIpcResult, RouteApplyReport, RouteDecisionRow, SettingsData,
+        apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails,
+        read_frontmatter_list, relative_destination, reload_outcome, remove_env_passwords,
+        save_account, save_outcome, save_settings, scan_destinations, set_env_password,
+        validate_new_account_name, AccountData, DestGuiIpcResult, RouteApplyReport,
+        RouteDecisionRow, SettingsData,
     };
     use crate::config::{load_raw_accounts, RawAccount, Settings};
     use crate::destinations::DestinationsConfig;

@@ -303,8 +303,10 @@ mod settings_tests {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("settings.yaml");
 
-        let mut s = Settings::default();
-        s.export_base_dir = Some("/tmp/emails".to_string());
+        let mut s = Settings {
+            export_base_dir: Some("/tmp/emails".to_string()),
+            ..Settings::default()
+        };
         s.defaults.quote_depth = Some(2);
         s.defaults.skip_existing = Some(false);
         s.save(&path).unwrap();
@@ -705,6 +707,93 @@ mod edge_case_tests {
             Some("attachment")
         ));
     }
+
+    #[test]
+    fn test_should_skip_image_keeps_referenced_generic_screenshot() {
+        for size in [30 * 1024, 80 * 1024] {
+            assert!(!should_skip_image(
+                true,
+                Some("image.png"),
+                "image/png",
+                size,
+                Some("inline")
+            ));
+        }
+    }
+
+    #[test]
+    fn test_should_skip_image_drops_referenced_logo_name() {
+        assert!(should_skip_image(
+            true,
+            Some("logo.png"),
+            "image/png",
+            30 * 1024,
+            Some("inline")
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_image_drops_referenced_icon() {
+        assert!(should_skip_image(
+            true,
+            Some("image.png"),
+            "image/png",
+            4 * 1024,
+            Some("inline")
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_image_keeps_large_unreferenced_inline() {
+        assert!(!should_skip_image(
+            false,
+            Some("photo.jpg"),
+            "image/jpeg",
+            400 * 1024,
+            Some("inline")
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_image_drops_small_unreferenced_inline() {
+        assert!(should_skip_image(
+            false,
+            Some("vacances.jpg"),
+            "image/jpeg",
+            60 * 1024,
+            Some("inline")
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_image_keeps_non_image_attachments() {
+        assert!(!should_skip_image(
+            false,
+            Some("contrat.pdf"),
+            "application/pdf",
+            40 * 1024,
+            Some("inline")
+        ));
+        assert!(!should_skip_image(
+            false,
+            Some("company.docx"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            20 * 1024,
+            Some("attachment")
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_image_with_uppercase_content_type() {
+        // MIME types are case-insensitive: `IMAGE/PNG` is a small image too.
+        assert!(should_skip_image(
+            false,
+            Some("capture.dat"),
+            "IMAGE/PNG",
+            20 * 1024,
+            None
+        ));
+    }
 }
 
 // [3][4] Tests pour le module network
@@ -721,18 +810,16 @@ mod network_tests {
 
     #[test]
     fn test_progress_indicator_create() {
-        let _progress = ProgressIndicator::new("Test", 100);
         // Just verify it creates without panic
-        assert!(true);
+        let _progress = ProgressIndicator::new("Test", 100);
     }
 
     #[test]
     fn test_progress_indicator_update() {
         let mut progress = ProgressIndicator::new("Test", 10);
         progress.update(5);
-        progress.inc();
         // Verify it updates without panic
-        assert!(true);
+        progress.inc();
     }
 }
 
@@ -1024,22 +1111,30 @@ attachments:
         let md = new_dir.join("note.md");
         fs::write(
             &md,
-            format!("---
+            format!(
+                "---
 tags:
   - email
 attachments:
   - a.pdf
 ---
 
-{block}"),
+{block}"
+            ),
         )
         .unwrap();
 
         email_to_markdown::route::rewrite_attachment_paths(&md, &old_dir, &new_dir).unwrap();
 
         let content = fs::read_to_string(&md).unwrap();
-        assert!(content.ends_with(block), "block must be unchanged: {content:?}");
-        assert!(content.contains("  - ../../staging/a.pdf"), "got {content:?}");
+        assert!(
+            content.ends_with(block),
+            "block must be unchanged: {content:?}"
+        );
+        assert!(
+            content.contains("  - ../../staging/a.pdf"),
+            "got {content:?}"
+        );
         assert!(!content.contains("  - a.pdf"));
     }
 
@@ -1806,7 +1901,8 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 
     #[test]
     fn test_route_email_reports_alternatives_for_shared_rule() {
-        let content = "Perso/A | domain:acme.com\nPerso/B | domain:acme.com\nPerso/C | domain:other.com\n";
+        let content =
+            "Perso/A | domain:acme.com\nPerso/B | domain:acme.com\nPerso/C | domain:other.com\n";
         let dests = parse_destinations(content).unwrap();
         let meta = make_meta(
             "alice@acme.com",
@@ -1825,8 +1921,8 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 
     #[test]
     fn test_route_email_no_alternatives_when_unambiguous() {
-        let dests = parse_destinations("Perso/A | domain:acme.com\nPerso/B | domain:other.com\n")
-            .unwrap();
+        let dests =
+            parse_destinations("Perso/A | domain:acme.com\nPerso/B | domain:other.com\n").unwrap();
         let meta = make_meta(
             "alice@acme.com",
             "acme.com",
@@ -1840,7 +1936,9 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 
     #[test]
     fn test_rule_conflicts_and_move_rule() {
-        use email_to_markdown::destinations::{DestinationEntry, DestinationRule, DestinationsConfig};
+        use email_to_markdown::destinations::{
+            DestinationEntry, DestinationRule, DestinationsConfig,
+        };
         let mut cfg = DestinationsConfig {
             destinations: vec![
                 DestinationEntry {
@@ -2601,6 +2699,45 @@ mod contextual_export_tests {
     }
 
     #[test]
+    fn test_convert_raw_contextual_quarantines_outside_staging() {
+        let temp = TempDir::new().unwrap();
+        let export = temp.path().join("export");
+        let target = export.join("Pro");
+        fs::create_dir_all(&target).unwrap();
+        let mut account = account(&export);
+        account.skip_signature_images = true;
+        account.delete_after_export = true;
+        let logo = "L".repeat(20 * 1024);
+        let raw = format!(
+            "Message-ID: <logo@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Devis\r\nContent-Type: multipart/mixed; boundary=BOUND\r\n\r\n--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody\r\n--BOUND\r\nContent-Type: image/png; name=logo.png\r\nContent-Disposition: inline; filename=logo.png\r\n\r\n{logo}\r\n--BOUND--\r\n"
+        )
+        .into_bytes();
+        let location = location("INBOX", 42);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+
+        let status =
+            convert_raw_contextual(&target, &account, &candidate, &location, &raw, false).unwrap();
+        let (markdown, quarantined) = match status {
+            ConversionStatus::Written {
+                markdown,
+                quarantined,
+                ..
+            } => (markdown, quarantined),
+            other => panic!("expected write, got {other:?}"),
+        };
+
+        let stem = markdown.file_stem().unwrap();
+        assert!(export.join("_skipped").join(stem).join("logo.png").exists());
+        assert_eq!(quarantined, 1);
+        assert!(!target.join("_skipped").exists());
+        assert!(!fs::read_dir(&target).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".email-to-markdown-tmp-")));
+    }
+
+    #[test]
     fn search_batches_are_safe_deduplicated_and_bounded() {
         let rules: Vec<_> = (0..250)
             .map(|index| MatchRule::Correspondent(format!("person{index}@example.com")))
@@ -2762,7 +2899,9 @@ mod contextual_export_tests {
         )
         .unwrap();
         let (markdown, proof) = match first {
-            ConversionStatus::Written { markdown, proof } => (markdown, proof),
+            ConversionStatus::Written {
+                markdown, proof, ..
+            } => (markdown, proof),
             other => panic!("expected write, got {other:?}"),
         };
         assert!(markdown.exists());
@@ -3347,7 +3486,7 @@ mod suggest_tests {
 
         let groups = scan_domains(temp.path()).unwrap();
         assert!(
-            groups.get("hidden.com").is_none(),
+            !groups.contains_key("hidden.com"),
             "dot-dir must be skipped"
         );
         assert_eq!(groups.get("visible.com"), Some(&1));
@@ -3362,7 +3501,7 @@ mod suggest_tests {
 
         let groups = scan_domains(temp.path()).unwrap();
         assert!(
-            groups.get("gone.com").is_none(),
+            !groups.contains_key("gone.com"),
             "underscore-dir must be skipped"
         );
         assert_eq!(groups.get("here.com"), Some(&1));
@@ -3382,7 +3521,7 @@ mod suggest_tests {
 
         let groups = scan_domains(&root).unwrap();
         assert!(
-            groups.get("external.com").is_none(),
+            !groups.contains_key("external.com"),
             "symlink must not be followed"
         );
         assert_eq!(groups.get("inside.com"), Some(&1));
@@ -3402,7 +3541,7 @@ mod suggest_tests {
         if std::os::windows::fs::symlink_dir(&outside, root.join("link")).is_ok() {
             let groups = scan_domains(&root).unwrap();
             assert!(
-                groups.get("external.com").is_none(),
+                !groups.contains_key("external.com"),
                 "symlink must not be followed"
             );
             assert_eq!(groups.get("inside.com"), Some(&1));
