@@ -3,8 +3,8 @@ use crate::network::{with_retry, NetworkConfig, ProgressCallback, ProgressIndica
 use crate::route::{route_email, Destination, EmailMeta, MatchRule, RouteDecision, RouteDecisions};
 use crate::utils::{
     decode_imap_utf7, decode_mime_filename, extract_emails, get_short_name, hash_md5_prefix,
-    limit_quote_depth, normalize_line_breaks, sanitize_filename, should_skip_image,
-    subject_filename_part,
+    limit_quote_depth, normalize_line_breaks, sanitize_attachment_name, sanitize_filename,
+    should_skip_image, subject_filename_part,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
@@ -660,11 +660,10 @@ pub fn export_to_markdown(
     if !listed.is_empty() {
         attachments_section.push_str("\n\n### Pieces jointes :\n");
         for attachment in listed {
-            let filename_only = Path::new(attachment)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy();
-            attachments_section.push_str(&format!("- [{}]({})\n", filename_only, attachment));
+            attachments_section.push_str(&format!(
+                "- {}\n",
+                crate::email_block::local_link(attachment, false)
+            ));
         }
     }
 
@@ -1113,7 +1112,7 @@ fn extract_attachments(
                 }
 
                 if !payload.is_empty() {
-                    let safe_filename = sanitize_filename(&decoded_filename);
+                    let safe_filename = sanitize_attachment_name(&decoded_filename);
                     // Flat naming scheme: <date>_<original-name> — readable, with the
                     // email date as prefix. Collisions are disambiguated below; a second
                     // safety pass in `route::move_email` handles cross-email collisions
@@ -3606,6 +3605,7 @@ abc123
         assert!(temp.path().join("2024-01-01_image.png").exists());
         assert!(md.contains("attachments:"), "{md}");
         assert!(md.contains("](2024-01-01_image.png)"), "{md}");
+        assert!(md.contains("![[2024-01-01_image.png]]"), "{md}");
         assert!(md.contains("Voici la capture"), "{md}");
         assert!(!md.contains("[image: image.png]"), "{md}");
         assert!(!md.contains("cid:"), "{md}");
@@ -3624,7 +3624,55 @@ abc123
         assert!(temp.path().join("2024-01-01_image.png").exists());
         assert!(!temp.path().join("2024-01-01_logo_sig.png").exists());
         assert!(md.contains("](2024-01-01_image.png)"), "{md}");
+        assert!(md.contains("![[2024-01-01_image.png]]"), "{md}");
         assert!(!md.contains("logo_sig"), "{md}");
+    }
+
+    #[test]
+    fn test_export_to_markdown_links_attachments_as_wikilinks() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let photo = "P".repeat(30 * 1024);
+        // Over 100 KB: a smaller unreferenced "photo*" image is dropped as a
+        // signature logo by `is_signature_image`.
+        let jpeg = "J".repeat(120 * 1024);
+        let raw = format!(
+            "From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Photos\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"MIX\"\r\n\r\n\
+--MIX\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<div><p>Voici la vue</p><img src=\"cid:ph\" alt=\"vue\"><img src=\"https://a.test/l.png\" alt=\"logo\"></div>\r\n\
+--MIX\r\nContent-Type: image/png; name=\"my photo.png\"\r\nContent-Disposition: inline; filename=\"my photo.png\"\r\nContent-Transfer-Encoding: 7bit\r\nContent-ID: <ph>\r\n\r\n{photo}\r\n\
+--MIX\r\nContent-Type: image/jpeg; name=\"Photo 1 (2).jpeg\"\r\nContent-Disposition: attachment; filename=\"Photo 1 (2).jpeg\"\r\nContent-Transfer-Encoding: 7bit\r\n\r\n{jpeg}\r\n\
+--MIX\r\nContent-Type: application/pdf; name=\"devis #5 [v2].pdf\"\r\nContent-Disposition: attachment; filename=\"devis #5 [v2].pdf\"\r\nContent-Transfer-Encoding: 7bit\r\n\r\n%PDF-1.4 fake\r\n\
+--MIX--\r\n"
+        )
+        .into_bytes();
+        let md = export_with_signature_filter(&raw, temp.path());
+
+        assert!(temp.path().join("2024-01-01_my photo.png").exists());
+        assert!(temp.path().join("2024-01-01_Photo 1 (2).jpeg").exists());
+        assert!(temp.path().join("2024-01-01_devis _5 _v2_.pdf").exists());
+
+        let block_end = md.rfind("\n```\n").expect("end of the email block");
+        let after = &md[block_end..];
+        assert!(
+            after.contains("- [[2024-01-01_Photo 1 (2).jpeg]]"),
+            "{after}"
+        );
+        assert!(
+            after.contains("- [[2024-01-01_devis _5 _v2_.pdf]]"),
+            "{after}"
+        );
+        assert!(
+            after.contains("\n![[2024-01-01_my photo.png]]\n"),
+            "{after}"
+        );
+        assert!(after.contains("![logo](https://a.test/l.png)"), "{after}");
+        assert_eq!(
+            after.matches("2024-01-01_my photo.png").count(),
+            1,
+            "{after}"
+        );
+        assert!(!after.contains("](2024-01-01_"), "{after}");
+        assert!(!after.contains("(<"), "{after}");
+        assert!(!after.contains("![[https"), "{after}");
     }
 
     #[test]

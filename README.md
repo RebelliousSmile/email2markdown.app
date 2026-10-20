@@ -120,6 +120,8 @@ Bonjour, ...
 
 Le plugin affiche le corps du bloc en texte brut : les images et les liens du message sont donc aussi listés sous le bloc (`### Images :`, `### Liens :`) pour rester affichables, avant la section `### Pieces jointes :`.
 
+Les fichiers enregistrés à côté de la note sont liés en wikilinks Obsidian (`![[2026-07-02_photo.png]]` pour une image, `- [[2026-07-02_devis.pdf]]` pour une pièce jointe) : Obsidian les indexe, affiche la note en rétrolien et met les liens à jour quand un fichier est renommé ou déplacé. Les images distantes gardent la syntaxe Markdown (`![logo](https://…)`). Les caractères qu'un wikilink ne sait pas porter (`# ^ [ ] |`) sont remplacés par `_` dans le nom des pièces jointes.
+
 Les notes exportées avant ce format gardent leur frontmatter complet et restent lues.
 
 Si aucune règle ne correspond, l'email atterrit dans le dossier fourre-tout : `notes_dir/Perso/Messy/Emails/<Année>/<Mois>`.
