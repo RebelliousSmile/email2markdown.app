@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-20
+
+### Added
+
+- **Liens vers les messages cités** : quand un courriel cite un message déjà présent dans le coffre, la citation (ligne d'attribution et texte cité) est remplacée par `Message cité : [[note]]`. La liaison est faite au rangement d'une note, et la note qui arrive après sa réponse est liée à la passe suivante. Les formats d'attribution français et anglais sont reconnus, y compris avec un fuseau horaire différent de celui de la note. La correspondance est stricte (expéditeur, date et début du texte, une seule note candidate) ; sinon la citation reste en texte, de même que les réponses entrelacées.
+- **Commande `link-quotes <coffre>`** : applique la liaison aux notes existantes, y compris les anciennes notes en Markdown simple. Elle ne modifie rien par défaut (liste et totaux par motif) ; `--apply --backup <dossier>` réécrit les notes après avoir copié les originaux hors du coffre.
+
+### Fixed
+
+- **Noms de notes inutilisables en wikilink** : une note dont le nom contient `[`, `]`, `|`, `#` ou `^` n'est jamais désignée par un lien ; la citation reste en texte.
+
 ## [0.20.1] - 2026-10-20
 
 ### Fixed
