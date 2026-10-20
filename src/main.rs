@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use email_to_markdown::config::{self, Config, Settings};
 use email_to_markdown::dest_cmd;
 use email_to_markdown::email_export::ImapExporter;
+use email_to_markdown::quote_link;
 use email_to_markdown::route;
 use email_to_markdown::thunderbird; // [1] Import Thunderbird
 
@@ -152,6 +153,24 @@ enum Commands {
         /// Path to config file (default: platform config dir)
         #[arg(short, long)]
         config: Option<PathBuf>,
+    },
+
+    /// Replace quoted messages by wikilinks to their notes, in an existing vault.
+    ///
+    /// Dry run by default: lists what would be linked and why the rest stays text.
+    /// `--apply` rewrites the notes and needs `--backup`, a directory outside the vault
+    /// that receives a copy of every note before it is rewritten.
+    LinkQuotes {
+        /// Vault (or folder of notes) to process
+        vault: PathBuf,
+
+        /// Rewrite the notes (without it, nothing is written)
+        #[arg(long, requires = "backup")]
+        apply: bool,
+
+        /// Directory outside the vault that receives the copies of rewritten notes
+        #[arg(long)]
+        backup: Option<PathBuf>,
     },
 
     /// Search and convert related emails into one configured local directory.
@@ -468,6 +487,34 @@ fn main() -> Result<()> {
 
         Commands::Dest(args) => {
             dest_cmd::run(args)?;
+        }
+
+        Commands::LinkQuotes {
+            vault,
+            apply,
+            backup,
+        } => {
+            let backup_dir = if apply { backup.as_deref() } else { None };
+            let report = quote_link::link_vault(&vault, backup_dir)?;
+            for note in &report.rewritten {
+                println!("{note}");
+            }
+            let verb = if apply { "linked" } else { "would link" };
+            println!(
+                "{} notes scanned, {} {} quoted messages in {} notes",
+                report.scanned,
+                verb,
+                report.linked,
+                report.rewritten.len()
+            );
+            let mut left: Vec<_> = report.left.iter().collect();
+            left.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+            for (reason, count) in left {
+                println!("  left as text, {reason:?}: {count}");
+            }
+            if !apply {
+                println!("(dry-run — no files were changed)");
+            }
         }
 
         Commands::RepairAttachments {

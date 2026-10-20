@@ -9,6 +9,7 @@ pub mod email_export;
 pub mod handled; // Ledger of sorted/discarded messages, so they are not re-exported
 pub mod html_layout; // Email HTML handlers for the htmd converter
 pub mod network; // [3][4] Progress indicator et retry logic
+pub mod quote_link; // Replace a quoted message by a wikilink to its note
 pub mod route;
 pub mod thunderbird; // [1] Import automatique depuis Thunderbird
 #[cfg(feature = "tray")]

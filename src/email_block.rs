@@ -33,6 +33,8 @@ struct RawBlock {
     cc: Option<OneOrMany>,
     #[serde(default)]
     date: Option<toml::Value>,
+    #[serde(default)]
+    body: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -315,6 +317,12 @@ pub fn read_header(content: &str) -> Option<BlockHeader> {
         cc: raw.cc.map(OneOrMany::into_vec).unwrap_or_default(),
         date,
     })
+}
+
+/// Body of the note's ```email block, if it has a valid one.
+pub fn read_body(content: &str) -> Option<String> {
+    let raw: RawBlock = toml::from_str(&block_source(content)?).ok()?;
+    raw.body
 }
 
 /// Scalar value of a frontmatter key (`subject` never matches `subject_hash`).
