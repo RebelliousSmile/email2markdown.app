@@ -1,3 +1,4 @@
+use crate::quote_link;
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
 use regex::Regex;
@@ -1226,7 +1227,64 @@ pub fn apply_decision(staging_md: &Path, rel_path: &str, notes_dir: &Path) -> Re
             staging_md.display(),
             dest_dir.display()
         )
-    })
+    })?;
+    if let Some(name) = staging_md.file_name() {
+        // A link failure never undoes the routing: the note stays, quotes stay as text.
+        if let Err(e) = link_routed_note(&dest_dir.join(name), notes_dir) {
+            eprintln!("warning: could not link quoted messages: {e:#}");
+        }
+    }
+    Ok(())
+}
+
+/// How long the vault index of [`link_routed_note`] is reused before a re-scan.
+const QUOTE_INDEX_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Vault index kept between calls, so routing n notes scans the vault once, not n times.
+static QUOTE_INDEX: std::sync::Mutex<Option<(PathBuf, std::time::Instant, quote_link::Index)>> =
+    std::sync::Mutex::new(None);
+
+/// Replace the quoted messages of a routed note by links to the notes already in `notes_dir`.
+///
+/// The note is rewritten only when at least one message is linked. Once handled, it is
+/// added to the index so a later reply in the same run can link to it.
+fn link_routed_note(note_path: &Path, notes_dir: &Path) -> Result<()> {
+    let rel = note_path
+        .strip_prefix(notes_dir)
+        .context("routed note is outside notes_dir")?
+        .to_string_lossy()
+        .into_owned();
+    let content = fs::read_to_string(note_path)
+        .with_context(|| format!("failed to read {}", note_path.display()))?;
+
+    let mut guard = QUOTE_INDEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let fresh = matches!(
+        guard.as_ref(),
+        Some((root, built, _)) if root == notes_dir && built.elapsed() < QUOTE_INDEX_TTL
+    );
+    if !fresh {
+        *guard = Some((
+            notes_dir.to_path_buf(),
+            std::time::Instant::now(),
+            quote_link::Index::from_dir(notes_dir),
+        ));
+    }
+    let Some((_, _, index)) = guard.as_mut() else {
+        return Ok(());
+    };
+
+    let outcome = quote_link::link_note(&content, &rel, index);
+    let final_content = if outcome.linked.is_empty() {
+        content
+    } else {
+        fs::write(note_path, &outcome.content)
+            .with_context(|| format!("failed to write {}", note_path.display()))?;
+        outcome.content
+    };
+    index.add(&rel, &final_content);
+    Ok(())
 }
 
 // ── Repair legacy attachments ────────────────────────────────────────────────

@@ -2327,6 +2327,62 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         assert!(!md_src.exists(), "original .md must not remain at staging");
     }
 
+    // ── apply_decision — links quoted messages already in the vault ───────────
+
+    const QUOTED_TEXT: &str = "Bonjour Thibaut, voici le devis demandé pour la rénovation.";
+
+    fn quote_note(from: &str, date: &str, body: &str) -> String {
+        format!(
+            "---\ntags:\n  - email\n---\n```email\nsubject = \"Devis\"\nfrom = \"{from}\"\ndate = \"{date}\"\nbody = '''\n{body}\n'''\n```\n"
+        )
+    }
+
+    fn quoting_reply() -> String {
+        quote_note(
+            "Thibaut <t@example.com>",
+            "2022-07-12T09:00:00+02:00",
+            &format!(
+                "Merci.\n\nLe 11/07/2022 à 12:56, Mano <mano@example.com> a écrit :\n> {QUOTED_TEXT}"
+            ),
+        )
+    }
+
+    fn route_reply(temp: &TempDir, vault_has_original: bool) -> String {
+        let notes_dir = temp.path().join("notes");
+        let folder = notes_dir.join("Pro").join("2022").join("07");
+        fs::create_dir_all(&folder).unwrap();
+        if vault_has_original {
+            let original = quote_note(
+                "Mano <mano@example.com>",
+                "2022-07-11T10:56:00Z",
+                QUOTED_TEXT,
+            );
+            fs::write(folder.join("Devis original.md"), original).unwrap();
+        }
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        let md_src = staging.join("Devis reponse.md");
+        fs::write(&md_src, quoting_reply()).unwrap();
+
+        apply_decision(&md_src, "Pro/2022/07", &notes_dir).unwrap();
+        fs::read_to_string(folder.join("Devis reponse.md")).unwrap()
+    }
+
+    #[test]
+    fn test_apply_decision_links_quoted_message_present_in_vault() {
+        let temp = TempDir::new().unwrap();
+        let routed = route_reply(&temp, true);
+        assert!(routed.contains("Message cité : [[Devis original]]"));
+        assert!(!routed.contains(QUOTED_TEXT));
+    }
+
+    #[test]
+    fn test_apply_decision_keeps_quote_when_original_absent() {
+        let temp = TempDir::new().unwrap();
+        let routed = route_reply(&temp, false);
+        assert_eq!(routed, quoting_reply());
+    }
+
     #[test]
     fn test_apply_decision_rejects_path_traversal() {
         let temp = TempDir::new().unwrap();
@@ -3882,5 +3938,335 @@ mod dest_gui_tests {
         assert!(cfg.destinations[1]
             .rules
             .contains(&DestinationRule::Domain("apple.com".into())));
+    }
+}
+
+mod quote_link_tests {
+    use email_to_markdown::quote_link::*;
+    use tempfile::TempDir;
+
+    const ORIGINAL_BODY: &str = "Bonjour Thibaut, voici le devis demandé pour la rénovation.";
+    const OLDER_BODY: &str = "Un message plus ancien que le reste.";
+
+    fn note(from: &str, date: &str, body: &str) -> String {
+        format!(
+            "---\ntags:\n  - email\n---\n```email\nsubject = \"Devis\"\nfrom = \"{from}\"\ndate = \"{date}\"\nbody = '''\n{body}\n'''\n```\n"
+        )
+    }
+
+    fn original() -> String {
+        note(
+            "Mano <mano@example.com>",
+            "2022-07-11T10:56:00Z",
+            ORIGINAL_BODY,
+        )
+    }
+
+    fn reply_with(body: &str) -> String {
+        note("Thibaut <t@example.com>", "2022-07-12T09:00:00+02:00", body)
+    }
+
+    fn reply() -> String {
+        reply_with(&format!(
+            "Merci beaucoup.\n\nLe 11/07/2022 à 12:56, Mano <mano@example.com> a écrit :\n> {ORIGINAL_BODY}\n> Cordialement"
+        ))
+    }
+
+    fn index_of(notes: &[(&str, String)]) -> Index {
+        Index::build(notes.iter().map(|(p, c)| (*p, c.as_str())))
+    }
+
+    fn link_original(text: &str) -> Outcome {
+        link_note(
+            text,
+            "Reponse.md",
+            &index_of(&[("Devis original.md", original())]),
+        )
+    }
+
+    #[test]
+    fn test_link_note_replaces_quote_with_link() {
+        let out = link_original(&reply());
+        assert!(out.content.contains("Message cité : [[Devis original]]"));
+    }
+
+    #[test]
+    fn test_link_note_removes_quoted_text() {
+        let out = link_original(&reply());
+        assert!(!out.content.contains("a écrit"));
+        assert!(!out.content.contains(ORIGINAL_BODY));
+    }
+
+    #[test]
+    fn test_link_note_adds_section_after_block() {
+        let out = link_original(&reply());
+        assert!(out
+            .content
+            .ends_with("```\n\n### Messages cités :\n- [[Devis original]]\n"));
+    }
+
+    #[test]
+    fn test_link_note_keeps_reply_text() {
+        let out = link_original(&reply());
+        assert!(out.content.contains("Merci beaucoup."));
+    }
+
+    #[test]
+    fn test_link_note_is_idempotent() {
+        let first = link_original(&reply());
+        let second = link_original(&first.content);
+        assert_eq!(second.content, first.content);
+    }
+
+    #[test]
+    fn test_link_note_reports_linked_targets() {
+        let out = link_original(&reply());
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
+    }
+
+    #[test]
+    fn test_link_note_without_note_keeps_text() {
+        let out = link_note(&reply(), "Reponse.md", &Index::build([]));
+        assert_eq!(out.content, reply());
+    }
+
+    #[test]
+    fn test_link_note_without_note_reports_reason() {
+        let out = link_note(&reply(), "Reponse.md", &Index::build([]));
+        assert_eq!(out.left, vec![Left::NoNote]);
+    }
+
+    #[test]
+    fn test_link_note_with_two_candidates_reports_multiple() {
+        let index = index_of(&[
+            ("a/Devis original.md", original()),
+            ("b/Devis copie.md", original()),
+        ]);
+        let out = link_note(&reply(), "Reponse.md", &index);
+        assert_eq!(out.left, vec![Left::Multiple]);
+    }
+
+    #[test]
+    fn test_link_note_with_two_candidates_does_not_link() {
+        let index = index_of(&[
+            ("a/Devis original.md", original()),
+            ("b/Devis copie.md", original()),
+        ]);
+        let out = link_note(&reply(), "Reponse.md", &index);
+        assert!(!out.content.contains("[["));
+    }
+
+    #[test]
+    fn test_link_note_with_same_stem_uses_path() {
+        let other = note("Autre <x@example.com>", "2020-01-01T00:00:00Z", OLDER_BODY);
+        let index = index_of(&[
+            ("a/Devis original.md", original()),
+            ("b/Devis original.md", other),
+        ]);
+        let out = link_note(&reply(), "Reponse.md", &index);
+        assert!(out.content.contains("[[a/Devis original]]"));
+    }
+
+    #[test]
+    fn test_link_note_with_other_sender_keeps_text() {
+        let other = note(
+            "Paul <p@example.com>",
+            "2022-07-11T10:56:00Z",
+            ORIGINAL_BODY,
+        );
+        let out = link_note(&reply(), "Reponse.md", &index_of(&[("Autre.md", other)]));
+        assert!(out.content.contains(ORIGINAL_BODY));
+    }
+
+    #[test]
+    fn test_link_note_with_other_minute_keeps_text() {
+        let other = note(
+            "Mano <mano@example.com>",
+            "2022-07-11T10:57:00Z",
+            ORIGINAL_BODY,
+        );
+        let out = link_note(&reply(), "Reponse.md", &index_of(&[("Autre.md", other)]));
+        assert!(out.content.contains(ORIGINAL_BODY));
+    }
+
+    #[test]
+    fn test_link_note_with_other_text_keeps_text() {
+        let other = note(
+            "Mano <mano@example.com>",
+            "2022-07-11T10:56:00Z",
+            OLDER_BODY,
+        );
+        let out = link_note(&reply(), "Reponse.md", &index_of(&[("Autre.md", other)]));
+        assert!(out.content.contains(ORIGINAL_BODY));
+    }
+
+    #[test]
+    fn test_link_note_never_links_to_itself() {
+        let own = original().replace(
+            ORIGINAL_BODY,
+            &format!("Le 11/07/2022 à 12:56, Mano <mano@example.com> a écrit :\n> {ORIGINAL_BODY}"),
+        );
+        let index = index_of(&[("Devis original.md", original())]);
+        let out = link_note(&own, "Devis original.md", &index);
+        assert!(!out.content.contains("[["));
+    }
+
+    #[test]
+    fn test_link_note_with_interleaved_reply_reports_reason() {
+        let text = reply_with(&format!(
+            "Le 11/07/2022 à 12:56, Mano <mano@example.com> a écrit :\n> {ORIGINAL_BODY}\nMa réponse au milieu.\n> Cordialement"
+        ));
+        let out = link_original(&text);
+        assert_eq!(out.left, vec![Left::Interleaved]);
+    }
+
+    #[test]
+    fn test_link_note_with_interleaved_reply_keeps_block() {
+        let text = reply_with(&format!(
+            "Le 11/07/2022 à 12:56, Mano <mano@example.com> a écrit :\n> {ORIGINAL_BODY}\nMa réponse au milieu.\n> Cordialement"
+        ));
+        let out = link_original(&text);
+        assert_eq!(out.content, text);
+    }
+
+    #[test]
+    fn test_link_note_with_undated_attribution_reports_reason() {
+        let text = reply_with(&format!(
+            "Mano <mano@example.com> a écrit :\n> {ORIGINAL_BODY}"
+        ));
+        let out = link_original(&text);
+        assert_eq!(out.left, vec![Left::NoDate]);
+    }
+
+    #[test]
+    fn test_link_note_with_english_attribution_links() {
+        let text = reply_with(&format!(
+            "Thanks.\n\nOn Mon, Jul 11, 2022 at 12:56 PM Mano <mano@example.com> wrote:\n> {ORIGINAL_BODY}"
+        ));
+        let out = link_original(&text);
+        assert!(out.content.contains("Message cité : [[Devis original]]"));
+    }
+
+    #[test]
+    fn test_link_note_with_textual_date_links() {
+        let text = reply_with(&format!(
+            "Le lun. 11 juil. 2022 à 12:56, Mano <mano@example.com> a écrit :\n> {ORIGINAL_BODY}"
+        ));
+        let out = link_original(&text);
+        assert!(out.content.contains("Message cité : [[Devis original]]"));
+    }
+
+    #[test]
+    fn test_link_note_with_wrapped_attribution_links() {
+        let text = reply_with(&format!(
+            "Le 11/07/2022 à 12:56, Mano\n<mano@example.com> a écrit :\n> {ORIGINAL_BODY}"
+        ));
+        let out = link_original(&text);
+        assert!(out.content.contains("Message cité : [[Devis original]]"));
+    }
+
+    #[test]
+    fn test_link_note_with_nested_quote_replaces_parent_whole() {
+        let text = reply_with(&format!(
+            "Le 11/07/2022 à 12:56, Mano <mano@example.com> a écrit :\n> {ORIGINAL_BODY}\n> Le 10/07/2022 à 08:00, Paul <p@example.com> a écrit :\n>> {OLDER_BODY}"
+        ));
+        let out = link_original(&text);
+        assert!(!out.content.contains(OLDER_BODY));
+    }
+
+    fn nested_without_parent_note() -> (String, Index) {
+        let older = note("Paul <p@example.com>", "2022-07-10T06:00:00Z", OLDER_BODY);
+        let text = reply_with(&format!(
+            "Le 11/07/2022 à 12:56, Mano <mano@example.com> a écrit :\n> Texte du parent sans note.\n> Le 10/07/2022 à 08:00, Paul <p@example.com> a écrit :\n>> {OLDER_BODY}"
+        ));
+        (text, index_of(&[("Ancien.md", older)]))
+    }
+
+    fn vault_with_conversation(temp: &TempDir) -> std::path::PathBuf {
+        let vault = temp.path().join("vault");
+        std::fs::create_dir_all(vault.join("Pro")).unwrap();
+        std::fs::write(vault.join("Pro").join("Devis original.md"), original()).unwrap();
+        std::fs::write(vault.join("Pro").join("Devis reponse.md"), reply()).unwrap();
+        vault
+    }
+
+    #[test]
+    fn test_link_vault_dry_run_lists_note() {
+        let temp = TempDir::new().unwrap();
+        let vault = vault_with_conversation(&temp);
+        let report = link_vault(&vault, None).unwrap();
+        assert_eq!(report.rewritten, vec!["Pro/Devis reponse.md".to_string()]);
+    }
+
+    #[test]
+    fn test_link_vault_skips_original_whose_name_has_brackets() {
+        let temp = TempDir::new().unwrap();
+        let vault = temp.path().join("vault");
+        std::fs::create_dir_all(vault.join("Pro")).unwrap();
+        std::fs::write(vault.join("Pro").join("[EXTERNE] Devis.md"), original()).unwrap();
+        std::fs::write(vault.join("Pro").join("Devis reponse.md"), reply()).unwrap();
+        let report = link_vault(&vault, None).unwrap();
+        assert!(report.rewritten.is_empty());
+        assert_eq!(report.left.get(&Left::NoNote), Some(&1));
+    }
+
+    #[test]
+    fn test_link_vault_dry_run_writes_nothing() {
+        let temp = TempDir::new().unwrap();
+        let vault = vault_with_conversation(&temp);
+        link_vault(&vault, None).unwrap();
+        let after = std::fs::read_to_string(vault.join("Pro").join("Devis reponse.md")).unwrap();
+        assert_eq!(after, reply());
+    }
+
+    #[test]
+    fn test_link_vault_apply_rewrites_note_and_backs_up_original() {
+        let temp = TempDir::new().unwrap();
+        let vault = vault_with_conversation(&temp);
+        let backup = temp.path().join("backup");
+        link_vault(&vault, Some(&backup)).unwrap();
+        let saved = std::fs::read_to_string(backup.join("Pro").join("Devis reponse.md")).unwrap();
+        assert_eq!(saved, reply());
+    }
+
+    #[test]
+    fn test_link_vault_apply_links_note() {
+        let temp = TempDir::new().unwrap();
+        let vault = vault_with_conversation(&temp);
+        link_vault(&vault, Some(&temp.path().join("backup"))).unwrap();
+        let after = std::fs::read_to_string(vault.join("Pro").join("Devis reponse.md")).unwrap();
+        assert!(after.contains("Message cité : [[Devis original]]"));
+        assert!(!after.contains(ORIGINAL_BODY));
+    }
+
+    #[test]
+    fn test_link_vault_second_run_finds_nothing() {
+        let temp = TempDir::new().unwrap();
+        let vault = vault_with_conversation(&temp);
+        link_vault(&vault, Some(&temp.path().join("backup"))).unwrap();
+        let again = link_vault(&vault, None).unwrap();
+        assert!(again.rewritten.is_empty());
+    }
+
+    #[test]
+    fn test_link_vault_rejects_backup_inside_vault() {
+        let temp = TempDir::new().unwrap();
+        let vault = vault_with_conversation(&temp);
+        let result = link_vault(&vault, Some(&vault.join("backup")));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_link_note_with_nested_quote_links_child_when_parent_has_no_note() {
+        let (text, index) = nested_without_parent_note();
+        let out = link_note(&text, "Reponse.md", &index);
+        assert!(out.content.contains("> Message cité : [[Ancien]]"));
+    }
+
+    #[test]
+    fn test_link_note_with_nested_quote_keeps_parent_text_without_note() {
+        let (text, index) = nested_without_parent_note();
+        let out = link_note(&text, "Reponse.md", &index);
+        assert!(out.content.contains("Texte du parent sans note."));
     }
 }
