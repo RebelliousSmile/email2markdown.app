@@ -107,6 +107,11 @@ impl Index {
             .to_string();
         *self.stems.entry(stem(&path).to_string()).or_default() += 1;
 
+        // Obsidian cannot resolve a wikilink target holding these characters.
+        if stem(&path).contains(['[', ']', '|', '#', '^']) {
+            return;
+        }
+
         let Some(date) =
             note_header_field(content, "date").and_then(|d| DateTime::parse_from_rfc3339(&d).ok())
         else {

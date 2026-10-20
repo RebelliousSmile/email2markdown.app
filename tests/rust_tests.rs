@@ -4199,6 +4199,18 @@ mod quote_link_tests {
     }
 
     #[test]
+    fn test_link_vault_skips_original_whose_name_has_brackets() {
+        let temp = TempDir::new().unwrap();
+        let vault = temp.path().join("vault");
+        std::fs::create_dir_all(vault.join("Pro")).unwrap();
+        std::fs::write(vault.join("Pro").join("[EXTERNE] Devis.md"), original()).unwrap();
+        std::fs::write(vault.join("Pro").join("Devis reponse.md"), reply()).unwrap();
+        let report = link_vault(&vault, None).unwrap();
+        assert!(report.rewritten.is_empty());
+        assert_eq!(report.left.get(&Left::NoNote), Some(&1));
+    }
+
+    #[test]
     fn test_link_vault_dry_run_writes_nothing() {
         let temp = TempDir::new().unwrap();
         let vault = vault_with_conversation(&temp);
