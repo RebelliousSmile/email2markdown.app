@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-20
+
+### Fixed
+
+- **Pièces jointes et images locales liées en wikilinks** : une pièce jointe ou une image enregistrée à côté de la note est désormais liée par `[[nom]]` (`![[nom]]` pour une image), un format qu'Obsidian indexe. L'ancien lien Markdown `[nom](nom)` n'était pas valide quand le nom contenait une espace, et les pièces jointes ne suivaient pas la note lors d'un déplacement dans Obsidian. Les liens vers une URL restent des liens Markdown.
+- **Noms interdits par Obsidian** : `#`, `^`, `[`, `]` et `|` sont remplacés par `_` dans le nom des pièces jointes et des images enregistrées.
+- **Images dont le nom contient une espace** : le corps de la note ne coupe plus le lien à la première espace, et l'image n'est plus relistée parmi les pièces jointes.
+
 ## [0.20.0] - 2026-10-16
 
 ### Added
