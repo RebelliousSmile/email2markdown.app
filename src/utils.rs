@@ -519,6 +519,18 @@ pub fn sanitize_filename(filename: &str) -> String {
         .to_string()
 }
 
+static WIKILINK_BREAKING_CHARS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[#^\[\]|]").expect("static regex"));
+
+/// Sanitize the name of a file saved next to a note and linked as `[[name]]`:
+/// Obsidian reads `# ^ [ ] |` as link syntax, so a name carrying one cannot
+/// be linked.
+pub fn sanitize_attachment_name(filename: &str) -> String {
+    WIKILINK_BREAKING_CHARS_RE
+        .replace_all(&sanitize_filename(filename), "_")
+        .to_string()
+}
+
 /// Get relative path between two paths.
 pub fn get_relative_path(from: &Path, to: &Path) -> String {
     if let Ok(rel) = to.strip_prefix(from) {
@@ -620,6 +632,22 @@ pub fn cleanup_empty_dirs(root: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sanitize_attachment_name_with_obsidian_forbidden_chars() {
+        assert_eq!(
+            sanitize_attachment_name("devis #5 [v2]|a^b:c.pdf"),
+            "devis _5 _v2__a_b_c.pdf"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_attachment_name_keeps_spaces_and_parentheses() {
+        assert_eq!(
+            sanitize_attachment_name("Photo 1 (2).jpeg"),
+            "Photo 1 (2).jpeg"
+        );
+    }
 
     #[test]
     fn test_limit_quote_depth() {

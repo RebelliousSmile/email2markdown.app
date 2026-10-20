@@ -156,8 +156,11 @@ pub struct BodyMedia {
 
 static MEDIA_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"\[!\[(?P<ialt>[^\]]*)\]\((?P<iurl>[^)\s]+)[^)]*\)\]\((?P<lurl>[^)\s]+)[^)]*\)",
-        r"|!\[(?P<alt>[^\]]*)\]\((?P<src>[^)\s]+)[^)]*\)",
+        // An image destination may be `<my photo.png>` (what `rewrite_cid_images`
+        // writes for a name with spaces); `regex` forbids reusing a group name,
+        // hence the `_a` siblings.
+        r"\[!\[(?P<ialt>[^\]]*)\]\((?:<(?P<iurl_a>[^>]+)>|(?P<iurl>[^)\s]+))[^)]*\)\]\((?P<lurl>[^)\s]+)[^)]*\)",
+        r"|!\[(?P<alt>[^\]]*)\]\((?:<(?P<src_a>[^>]+)>|(?P<src>[^)\s]+))[^)]*\)",
         r"|\[(?P<text>[^\[\]]+)\]\((?P<href>[^)\s]+)[^)]*\)",
     ))
     .expect("static regex")
@@ -208,26 +211,36 @@ pub fn body_media(body: &str) -> BodyMedia {
         }
     };
     let push_link = |media: &mut BodyMedia, text: &str, href: &str| {
-        let wanted = href.starts_with("http://") || href.starts_with("https://");
-        if wanted && !media.links.iter().any(|(_, h)| h == href) {
+        if is_remote(href) && !media.links.iter().any(|(_, h)| h == href) {
             media
                 .links
                 .push((text.trim().to_string(), href.to_string()));
         }
     };
     for caps in MEDIA_RE.captures_iter(&body) {
-        if let (Some(alt), Some(src), Some(href)) =
-            (caps.name("ialt"), caps.name("iurl"), caps.name("lurl"))
-        {
+        let iurl = caps.name("iurl_a").or_else(|| caps.name("iurl"));
+        let src = caps.name("src_a").or_else(|| caps.name("src"));
+        if let (Some(alt), Some(src), Some(href)) = (caps.name("ialt"), iurl, caps.name("lurl")) {
             push_image(&mut media, alt.as_str(), src.as_str());
             push_link(&mut media, alt.as_str(), href.as_str());
-        } else if let (Some(alt), Some(src)) = (caps.name("alt"), caps.name("src")) {
+        } else if let (Some(alt), Some(src)) = (caps.name("alt"), src) {
             push_image(&mut media, alt.as_str(), src.as_str());
         } else if let (Some(text), Some(href)) = (caps.name("text"), caps.name("href")) {
             push_link(&mut media, text.as_str(), href.as_str());
         }
     }
     media
+}
+
+fn is_remote(target: &str) -> bool {
+    target.starts_with("http://") || target.starts_with("https://")
+}
+
+/// Link to a file of the vault as Obsidian indexes it: `[[name]]`, or
+/// `![[name]]` to embed it. Unlike `[name](name)`, it needs no escaping for
+/// spaces or parentheses.
+pub fn local_link(name: &str, embed: bool) -> String {
+    format!("{}[[{name}]]", if embed { "!" } else { "" })
 }
 
 /// Sections listing the images then the links, each preceded by a blank line.
@@ -237,7 +250,12 @@ pub fn render_media(media: &BodyMedia) -> String {
     if !media.images.is_empty() {
         out.push_str("\n\n### Images :\n");
         for (alt, src) in &media.images {
-            out.push_str(&format!("\n![{alt}]({src})\n"));
+            if is_remote(src) {
+                out.push_str(&format!("\n![{alt}]({src})\n"));
+            } else {
+                // `![[file|alt]]` would read a numeric alt as a width: alt is dropped.
+                out.push_str(&format!("\n{}\n", local_link(src, true)));
+            }
         }
     }
     if !media.links.is_empty() {
@@ -466,6 +484,30 @@ mod tests {
     #[test]
     fn test_render_media_is_empty_without_media() {
         assert_eq!(render_media(&body_media("Bonjour,\n\nMerci.")), "");
+    }
+
+    #[test]
+    fn test_body_media_with_angle_bracket_destination() {
+        let media = body_media("![x](<my photo.png>) [![y](<a (2).png>)](https://a.test/h)");
+        assert_eq!(
+            media.images,
+            vec![
+                ("x".to_string(), "my photo.png".to_string()),
+                ("y".to_string(), "a (2).png".to_string()),
+            ]
+        );
+        assert!(media.images.iter().all(|(_, src)| !src.starts_with('<')));
+    }
+
+    #[test]
+    fn test_render_media_with_local_image_writes_wikilink() {
+        let out = render_media(&body_media(
+            "![vue](my photo.png) ![](<my photo.png>) ![logo](https://a.test/l.png)",
+        ));
+        assert!(out.contains("\n![[my photo.png]]\n"), "{out}");
+        assert!(out.contains("\n![logo](https://a.test/l.png)\n"), "{out}");
+        assert!(!out.contains("![vue]"), "{out}");
+        assert!(!out.contains("![[https"), "{out}");
     }
 
     #[test]
