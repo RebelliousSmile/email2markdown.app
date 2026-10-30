@@ -1,11 +1,11 @@
-use email_to_markdown::config::Account;
+use email_to_markdown::config::{Account, AppPaths};
 use email_to_markdown::contextual_export::{
     build_deletion_batch, ConversionStatus, DeletionOutcome, LocalSourceProof,
 };
 use email_to_markdown::email_export::ImapExporter;
 use email_to_markdown::handled::{LedgerProofs, PurgeMatch, SeenHandled};
 use email_to_markdown::route::MatchRule;
-use email_to_markdown::server_cleanup::{clean_server_in, CleanupPaths};
+use email_to_markdown::server_cleanup::clean_server_in;
 use std::cell::Cell;
 
 /// Fails instead of passing silently when an ignored test runs without the fixture.
@@ -217,9 +217,9 @@ const SEEDED_IDS: [&str; 3] = [
 
 /// Config directory of a cleanup test: one account on the fixture user, a
 /// ledger holding the two alice messages as legacy entries, without proof.
-fn cleanup_dir(username: &str, account_name: &str) -> (tempfile::TempDir, CleanupPaths) {
+fn cleanup_dir(username: &str, account_name: &str) -> (tempfile::TempDir, AppPaths) {
     let temp = tempfile::TempDir::new().unwrap();
-    let paths = CleanupPaths {
+    let paths = AppPaths {
         accounts: temp.path().join("accounts.yaml"),
         env: temp.path().join(".env"),
         settings: temp.path().join("settings.yaml"),

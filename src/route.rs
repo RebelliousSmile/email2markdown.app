@@ -514,7 +514,8 @@ pub fn delete_email(md_path: &Path) -> Result<()> {
 /// Resolve the effective destinations file path, migrating a legacy `.txt` once.
 ///
 /// Honors `settings.destinations_file`, else falls back to
-/// `<app_config_dir>/destinations.yaml`. The format is YAML: a configured path
+/// `destinations.yaml` next to the settings file (`<app_config_dir>` in
+/// production). The format is YAML: a configured path
 /// still ending in `.txt` (legacy settings) is normalized to its `.yaml` sibling.
 ///
 /// Side effect (idempotent): if the resolved `.yaml` is absent but a sibling
@@ -535,7 +536,12 @@ pub fn destinations_path_from(settings_file: &Path) -> Result<PathBuf> {
         .destinations_file
         .as_deref()
         .map(PathBuf::from)
-        .unwrap_or_else(|| crate::config::app_config_dir().join("destinations.yaml"));
+        .unwrap_or_else(|| {
+            settings_file
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("destinations.yaml")
+        });
 
     let yaml_path = if configured.extension().and_then(|e| e.to_str()) == Some("txt") {
         configured.with_extension("yaml")
@@ -567,7 +573,12 @@ pub fn destinations_path_from(settings_file: &Path) -> Result<PathBuf> {
 /// A missing or malformed file yields an empty list (every email then routes to
 /// the default) with a warning; an invalid settings file is an error.
 pub fn load_destinations() -> Result<Vec<Destination>> {
-    let dest_path = destinations_path()?;
+    load_destinations_from(&crate::config::settings_path())
+}
+
+/// [`load_destinations`] with an explicit settings file.
+pub fn load_destinations_from(settings_file: &Path) -> Result<Vec<Destination>> {
+    let dest_path = destinations_path_from(settings_file)?;
 
     if !dest_path.exists() {
         eprintln!(

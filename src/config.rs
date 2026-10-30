@@ -45,6 +45,30 @@ pub fn settings_path() -> PathBuf {
     app_config_dir().join("settings.yaml")
 }
 
+/// Files a flow (export, server cleanup, contextual batch) reads and writes.
+/// Injected so tests never touch the user's config directory.
+#[derive(Debug, Clone)]
+pub struct AppPaths {
+    pub accounts: PathBuf,
+    pub env: PathBuf,
+    pub settings: PathBuf,
+    pub ledger: PathBuf,
+    pub deletion_log: PathBuf,
+}
+
+impl AppPaths {
+    /// The files of the user's config directory.
+    pub fn from_app_config() -> Self {
+        Self {
+            accounts: accounts_yaml_path(),
+            env: env_file_path(),
+            settings: settings_path(),
+            ledger: crate::handled::ledger_path(),
+            deletion_log: crate::deletion_log::log_path(),
+        }
+    }
+}
+
 // ── Settings (settings.yaml) ─────────────────────────────────────────────────
 
 /// Per-account behaviour overrides stored in settings.yaml.

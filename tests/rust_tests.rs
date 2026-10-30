@@ -375,6 +375,22 @@ mod config_tests {
         assert_eq!(loaded[1].name, "AccountB");
         assert_eq!(loaded[2].name, "AccountC");
     }
+
+    #[test]
+    fn test_app_paths_from_app_config_default() {
+        let paths = email_to_markdown::config::AppPaths::from_app_config();
+        assert_eq!(
+            paths.accounts,
+            email_to_markdown::config::accounts_yaml_path()
+        );
+        assert_eq!(paths.env, email_to_markdown::config::env_file_path());
+        assert_eq!(paths.settings, email_to_markdown::config::settings_path());
+        assert_eq!(paths.ledger, email_to_markdown::handled::ledger_path());
+        assert_eq!(
+            paths.deletion_log,
+            email_to_markdown::deletion_log::log_path()
+        );
+    }
 }
 
 mod settings_tests {
@@ -1173,9 +1189,9 @@ mod route_tests {
     use chrono::DateTime;
     use email_to_markdown::route::{
         ai_route, apply_decision, delete_email, destinations_path_from, ensure_year_month,
-        join_safe_segments, move_email, normalize_address, parse_destinations,
-        repair_legacy_attachments, resolve_contextual_destination, route_email, upsert_rule,
-        Destination, EmailMeta, MatchRule,
+        join_safe_segments, load_destinations_from, move_email, normalize_address,
+        parse_destinations, repair_legacy_attachments, resolve_contextual_destination, route_email,
+        upsert_rule, Destination, EmailMeta, MatchRule,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1195,6 +1211,26 @@ mod route_tests {
         let message = format!("{:#}", destinations_path_from(&settings).unwrap_err());
 
         assert!(message.contains("settings.yaml"), "{message}");
+    }
+
+    #[test]
+    fn test_load_destinations_from_without_destinations_file_empty() {
+        let temp = TempDir::new().expect("tempdir");
+        let settings = temp.path().join("settings.yaml");
+        fs::write(
+            &settings,
+            "organize_by_date: true
+",
+        )
+        .expect("write settings");
+
+        assert_eq!(
+            destinations_path_from(&settings).expect("path"),
+            temp.path().join("destinations.yaml")
+        );
+        assert!(load_destinations_from(&settings)
+            .expect("destinations")
+            .is_empty());
     }
 
     #[test]

@@ -1568,6 +1568,8 @@ pub struct ImapExporter {
     /// Handled messages already sent for deletion during the current
     /// `export_account` run: Gmail shows one message in several labels.
     purge_targeted: HashSet<String>,
+    /// Where the purge logs its deletions; set by `export_account_in`.
+    deletion_log: PathBuf,
 }
 
 /// What the header pre-filter compares each message with.
@@ -1691,6 +1693,7 @@ impl ImapExporter {
             is_gmail: false,
             batch_exported: 0,
             purge_targeted: HashSet::new(),
+            deletion_log: crate::deletion_log::log_path(),
             batch_full: false,
         }
     }
@@ -2781,7 +2784,7 @@ impl ImapExporter {
         }
         match self.delete_discarded_messages(&proofs) {
             Ok(results) => {
-                crate::deletion_log::record_results(&results);
+                crate::deletion_log::record_results_to(&self.deletion_log, &results);
                 results
                     .iter()
                     .filter(|r| {
@@ -2794,7 +2797,11 @@ impl ImapExporter {
             }
             Err(e) => {
                 let error = format!("purge of handled messages in {folder_display}: {e:#}");
-                crate::deletion_log::record_error(&self.account.name, &error);
+                crate::deletion_log::record_error_to(
+                    &self.deletion_log,
+                    &self.account.name,
+                    &error,
+                );
                 eprintln!("warning: {error}");
                 0
             }
@@ -2818,16 +2825,34 @@ impl ImapExporter {
         on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
         cancel_token: Option<&AtomicBool>,
     ) -> Result<(HashMap<String, ExportStats>, RouteDecisions)> {
+        self.export_account_in(
+            &crate::config::AppPaths::from_app_config(),
+            on_progress,
+            on_status,
+            cancel_token,
+        )
+    }
+
+    /// [`Self::export_account`] reading settings, destinations and ledger, and
+    /// writing the deletion log, at the given paths.
+    pub fn export_account_in(
+        &mut self,
+        paths: &crate::config::AppPaths,
+        on_progress: Option<&ProgressCallback>,
+        on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
+        cancel_token: Option<&AtomicBool>,
+    ) -> Result<(HashMap<String, ExportStats>, RouteDecisions)> {
         // ── Parse destinations.txt ONCE (before the folder loop) ──────────────
         // Shared with the tray "Reprendre le tri" scan via `route::load_destinations`.
-        let dests: Vec<Destination> = crate::route::load_destinations()?;
-        let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
+        let dests: Vec<Destination> = crate::route::load_destinations_from(&paths.settings)?;
+        let organize_by_date = crate::config::Settings::load(&paths.settings)
             .context("failed to load settings")?
             .organize_by_date;
+        self.deletion_log = paths.deletion_log.clone();
 
         // The ledger is read once per run and shared by every folder.
         let ledger = if self.account.skip_existing {
-            crate::handled::load_proofs(&self.account.name)
+            crate::handled::load_proofs_from(&paths.ledger, &self.account.name)
         } else {
             crate::handled::LedgerProofs::default()
         };
