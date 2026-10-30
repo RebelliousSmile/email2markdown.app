@@ -27,6 +27,9 @@ Output: `target/release/email-to-markdown` (`.exe` on Windows)
 - `Cargo.lock` is tracked; CI and release run every `cargo` command with `--locked`
 - The Rust toolchain version is written in three places that must stay in sync: `rust-toolchain.toml`, `rust-version` in `Cargo.toml`, `toolchain:` in `.github/workflows/`
 - GitHub Actions are pinned by commit SHA, with the tag in a trailing comment
+- `cargo audit -D warnings` is blocking: CI job and `release.yml` job `audit` (`build` has `needs: audit`)
+  - Tolerated advisories live in `.cargo/audit.toml`, one reason each; re-check them on every dependency bump
+- `rfd` built with `default-features = false, features = ["gtk3"]`: no XDG portal, so no `zbus`/`ashpd` in `Cargo.lock`
 - Pushing a `v*` tag triggers `release.yml`, which publishes the binaries and a `SHA256SUMS` file; the auto-updater refuses a release without a matching checksum
 
 ### Windows installer version sync
@@ -45,7 +48,7 @@ manuelles attendues sont dans `docs/manual-qa-contextual-export.md`.
 
 ### Environment Files
 
-`.env` file in platform config directory (loaded by `dotenv` at startup):
+`.env` file in platform config directory (loaded by `dotenvy` at startup):
 
 | Platform | Path |
 |----------|------|

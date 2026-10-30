@@ -4,37 +4,14 @@
 //! The flow is split so that everything but the two IMAP steps (census,
 //! deletion) is testable without a server: the account guard, the cleanup
 //! plan and the recording of the results. Every path is injected through
-//! `CleanupPaths`, so tests never write under the user's config directory.
+//! `AppPaths`, so tests never write under the user's config directory.
 
-use crate::config::{self, Account, Config, Settings};
+use crate::config::{Account, AppPaths, Config, Settings};
 use crate::contextual_export::{DeletionOutcome, LocalSourceProof, MessageDeletionResult};
 use crate::email_export::ImapExporter;
 use crate::server_audit::{AuditEntry, ServerStatus};
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
-
-/// Files the cleanup reads and writes.
-#[derive(Debug, Clone)]
-pub struct CleanupPaths {
-    pub accounts: PathBuf,
-    pub env: PathBuf,
-    pub settings: PathBuf,
-    pub ledger: PathBuf,
-    pub deletion_log: PathBuf,
-}
-
-impl CleanupPaths {
-    /// The files of the user's config directory.
-    pub fn from_app_config() -> Self {
-        Self {
-            accounts: config::accounts_yaml_path(),
-            env: config::env_file_path(),
-            settings: config::settings_path(),
-            ledger: crate::handled::ledger_path(),
-            deletion_log: crate::deletion_log::log_path(),
-        }
-    }
-}
+use std::path::Path;
 
 /// The account to clean, refused before any connection when it does not
 /// delete from the server or has no password.
@@ -96,11 +73,7 @@ pub fn notes_suffix(completed: usize, untargetable: usize) -> String {
 
 /// Log every result, record in the ledger the messages now gone from the
 /// server (`Deleted`, `AlreadyAbsent`), and summarise.
-pub fn record_results(
-    paths: &CleanupPaths,
-    results: &[MessageDeletionResult],
-    notes: &str,
-) -> String {
+pub fn record_results(paths: &AppPaths, results: &[MessageDeletionResult], notes: &str) -> String {
     crate::deletion_log::record_results_to(&paths.deletion_log, results);
     let gone: Vec<_> = results
         .iter()
@@ -130,7 +103,7 @@ pub fn record_results(
 /// server is Gmail.
 /// Successful deletions are recorded in the ledger with their proof.
 pub fn clean_server_in(
-    paths: &CleanupPaths,
+    paths: &AppPaths,
     account_name: &str,
     confirm: impl Fn(&str, usize, bool) -> bool,
 ) -> Result<String> {
@@ -256,8 +229,8 @@ mod tests {
         }
     }
 
-    fn paths(temp: &TempDir) -> CleanupPaths {
-        CleanupPaths {
+    fn paths(temp: &TempDir) -> AppPaths {
+        AppPaths {
             accounts: temp.path().join("accounts.yaml"),
             env: temp.path().join(".env"),
             settings: temp.path().join("settings.yaml"),

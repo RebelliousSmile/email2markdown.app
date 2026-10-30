@@ -14,7 +14,6 @@ use tao::window::WindowId;
 use tray_icon::{menu::MenuEvent, TrayIcon};
 
 use crate::progress::ProgressUpdate;
-use crate::route::RouteDecision;
 use crate::tray_actions::ActionResult;
 
 use super::{
@@ -172,8 +171,8 @@ pub(super) fn run() -> Result<()> {
             }) => handle_persist_routing_rule(
                 &windows, window_id, dest_path, attr_kind, attr_value, move_rule,
             ),
-            Event::UserEvent(AppCommand::OpenRouteReview(decisions)) => {
-                handle_open_route_review(target, &proxy, &mut windows, decisions, &result_sender)
+            Event::UserEvent(AppCommand::OpenRouteReview(review)) => {
+                handle_open_route_review(target, &proxy, &mut windows, review, &result_sender)
             }
             Event::UserEvent(AppCommand::OpenDestGui { dest_file }) => {
                 handle_open_dest_gui(target, &proxy, &mut windows, dest_file, &result_sender)
@@ -441,7 +440,7 @@ fn handle_open_route_review(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
     windows: &mut HashMap<WindowId, WState>,
-    decisions: Vec<(std::path::PathBuf, RouteDecision)>,
+    review: super::RouteReview,
     sender: &Sender<ActionResult>,
 ) {
     open_single_window(
@@ -451,7 +450,7 @@ fn handle_open_route_review(
         sender,
         || {
             let (window, webview, window_id) =
-                super::windows::build_route_window(target, proxy, decisions)?;
+                super::windows::build_route_window(target, proxy, review)?;
             Ok((window_id, WState::Route(RouteState { webview, window })))
         },
     );

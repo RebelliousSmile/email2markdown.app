@@ -28,6 +28,9 @@ pub(super) enum DestGuiIpcResult {
         new_folders: Vec<String>,
         orphans: Vec<String>,
     },
+    /// The window asked for a notes scan (`scan_suggest` / `scan_folders`); it
+    /// walks `notes_dir`, so it runs in a worker thread through [`handle_scan`].
+    Scan(String),
     /// The window asked for a folder picker; the dialog runs in the event loop.
     BrowseFolder,
     Saved,
@@ -77,7 +80,7 @@ pub(super) fn handle_dest_gui_ipc(
         "reorder" => handle_reorder(cfg, msg.data),
         "remove_entries" => handle_remove_entries(cfg, msg.data),
         "add_entries" => handle_add_entries(cfg, msg.data),
-        "scan_suggest" | "scan_folders" => handle_scan(cfg, &msg.action),
+        "scan_suggest" | "scan_folders" => DestGuiIpcResult::Scan(msg.action),
         "suggest_confirm" => handle_suggest_confirm(cfg, msg.data),
         "browse_folder" => DestGuiIpcResult::BrowseFolder,
         _ => DestGuiIpcResult::Noop,
@@ -292,7 +295,10 @@ fn handle_add_entries(
     DestGuiIpcResult::StateChanged
 }
 
-fn handle_scan(cfg: &crate::destinations::DestinationsConfig, action: &str) -> DestGuiIpcResult {
+pub(super) fn handle_scan(
+    cfg: &crate::destinations::DestinationsConfig,
+    action: &str,
+) -> DestGuiIpcResult {
     let scanned = Settings::load(&config::settings_path())
         .context("failed to load settings")
         .and_then(|settings| {
@@ -665,11 +671,8 @@ pub(super) fn read_note_header_field(path: &std::path::Path, field: &str) -> Opt
 }
 
 /// Read a YAML frontmatter block list (`field:` followed by `- item` lines).
-/// Returns an empty list for `field: []`, a missing field or an unreadable file.
-pub(super) fn read_frontmatter_list(path: &std::path::Path, field: &str) -> Vec<String> {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
+/// Returns an empty list for `field: []` or a missing field.
+pub(super) fn frontmatter_list(raw: &str, field: &str) -> Vec<String> {
     let content = raw.replace("\r\n", "\n");
     let Some(rest) = content.strip_prefix("---\n") else {
         return Vec::new();
@@ -835,14 +838,7 @@ fn read_env_lines(env_path: &Path) -> anyhow::Result<Vec<String>> {
 }
 
 fn write_env_lines(env_path: &Path, lines: &[String]) -> anyhow::Result<()> {
-    if let Some(parent) = env_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut content = lines.join("\n");
-    if !content.is_empty() {
-        content.push('\n');
-    }
-    std::fs::write(env_path, content)
+    config::write_env_file(env_path, lines)
         .with_context(|| format!("failed to write {}", env_path.display()))
 }
 
@@ -857,6 +853,9 @@ fn env_line_has_key(line: &str, key: &str) -> bool {
 /// `<NAME>_APPLICATION_PASSWORD` wins over `<NAME>_PASSWORD` when loading, so an
 /// existing application password is the key to update.
 fn set_env_password(env_path: &Path, account_name: &str, password: &str) -> anyhow::Result<()> {
+    if !config::env_value_is_valid(password) {
+        anyhow::bail!("Le mot de passe ne peut contenir ni retour à la ligne ni caractère NUL");
+    }
     let mut lines = read_env_lines(env_path)?;
     let [app_key, plain_key] = env_password_keys(account_name);
     let key = if lines.iter().any(|l| env_line_has_key(l, &app_key)) {
@@ -1230,8 +1229,8 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 mod tests {
     use super::{
         apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails,
-        read_frontmatter_list, relative_destination, reload_outcome, remove_env_passwords,
-        save_account, save_outcome, save_settings, scan_destinations, set_env_password,
+        frontmatter_list, relative_destination, reload_outcome, remove_env_passwords, save_account,
+        save_outcome, save_settings, scan_destinations, set_env_password,
         validate_new_account_name, AccountData, DestGuiIpcResult, RouteApplyReport,
         RouteDecisionRow, SettingsData,
     };
@@ -1733,6 +1732,16 @@ hi
     }
 
     #[test]
+    fn test_set_env_password_with_newline_invalid() {
+        let temp = TempDir::new().unwrap();
+        let env = temp.path().join(".env");
+        fs::write(&env, "OTHER_PASSWORD='c'\n").unwrap();
+
+        assert!(set_env_password(&env, "Perso", "pw'\nINJECTED=1").is_err());
+        assert_eq!(fs::read_to_string(&env).unwrap(), "OTHER_PASSWORD='c'\n");
+    }
+
+    #[test]
     fn test_save_account_create_refuses_existing_name() {
         let temp = TempDir::new().unwrap();
         let (accounts, settings, _) = account_files(&temp);
@@ -1881,7 +1890,7 @@ hi
     }
 
     #[test]
-    fn test_read_frontmatter_list_with_items() {
+    fn test_frontmatter_list_with_items() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("note.md");
         fs::write(
@@ -1891,17 +1900,17 @@ hi
         .unwrap();
 
         assert_eq!(
-            read_frontmatter_list(&path, "attachments"),
+            frontmatter_list(&fs::read_to_string(&path).unwrap(), "attachments"),
             vec!["a.pdf".to_string(), "b c.png".to_string()]
         );
     }
 
     #[test]
-    fn test_read_frontmatter_list_empty() {
+    fn test_frontmatter_list_empty() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("note.md");
         fs::write(&path, "---\nattachments: []\n---\nbody\n").unwrap();
 
-        assert!(read_frontmatter_list(&path, "attachments").is_empty());
+        assert!(frontmatter_list(&fs::read_to_string(&path).unwrap(), "attachments").is_empty());
     }
 }

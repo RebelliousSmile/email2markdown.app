@@ -417,37 +417,25 @@ pub(super) fn build_dest_gui_window(
                     drop(cfg_guard);
                     let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
                 }
-                super::ipc::DestGuiIpcResult::Error(message) => {
+                super::ipc::DestGuiIpcResult::Scan(action) => {
+                    // Walking notes_dir can take seconds: keep the event loop free.
+                    let cfg = cfg_guard.clone();
                     drop(cfg_guard);
-                    let json = serde_json::json!({"type": "error", "message": message}).to_string();
-                    let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
-                }
-                super::ipc::DestGuiIpcResult::Suggestions(items) => {
-                    drop(cfg_guard);
-                    let items_json = serde_json::json!({
-                        "type": "suggestions",
-                        "items": items.iter()
-                            .map(|(d, c)| serde_json::json!({"domain": d, "count": c}))
-                            .collect::<Vec<_>>()
-                    })
-                    .to_string();
-                    let _ = proxy_ipc.send_event(AppCommand::PushDestState {
-                        window_id,
-                        json: items_json,
+                    let proxy = proxy_ipc.clone();
+                    std::thread::spawn(move || {
+                        let result = super::ipc::handle_scan(&cfg, &action);
+                        if let Some(json) = dest_reply_json(&result) {
+                            let _ = proxy.send_event(AppCommand::PushDestState { window_id, json });
+                        }
                     });
                 }
-                super::ipc::DestGuiIpcResult::FolderSuggestions {
-                    new_folders,
-                    orphans,
-                } => {
+                reply @ (super::ipc::DestGuiIpcResult::Error(_)
+                | super::ipc::DestGuiIpcResult::Suggestions(_)
+                | super::ipc::DestGuiIpcResult::FolderSuggestions { .. }) => {
                     drop(cfg_guard);
-                    let json = serde_json::json!({
-                        "type": "folder_suggestions",
-                        "paths": new_folders,
-                        "orphans": orphans,
-                    })
-                    .to_string();
-                    let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
+                    if let Some(json) = dest_reply_json(&reply) {
+                        let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
+                    }
                 }
                 super::ipc::DestGuiIpcResult::BrowseFolder => {
                     drop(cfg_guard);
@@ -541,6 +529,69 @@ pub(super) fn escape_json_for_script(json: &str) -> String {
         .replace('&', "\\u0026")
 }
 
+/// Message pushed to the destinations window for an error or a scan result.
+fn dest_reply_json(result: &super::ipc::DestGuiIpcResult) -> Option<String> {
+    use super::ipc::DestGuiIpcResult;
+    let json = match result {
+        DestGuiIpcResult::Error(message) => {
+            serde_json::json!({"type": "error", "message": message})
+        }
+        DestGuiIpcResult::Suggestions(items) => serde_json::json!({
+            "type": "suggestions",
+            "items": items.iter()
+                .map(|(d, c)| serde_json::json!({"domain": d, "count": c}))
+                .collect::<Vec<_>>()
+        }),
+        DestGuiIpcResult::FolderSuggestions {
+            new_folders,
+            orphans,
+        } => serde_json::json!({
+            "type": "folder_suggestions",
+            "paths": new_folders,
+            "orphans": orphans,
+        }),
+        _ => return None,
+    };
+    Some(json.to_string())
+}
+
+/// One JSON row per decision: the note fields shown in the review table.
+///
+/// Reads every staging note once; runs on a worker thread, never on the event loop.
+pub(super) fn route_rows(decisions: &RouteDecisions) -> Vec<serde_json::Value> {
+    decisions
+        .iter()
+        .map(|(staging_path, decision)| {
+            let content = std::fs::read_to_string(staging_path).unwrap_or_default();
+            let [subject, from_raw, to, date] =
+                crate::email_block::note_header_fields(&content, ["subject", "from", "to", "date"]);
+            let subject = subject.unwrap_or_else(|| {
+                staging_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
+            let from_raw = from_raw.unwrap_or_default();
+            let attachments = super::ipc::frontmatter_list(&content, "attachments");
+            let (sender_email, sender_domain) = extract_addr_and_domain(&from_raw);
+            serde_json::json!({
+                "matched_rule":  decision.matched_rule.clone().unwrap_or_default(),
+                "file":          staging_path.to_string_lossy(),
+                "subject":       subject,
+                "sender":        from_raw,
+                "recipient":     to.unwrap_or_default(),
+                "attachments":   attachments,
+                "date":          date.unwrap_or_default(),
+                "dest_path":     decision.rel_path,
+                "is_default":    decision.is_default,
+                "alternatives":  decision.alternatives,
+                "sender_email":  sender_email,
+                "sender_domain": sender_domain
+            })
+        })
+        .collect()
+}
+
 /// Build a route review window on the main event loop thread.
 ///
 /// Loads `route_review.html`, injects the decisions JSON and the list of
@@ -551,8 +602,9 @@ pub(super) fn escape_json_for_script(json: &str) -> String {
 pub(super) fn build_route_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
-    decisions: RouteDecisions,
+    review: super::RouteReview,
 ) -> Result<(Window, WebView, WindowId)> {
+    let super::RouteReview { decisions, rows } = review;
     let settings_path = crate::config::settings_path();
     let settings =
         crate::config::Settings::load(&settings_path).context("failed to load settings")?;
@@ -562,45 +614,9 @@ pub(super) fn build_route_window(
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("notes"));
 
+    let destinations = crate::route::load_destinations()?;
     // Collect known paths from destinations.yaml for the datalist autocomplete.
-    let known_paths: Vec<String> = crate::route::load_destinations()?
-        .into_iter()
-        .map(|d| d.path)
-        .collect();
-
-    // Build one JSON row per decision — frontmatter fields shown in the table.
-    let json_rows: Vec<serde_json::Value> = decisions
-        .iter()
-        .map(|(staging_path, decision)| {
-            let subject = super::ipc::read_note_header_field(staging_path, "subject")
-                .unwrap_or_else(|| {
-                    staging_path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                });
-            let from_raw =
-                super::ipc::read_note_header_field(staging_path, "from").unwrap_or_default();
-            let to = super::ipc::read_note_header_field(staging_path, "to").unwrap_or_default();
-            let date = super::ipc::read_note_header_field(staging_path, "date").unwrap_or_default();
-            let attachments = super::ipc::read_frontmatter_list(staging_path, "attachments");
-            let (sender_email, sender_domain) = extract_addr_and_domain(&from_raw);
-            serde_json::json!({
-                "matched_rule":  decision.matched_rule.clone().unwrap_or_default(),
-                "file":          staging_path.to_string_lossy(),
-                "subject":       subject,
-                "sender":        from_raw,
-                "recipient":     to,
-                "attachments":   attachments,
-                "date":          date,
-                "dest_path":     decision.rel_path,
-                "is_default":    decision.is_default,
-                "alternatives":  decision.alternatives,
-                "sender_email":  sender_email,
-                "sender_domain": sender_domain
-            })
-        })
-        .collect();
+    let known_paths: Vec<String> = destinations.iter().map(|d| d.path.clone()).collect();
 
     // Staging files this window may act on, as the exact strings sent to the page
     // so the comparison never depends on path normalisation. Shared with the
@@ -614,8 +630,7 @@ pub(super) fn build_route_window(
     // Set while an apply runs in its thread: a second apply or a deletion waits.
     let applying = Arc::new(AtomicBool::new(false));
 
-    let decisions_json =
-        serde_json::to_string(&json_rows).context("failed to serialize decisions")?;
+    let decisions_json = serde_json::to_string(&rows).context("failed to serialize decisions")?;
     let known_paths_json =
         serde_json::to_string(&known_paths).context("failed to serialize known paths")?;
 
@@ -626,7 +641,7 @@ pub(super) fn build_route_window(
     // page can ask before the same rule is posted for a second destination.
     let mut rule_owners: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
-    for dest in crate::route::load_destinations()? {
+    for dest in &destinations {
         for rule in &dest.rules {
             let key = match rule {
                 crate::route::MatchRule::Domain(v) => format!("domain:{}", v.to_lowercase()),
@@ -975,6 +990,118 @@ mod tests {
             started.elapsed().as_millis() < 500,
             "10,000-row reference filter exceeded 500 ms: {:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn test_route_rows_with_frontmatter_block_and_bare_notes() {
+        use crate::email_block::{render, BlockHeader};
+        use crate::route::RouteDecision;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let legacy = temp.path().join("legacy.md");
+        std::fs::write(
+            &legacy,
+            "---
+subject: Facture
+from: Alice <alice@Example.com>
+to: moi@example.org
+             date: 2026-06-01
+attachments:
+- a.pdf
+---
+Corps
+",
+        )
+        .unwrap();
+        let block = temp.path().join("block.md");
+        let header = BlockHeader {
+            subject: "Devis".to_string(),
+            from: "bob@example.net".to_string(),
+            to: vec!["a@x.fr".to_string(), "b@x.fr".to_string()],
+            cc: Vec::new(),
+            date: "2026-07-02T10:18:19+00:00".to_string(),
+        };
+        std::fs::write(
+            &block,
+            format!(
+                "---
+tags: []
+---
+{}",
+                render(&header, "Bonjour")
+            ),
+        )
+        .unwrap();
+        let bare = temp.path().join("sans-entete.md");
+        std::fs::write(
+            &bare,
+            "Juste du texte
+",
+        )
+        .unwrap();
+
+        let decision = |rel: &str, rule: Option<&str>| RouteDecision {
+            rel_path: rel.to_string(),
+            matched_rule: rule.map(str::to_string),
+            is_default: rule.is_none(),
+            alternatives: Vec::new(),
+        };
+        let rows = super::route_rows(&vec![
+            (
+                legacy.clone(),
+                decision("Perso/Factures", Some("domain:example.com")),
+            ),
+            (block.clone(), decision("Pro", None)),
+            (bare.clone(), decision("Inbox", None)),
+        ]);
+
+        assert_eq!(
+            rows,
+            vec![
+                serde_json::json!({
+                    "matched_rule": "domain:example.com",
+                    "file": legacy.to_string_lossy(),
+                    "subject": "Facture",
+                    "sender": "Alice <alice@Example.com>",
+                    "recipient": "moi@example.org",
+                    "attachments": ["a.pdf"],
+                    "date": "2026-06-01",
+                    "dest_path": "Perso/Factures",
+                    "is_default": false,
+                    "alternatives": [],
+                    "sender_email": "alice@Example.com",
+                    "sender_domain": "example.com"
+                }),
+                serde_json::json!({
+                    "matched_rule": "",
+                    "file": block.to_string_lossy(),
+                    "subject": "Devis",
+                    "sender": "bob@example.net",
+                    "recipient": "a@x.fr, b@x.fr",
+                    "attachments": [],
+                    "date": "2026-07-02T10:18:19+00:00",
+                    "dest_path": "Pro",
+                    "is_default": true,
+                    "alternatives": [],
+                    "sender_email": "bob@example.net",
+                    "sender_domain": "example.net"
+                }),
+                serde_json::json!({
+                    "matched_rule": "",
+                    "file": bare.to_string_lossy(),
+                    "subject": "sans-entete",
+                    "sender": "",
+                    "recipient": "",
+                    "attachments": [],
+                    "date": "",
+                    "dest_path": "Inbox",
+                    "is_default": true,
+                    "alternatives": [],
+                    "sender_email": "",
+                    "sender_domain": ""
+                }),
+            ]
         );
     }
 }

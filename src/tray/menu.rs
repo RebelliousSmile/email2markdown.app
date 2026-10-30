@@ -48,10 +48,22 @@ pub(super) fn create_tray_icon() -> Result<TrayIcon> {
 pub(super) fn create_menu() -> Result<Menu> {
     let menu = Menu::new();
 
-    let accounts = tray_actions::get_account_names().unwrap_or_default();
-    let has_accounts = !accounts.is_empty();
-
     let no_accel: Option<Accelerator> = None;
+
+    // An unreadable accounts.yaml must not look like "no account configured".
+    let accounts = match tray_actions::get_account_names() {
+        Ok(accounts) => accounts,
+        Err(e) => {
+            eprintln!("Menu: comptes illisibles: {:#}", e);
+            menu.append(&MenuItem::new(
+                "Comptes illisibles — voir Paramètres",
+                false,
+                no_accel,
+            ))?;
+            Vec::new()
+        }
+    };
+    let has_accounts = !accounts.is_empty();
 
     let export_submenu = Submenu::new("Export compte", has_accounts);
     for account in &accounts {
@@ -75,7 +87,10 @@ pub(super) fn create_menu() -> Result<Menu> {
 
     // "Nettoyer le serveur" — delete handled messages recorded without proof,
     // after confirmation. Only for accounts that delete from the server.
-    let cleanup_accounts = tray_actions::get_cleanup_account_names().unwrap_or_default();
+    let cleanup_accounts = tray_actions::get_cleanup_account_names().unwrap_or_else(|e| {
+        eprintln!("Menu nettoyer le serveur: comptes illisibles: {:#}", e);
+        Vec::new()
+    });
     if !cleanup_accounts.is_empty() {
         let clean_submenu = Submenu::new("Nettoyer le serveur", true);
         for account in &cleanup_accounts {

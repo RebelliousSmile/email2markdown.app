@@ -56,9 +56,9 @@ jobs:
         with:
           toolchain: "1.93.0" # same as rust-toolchain.toml
       - run: cargo install cargo-audit --locked --version 0.22.2
-      # Fails on a vulnerability. Tolerated notices, each with its reason, are
-      # listed in .cargo/audit.toml.
-      - run: cargo audit
+      # Fails on any advisory, notices included, unless .cargo/audit.toml
+      # tolerates it with a reason.
+      - run: cargo audit -D warnings
 
   tools:
     name: Ubuntu — Python tools
@@ -88,7 +88,7 @@ jobs:
       - name: Run every ignored Dovecot test
         env:
           EMAIL_TO_MARKDOWN_IMAP_TEST: "1"
-        run: cargo test --locked --test imap_integration -- --ignored --skip gmail_ --nocapture
+        run: cargo test --locked --test imap_integration -- --ignored --skip gmail_ --test-threads=1 --nocapture
       - name: Destroy fixture
         if: always()
         run: docker compose -f tests/fixtures/imap/compose.yaml down -v

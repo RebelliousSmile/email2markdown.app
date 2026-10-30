@@ -375,6 +375,22 @@ mod config_tests {
         assert_eq!(loaded[1].name, "AccountB");
         assert_eq!(loaded[2].name, "AccountC");
     }
+
+    #[test]
+    fn test_app_paths_from_app_config_default() {
+        let paths = email_to_markdown::config::AppPaths::from_app_config();
+        assert_eq!(
+            paths.accounts,
+            email_to_markdown::config::accounts_yaml_path()
+        );
+        assert_eq!(paths.env, email_to_markdown::config::env_file_path());
+        assert_eq!(paths.settings, email_to_markdown::config::settings_path());
+        assert_eq!(paths.ledger, email_to_markdown::handled::ledger_path());
+        assert_eq!(
+            paths.deletion_log,
+            email_to_markdown::deletion_log::log_path()
+        );
+    }
 }
 
 mod settings_tests {
@@ -1173,9 +1189,9 @@ mod route_tests {
     use chrono::DateTime;
     use email_to_markdown::route::{
         ai_route, apply_decision, delete_email, destinations_path_from, ensure_year_month,
-        join_safe_segments, move_email, normalize_address, parse_destinations,
-        repair_legacy_attachments, resolve_contextual_destination, route_email, upsert_rule,
-        Destination, EmailMeta, MatchRule,
+        join_safe_segments, load_destinations_from, move_email, normalize_address,
+        parse_destinations, repair_legacy_attachments, resolve_contextual_destination, route_email,
+        upsert_rule, Destination, EmailMeta, MatchRule,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1195,6 +1211,26 @@ mod route_tests {
         let message = format!("{:#}", destinations_path_from(&settings).unwrap_err());
 
         assert!(message.contains("settings.yaml"), "{message}");
+    }
+
+    #[test]
+    fn test_load_destinations_from_without_destinations_file_empty() {
+        let temp = TempDir::new().expect("tempdir");
+        let settings = temp.path().join("settings.yaml");
+        fs::write(
+            &settings,
+            "organize_by_date: true
+",
+        )
+        .expect("write settings");
+
+        assert_eq!(
+            destinations_path_from(&settings).expect("path"),
+            temp.path().join("destinations.yaml")
+        );
+        assert!(load_destinations_from(&settings)
+            .expect("destinations")
+            .is_empty());
     }
 
     #[test]
@@ -1578,6 +1614,30 @@ attachments:
             !new_content.contains("attachments/"),
             "moved .md must not reference an attachments/ subdir"
         );
+    }
+
+    #[test]
+    fn test_move_email_with_parent_dir_link_skipped() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("account").join("staging");
+        let dst_dir = temp.path().join("account").join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
+        // Outside the account root: `account/../secret.txt`
+        let outside = temp.path().join("secret.txt");
+        fs::write(&outside, b"secret").unwrap();
+        let md_src = src_dir.join("email.md");
+        fs::write(
+            &md_src,
+            "---\nsubject: Test\nattachments:\n  - ../secret.txt\n---\nBody\n",
+        )
+        .unwrap();
+
+        move_email(&md_src, &dst_dir).unwrap();
+
+        assert!(dst_dir.join("email.md").exists());
+        assert!(outside.exists(), "file outside the account must stay put");
+        assert!(!dst_dir.join("secret.txt").exists());
     }
 
     /// Anti-regression: frontmatter with a YAML-quoted attachment name (e.g. `invoice #5.pdf`
@@ -3483,6 +3543,205 @@ body
             assert!(!retried.contains(&1));
         }
     }
+
+    mod identity_tests {
+        use super::*;
+        use email_to_markdown::contextual_export::identity_matches;
+
+        fn proof_of(header: &[u8]) -> LocalSourceProof {
+            let candidate =
+                parse_header_candidate("Work", location("INBOX", 7), header, None).unwrap();
+            LocalSourceProof {
+                identity: candidate.source,
+                location: location("INBOX", 7),
+            }
+        }
+
+        #[test]
+        fn test_identity_matches_same_headers() {
+            let header = header(
+                "a@example.com",
+                "alice@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            assert!(identity_matches(&proof_of(&header), &(7, None, header)));
+        }
+
+        #[test]
+        fn test_identity_matches_other_message_id_invalid() {
+            let proved = header(
+                "a@example.com",
+                "alice@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            let server = header(
+                "b@example.com",
+                "alice@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            assert!(!identity_matches(&proof_of(&proved), &(7, None, server)));
+        }
+
+        #[test]
+        fn test_identity_matches_same_message_id_other_fingerprint_invalid() {
+            let proved = header(
+                "a@example.com",
+                "alice@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            let server = header(
+                "a@example.com",
+                "mallory@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            assert!(!identity_matches(&proof_of(&proved), &(7, None, server)));
+        }
+
+        /// Export proofs are built on the full message, the server check on
+        /// `HEADER_FETCH_FIELDS`: both must give the same fingerprint.
+        #[test]
+        fn test_identity_matches_full_message_proof_with_fetched_fields() {
+            let full = multipart_raw("report@example.com");
+            let fields = b"Message-ID: <report@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Project report\r\n\r\n".to_vec();
+            assert!(identity_matches(&proof_of(&full), &(7, None, fields)));
+        }
+    }
+
+    mod gmail_plan_tests {
+        use super::*;
+        use email_to_markdown::email_export::plan_gmail_deletion;
+
+        fn request(folder: &str, uid: u32, provider_id: Option<&str>) -> DeletionRequest {
+            DeletionRequest {
+                markdown: std::path::PathBuf::new(),
+                proof: LocalSourceProof {
+                    identity: SourceIdentity {
+                        account: "Gmail".into(),
+                        message_id: Some(format!("m{uid}@example.com")),
+                        header_fingerprint: "fp".into(),
+                        provider_id: provider_id.map(str::to_string),
+                    },
+                    location: location(folder, uid),
+                },
+            }
+        }
+
+        #[test]
+        fn test_plan_gmail_deletion_groups_by_folder() {
+            let plan = plan_gmail_deletion(vec![
+                request("Work", 1, Some("11")),
+                request("INBOX", 2, Some("22")),
+                request("Work", 3, None),
+                request("Work", 4, Some("44")),
+            ]);
+            let groups: Vec<(&str, Vec<&str>)> = plan
+                .groups
+                .iter()
+                .map(|g| {
+                    (
+                        g.folder_raw.as_str(),
+                        g.provider_ids.iter().map(String::as_str).collect(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                groups,
+                vec![("INBOX", vec!["22"]), ("Work", vec!["11", "44"])]
+            );
+        }
+
+        #[test]
+        fn test_plan_gmail_deletion_without_provider_id() {
+            let plan = plan_gmail_deletion(vec![
+                request("Work", 1, Some("11")),
+                request("Work", 3, None),
+            ]);
+            let missing: Vec<u32> = plan
+                .missing_id
+                .iter()
+                .map(|r| r.proof.location.uid)
+                .collect();
+            assert_eq!(missing, vec![3]);
+            assert!(plan.groups[0]
+                .requests
+                .iter()
+                .all(|r| r.proof.location.uid != 3));
+        }
+
+        #[test]
+        fn test_plan_gmail_deletion_with_same_id_twice() {
+            let plan = plan_gmail_deletion(vec![
+                request("Work", 1, Some("11")),
+                request("Work", 2, Some("11")),
+            ]);
+            assert_eq!(plan.groups[0].provider_ids, vec!["11".to_string()]);
+            assert_eq!(plan.groups[0].requests.len(), 2);
+        }
+    }
+
+    mod classify_expunge_tests {
+        use email_to_markdown::contextual_export::{
+            classify_expunge, DeletionOutcome, ExpungeFailure,
+        };
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn test_classify_expunge_valid() {
+            let present = BTreeSet::from([1, 3]);
+            let outcomes = classify_expunge(&[1, 2, 3], Ok(&present), Ok(()));
+            assert_eq!(
+                outcomes,
+                vec![
+                    DeletionOutcome::Deleted,
+                    DeletionOutcome::AlreadyAbsent,
+                    DeletionOutcome::Deleted,
+                ]
+            );
+        }
+
+        #[test]
+        fn test_classify_expunge_with_search_failure() {
+            let outcomes = classify_expunge(&[1, 2], Err("search down".into()), Ok(()));
+            assert_eq!(
+                outcomes,
+                vec![DeletionOutcome::RetryRequired("search down".into()); 2]
+            );
+        }
+
+        #[test]
+        fn test_classify_expunge_with_expunge_failure_after_store() {
+            let present = BTreeSet::from([1]);
+            let outcomes = classify_expunge(
+                &[1, 2],
+                Ok(&present),
+                Err(ExpungeFailure::Expunge("expunge down".into())),
+            );
+            assert_eq!(outcomes[1], DeletionOutcome::AlreadyAbsent);
+            let DeletionOutcome::RetryRequired(reason) = &outcomes[0] else {
+                panic!("retry expected, got {:?}", outcomes[0]);
+            };
+            assert!(reason.contains("\\Deleted déjà posé") && reason.contains("expunge down"));
+        }
+
+        #[test]
+        fn test_classify_expunge_with_store_failure() {
+            let present = BTreeSet::from([1]);
+            let outcomes = classify_expunge(
+                &[1],
+                Ok(&present),
+                Err(ExpungeFailure::Store("store down".into())),
+            );
+            assert_eq!(
+                outcomes,
+                vec![DeletionOutcome::RetryRequired("store down".into())]
+            );
+        }
+    }
 }
 
 mod handled_purge_tests {
@@ -4797,5 +5056,145 @@ mod quote_link_tests {
         let (text, index) = nested_without_parent_note();
         let out = link_note(&text, "Reponse.md", &index);
         assert!(out.content.contains("Texte du parent sans note."));
+    }
+}
+
+mod thunderbird_tests {
+    use super::*;
+    use email_to_markdown::config::Account;
+    use email_to_markdown::thunderbird::{
+        write_accounts_merged, write_passwords_to_env, ThunderbirdPassword,
+    };
+
+    fn account(name: &str, server: &str) -> Account {
+        Account {
+            name: name.to_string(),
+            server: server.to_string(),
+            port: 993,
+            username: format!("{name}@example.com"),
+            password: None,
+            ignored_folders: Vec::new(),
+            export_directory: String::new(),
+            quote_depth: 1,
+            skip_existing: true,
+            collect_contacts: false,
+            skip_signature_images: false,
+            delete_after_export: false,
+            cleanup_empty_dirs: true,
+            batch_size: 0,
+        }
+    }
+
+    fn password(server: &str, secret: &str) -> ThunderbirdPassword {
+        ThunderbirdPassword {
+            imap_server: server.to_string(),
+            username: "moi".to_string(),
+            password: secret.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_write_accounts_merged_with_differently_cased_name() {
+        let temp = TempDir::new().expect("create tempdir");
+        let path = temp.path().join("accounts.yaml");
+        std::fs::write(
+            &path,
+            "accounts:\n- name: gmail\n  server: imap.gmail.com\n  port: 993\n  username: moi\n",
+        )
+        .expect("write accounts");
+
+        write_accounts_merged(&[account("Gmail", "imap.gmail.com")], &path).expect("merge");
+
+        let names: Vec<String> = load_raw_accounts(&path)
+            .expect("load")
+            .into_iter()
+            .map(|a| a.name)
+            .collect();
+        assert_eq!(names, vec!["gmail".to_string()]);
+    }
+
+    #[test]
+    fn test_write_passwords_to_env_with_existing_env() {
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join(".env");
+        std::fs::write(&env, "OTHER=1\nPERSO_PASSWORD='old'\n").expect("write env");
+
+        let written = write_passwords_to_env(
+            &[account("Perso", "imap.example.org")],
+            &[password("IMAP.example.org", "it's")],
+            &env,
+        )
+        .expect("write passwords");
+
+        assert_eq!(written, 1);
+        assert_eq!(
+            std::fs::read_to_string(&env).expect("read env"),
+            r"OTHER=1
+PERSO_PASSWORD='it'\''s'
+"
+        );
+    }
+
+    #[test]
+    fn test_write_passwords_to_env_with_newline_password_skipped() {
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join(".env");
+        std::fs::write(&env, "OTHER=1\n").expect("write env");
+
+        let written = write_passwords_to_env(
+            &[account("Perso", "imap.example.org")],
+            &[password("imap.example.org", "a\nINJECTED=1")],
+            &env,
+        )
+        .expect("write passwords");
+
+        assert_eq!(written, 0);
+        let content = std::fs::read_to_string(&env).expect("read env");
+        assert_eq!(content, "OTHER=1\n");
+        assert!(!content.contains("INJECTED"));
+    }
+}
+
+mod env_file_tests {
+    use super::*;
+    use email_to_markdown::config::write_env_file;
+
+    #[test]
+    fn test_write_env_file_with_newline_invalid() {
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join(".env");
+
+        let result = write_env_file(&env, &["A_PASSWORD='x\nB=1'".to_string()]);
+
+        assert!(matches!(result, Err(ConfigError::ValidationError(_))));
+        assert!(!env.exists());
+    }
+
+    #[test]
+    fn test_write_env_file_valid() {
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join("config").join(".env");
+
+        write_env_file(&env, &["A=1".to_string(), "B=2".to_string()]).expect("write env");
+
+        assert_eq!(std::fs::read_to_string(&env).expect("read"), "A=1\nB=2\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_env_file_mode_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join(".env");
+        std::fs::write(&env, "A=0\n").expect("seed env");
+        std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        write_env_file(&env, &["A=1".to_string()]).expect("write env");
+
+        let mode = std::fs::metadata(&env)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

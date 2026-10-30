@@ -286,15 +286,31 @@ pub fn run_contextual_batch(
     account_name: &str,
     selected: &[ContextualCandidate],
 ) -> Result<ContextualBatchSummary> {
-    dotenvy::from_path(config::env_file_path()).ok();
-    let cfg =
-        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    run_contextual_batch_in(
+        &config::AppPaths::from_app_config(),
+        target,
+        account_name,
+        selected,
+    )
+}
+
+/// [`run_contextual_batch`] reading `.env`, accounts and settings, and writing
+/// the deletion log, at the given paths.
+pub fn run_contextual_batch_in(
+    paths: &config::AppPaths,
+    target: &std::path::Path,
+    account_name: &str,
+    selected: &[ContextualCandidate],
+) -> Result<ContextualBatchSummary> {
+    dotenvy::from_path(&paths.env).ok();
+    let cfg = Config::load_with_settings(&paths.accounts, &paths.settings)
+        .context("Failed to load configuration")?;
     let account = cfg
         .get_account(account_name)
         .with_context(|| format!("Account '{}' not found", account_name))?
         .clone();
     let delete_after_export = account.delete_after_export;
-    let organize_by_date = Settings::load(&config::settings_path())
+    let organize_by_date = Settings::load(&paths.settings)
         .context("failed to load settings")?
         .organize_by_date;
     let mut exporter = ImapExporter::new(account, false);
@@ -338,7 +354,7 @@ pub fn run_contextual_batch(
     if delete_after_export {
         let batch = build_deletion_batch(&conversions);
         let deletion_results = exporter.delete_proved_messages(&batch)?;
-        crate::deletion_log::record_results(&deletion_results);
+        crate::deletion_log::record_results_to(&paths.deletion_log, &deletion_results);
         tally = tally_deletions(batch, &deletion_results);
     }
     exporter.disconnect().ok();
@@ -652,9 +668,11 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
                 // The AutoClose sent by ProgressUpdate::Done will close the progress
                 // window; the route review window opens after that via the event loop.
                 if !decisions.is_empty() {
-                    if let Err(e) = crate::tray::send_command(
-                        crate::tray::AppCommand::OpenRouteReview(decisions),
-                    ) {
+                    if let Err(e) =
+                        crate::tray::send_command(crate::tray::AppCommand::OpenRouteReview(
+                            crate::tray::RouteReview::new(decisions),
+                        ))
+                    {
                         eprintln!("Ouverture de la revue du tri impossible : {:#}", e);
                     }
                 }
@@ -753,9 +771,9 @@ pub fn action_resume_sort(account_name: String, result_sender: Sender<ActionResu
             ));
         }
         Ok(decisions) => {
-            if let Err(e) =
-                crate::tray::send_command(crate::tray::AppCommand::OpenRouteReview(decisions))
-            {
+            if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenRouteReview(
+                crate::tray::RouteReview::new(decisions),
+            )) {
                 let _ = result_sender.send(ActionResult::Error(format!(
                     "Ouverture de la revue : {:#}",
                     e
@@ -1293,7 +1311,7 @@ fn confirm_deletion(title: &str, text: &str) -> bool {
 /// `server_cleanup::clean_server_in`.
 fn clean_server(account_name: &str, confirm: impl Fn(&str, usize, bool) -> bool) -> Result<String> {
     crate::server_cleanup::clean_server_in(
-        &crate::server_cleanup::CleanupPaths::from_app_config(),
+        &crate::config::AppPaths::from_app_config(),
         account_name,
         confirm,
     )

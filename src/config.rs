@@ -45,6 +45,30 @@ pub fn settings_path() -> PathBuf {
     app_config_dir().join("settings.yaml")
 }
 
+/// Files a flow (export, server cleanup, contextual batch) reads and writes.
+/// Injected so tests never touch the user's config directory.
+#[derive(Debug, Clone)]
+pub struct AppPaths {
+    pub accounts: PathBuf,
+    pub env: PathBuf,
+    pub settings: PathBuf,
+    pub ledger: PathBuf,
+    pub deletion_log: PathBuf,
+}
+
+impl AppPaths {
+    /// The files of the user's config directory.
+    pub fn from_app_config() -> Self {
+        Self {
+            accounts: accounts_yaml_path(),
+            env: env_file_path(),
+            settings: settings_path(),
+            ledger: crate::handled::ledger_path(),
+            deletion_log: crate::deletion_log::log_path(),
+        }
+    }
+}
+
 // ── Settings (settings.yaml) ─────────────────────────────────────────────────
 
 /// Per-account behaviour overrides stored in settings.yaml.
@@ -205,6 +229,47 @@ pub fn save_accounts(accounts: &[RawAccount], path: &Path) -> Result<(), ConfigE
         accounts: accounts.to_vec(),
     };
     fs::write(path, serde_yaml::to_string(&raw_file)?)?;
+    Ok(())
+}
+
+/// `false` when `value` would break out of its `.env` line (`\r`, `\n`, NUL).
+pub fn env_value_is_valid(value: &str) -> bool {
+    !value.contains(['\r', '\n', '\0'])
+}
+
+/// Write `lines` to the `.env` at `path`, created owner-only (0600) on Unix.
+/// Refuses any line that would split into several.
+pub fn write_env_file(path: &Path, lines: &[String]) -> Result<(), ConfigError> {
+    use std::io::Write;
+
+    if let Some(line) = lines.iter().find(|line| !env_value_is_valid(line)) {
+        return Err(ConfigError::ValidationError(format!(
+            "ligne de .env invalide (retour à la ligne ou NUL) : {}",
+            line.split('=').next().unwrap_or_default()
+        )));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut content = lines.join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    // `mode` only applies on creation: tighten a pre-existing file too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(content.as_bytes())?;
     Ok(())
 }
 

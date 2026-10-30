@@ -4,7 +4,8 @@
 # as soon as its origin upgrades.
 [advisories]
 ignore = [
-    # fxhash, unmaintained: wry 0.44 -> kuchikiki -> selectors (tray only).
+    # fxhash, unmaintained: wry 0.44 -> kuchikiki -> selectors, compiled only for
+    # Android (wry's cfg(target_os = "android")); never in a shipped binary.
     "RUSTSEC-2025-0057",
     # instant, unmaintained: tao 0.30 (tray only).
     "RUSTSEC-2024-0384",
@@ -13,16 +14,12 @@ ignore = [
     # unsafe-libyaml, unmaintained: serde_yaml 0.9, deprecated; replacing it is a
     # format migration of every YAML file, out of scope here.
     "RUSTSEC-2024-0449",
-    # zbus_names, zvariant, zvariant_derive, unmaintained: rfd 0.15 -> ashpd -> zbus
-    # (tray, Linux only).
-    "RUSTSEC-2026-0371",
-    "RUSTSEC-2026-0370",
-    "RUSTSEC-2026-0372",
     # glib, unsound VariantStrIter: tray-icon 0.19 -> libappindicator -> gtk 0.18
     # (Linux only); the app never iterates a glib Variant.
     "RUSTSEC-2024-0429",
     # rand 0.7.3, unsound with a custom logger: wry 0.44 -> kuchikiki -> selectors
-    # -> phf_codegen, build script only; 0.7 has no fixed release, and 0.8/0.9
-    # were updated to their fixed versions.
+    # -> phf_codegen, compiled only for Android (build script); 0.7 has no fixed
+    # release. cargo audit ignores this ID for every rand version: on each
+    # Cargo.lock update, check that rand 0.8 / 0.9 are at their fixed releases.
     "RUSTSEC-2026-0097",
 ]

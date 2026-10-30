@@ -347,19 +347,30 @@ fn frontmatter_scalar(content: &str, field: &str) -> Option<String> {
 /// ```email block fills in otherwise. `to` / `cc` are joined with `", "`.
 /// Every reader of a message header goes through here.
 pub fn note_header_field(content: &str, field: &str) -> Option<String> {
-    if let Some(value) = frontmatter_scalar(content, field) {
-        return Some(value);
-    }
-    let header = read_header(content)?;
-    let value = match field {
-        "subject" => header.subject,
-        "from" => header.from,
-        "to" => header.to.join(", "),
-        "cc" => header.cc.join(", "),
-        "date" => header.date,
-        _ => return None,
-    };
-    (!value.is_empty()).then_some(value)
+    let [value] = note_header_fields(content, [field]);
+    value
+}
+
+/// [`note_header_field`] for several fields, parsing the ```email block at most once.
+pub fn note_header_fields<const N: usize>(content: &str, fields: [&str; N]) -> [Option<String>; N] {
+    let mut header: Option<Option<BlockHeader>> = None;
+    fields.map(|field| {
+        if let Some(value) = frontmatter_scalar(content, field) {
+            return Some(value);
+        }
+        let header = header
+            .get_or_insert_with(|| read_header(content))
+            .as_ref()?;
+        let value = match field {
+            "subject" => header.subject.clone(),
+            "from" => header.from.clone(),
+            "to" => header.to.join(", "),
+            "cc" => header.cc.join(", "),
+            "date" => header.date.clone(),
+            _ => return None,
+        };
+        (!value.is_empty()).then_some(value)
+    })
 }
 
 #[cfg(test)]

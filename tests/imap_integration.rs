@@ -1,11 +1,11 @@
-use email_to_markdown::config::Account;
+use email_to_markdown::config::{Account, AppPaths};
 use email_to_markdown::contextual_export::{
     build_deletion_batch, ConversionStatus, DeletionOutcome, LocalSourceProof,
 };
 use email_to_markdown::email_export::ImapExporter;
 use email_to_markdown::handled::{LedgerProofs, PurgeMatch, SeenHandled};
 use email_to_markdown::route::MatchRule;
-use email_to_markdown::server_cleanup::{clean_server_in, CleanupPaths};
+use email_to_markdown::server_cleanup::clean_server_in;
 use std::cell::Cell;
 
 /// Fails instead of passing silently when an ignored test runs without the fixture.
@@ -217,9 +217,9 @@ const SEEDED_IDS: [&str; 3] = [
 
 /// Config directory of a cleanup test: one account on the fixture user, a
 /// ledger holding the two alice messages as legacy entries, without proof.
-fn cleanup_dir(username: &str, account_name: &str) -> (tempfile::TempDir, CleanupPaths) {
+fn cleanup_dir(username: &str, account_name: &str) -> (tempfile::TempDir, AppPaths) {
     let temp = tempfile::TempDir::new().unwrap();
-    let paths = CleanupPaths {
+    let paths = AppPaths {
         accounts: temp.path().join("accounts.yaml"),
         env: temp.path().join(".env"),
         settings: temp.path().join("settings.yaml"),
@@ -410,6 +410,38 @@ fn delete_discarded_batch_mixes_deleted_and_already_absent() {
 
 #[test]
 #[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn delete_discarded_forged_proof_is_rejected_and_keeps_messages() {
+    require_fixture();
+    let mut exporter = ImapExporter::new(account("forged"), false);
+    exporter.connect().unwrap();
+    let candidates = exporter
+        .search_contextual(&[MatchRule::Domain("example.com".into())])
+        .unwrap();
+    let false_positive = candidates
+        .iter()
+        .find(|c| c.source.message_id.as_deref() == Some("fixture-false-positive@example.com"))
+        .unwrap();
+    // Alice's identity, pointed at the false positive's UID.
+    let mut forged = alice_proof(&mut exporter);
+    forged.location = false_positive.locations[0].clone();
+
+    let results = exporter.delete_discarded_messages(&[forged]).unwrap();
+    assert_eq!(
+        results[0].outcome,
+        DeletionOutcome::Rejected("identité serveur différente de la preuve".into())
+    );
+    assert_eq!(inbox_message_ids("forged"), SEEDED_IDS.to_vec());
+
+    let log = tempfile::TempDir::new().unwrap();
+    let log_path = log.path().join("deletions.log");
+    email_to_markdown::deletion_log::record_results_to(&log_path, &results);
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("rejected: identité serveur différente de la preuve"));
+    assert!(!log.contains("\tdeleted"));
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
 fn delete_discarded_missing_folder_requires_retry() {
     require_fixture();
     let mut exporter = ImapExporter::new(account("clean-missing"), false);
@@ -479,4 +511,127 @@ fn gmail_targeted_deletion_fixture() {
     let outcomes = exporter.delete_proved_messages(&requests).unwrap();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].outcome, DeletionOutcome::Deleted);
+}
+
+/// Config directory of an export test: settings without destinations, ledger
+/// and deletion log in a `TempDir`, and an account exporting into it.
+fn export_dir(username: &str) -> (tempfile::TempDir, AppPaths, Account) {
+    let temp = tempfile::TempDir::new().unwrap();
+    let paths = AppPaths {
+        accounts: temp.path().join("accounts.yaml"),
+        env: temp.path().join(".env"),
+        settings: temp.path().join("settings.yaml"),
+        ledger: temp.path().join("handled_messages.txt"),
+        deletion_log: temp.path().join("deletions.log"),
+    };
+    std::fs::write(&paths.settings, "organize_by_date: false\n").unwrap();
+    let mut fixture_account = account(username);
+    fixture_account.export_directory = temp.path().join("export").display().to_string();
+    fixture_account.delete_after_export = false;
+    (temp, paths, fixture_account)
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn export_account_in_pairs_each_uid_with_its_body_across_batches() {
+    require_fixture();
+    let (_temp, paths, fixture_account) = export_dir("export-batch");
+    let mut exporter = ImapExporter::new(fixture_account, false);
+    exporter.connect().unwrap();
+    let (stats, decisions) = exporter
+        .export_account_in(&paths, None, None, None)
+        .unwrap();
+    exporter.disconnect().ok();
+
+    assert_eq!(stats.values().map(|s| s.exported).sum::<usize>(), 15);
+    assert_eq!(decisions.len(), 15);
+    let markers: Vec<String> = (1..=12).map(|n| format!("BATCHMARK-{n:02}-END")).collect();
+    let mut seen = 0;
+    for (note, _) in &decisions {
+        let content = std::fs::read_to_string(note).unwrap();
+        let own: Vec<usize> = (0..markers.len())
+            .filter(|&i| content.contains(&markers[i]))
+            .collect();
+        // Seeded messages carry no marker; batch messages exactly their own.
+        assert!(own.len() <= 1, "{} carries several bodies", note.display());
+        if let Some(&i) = own.first() {
+            assert!(
+                content.contains(&format!("Batch message {:02}", i + 1)),
+                "{} pairs a body with another message",
+                note.display()
+            );
+            seen += 1;
+        }
+    }
+    assert_eq!(seen, 12, "every batch message is exported once");
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn export_account_in_purges_only_proved_handled_messages() {
+    require_fixture();
+    let (_temp, paths, mut fixture_account) = export_dir("export-purge");
+    fixture_account.skip_existing = true;
+
+    // First export: the notes carry the proofs the sorting would record.
+    let mut exporter = ImapExporter::new(fixture_account.clone(), false);
+    exporter.connect().unwrap();
+    let (_, decisions) = exporter
+        .export_account_in(&paths, None, None, None)
+        .unwrap();
+    exporter.disconnect().ok();
+    let proofs: Vec<LocalSourceProof> = decisions
+        .iter()
+        .filter_map(|(note, _)| {
+            email_to_markdown::contextual_export::read_source_proof(note).unwrap()
+        })
+        .collect();
+    assert_eq!(proofs.len(), 3);
+    let by_id = |id: &str| {
+        proofs
+            .iter()
+            .find(|p| {
+                p.identity.message_id.as_deref() == Some(id.trim_matches(|c| c == '<' || c == '>'))
+            })
+            .unwrap()
+            .clone()
+    };
+    let mut stale = by_id(SEEDED_IDS[0]);
+    stale.location.uid += 1000;
+    email_to_markdown::handled::record_proofs_to(
+        &paths.ledger,
+        [by_id(SEEDED_IDS[1]), by_id(SEEDED_IDS[2]), stale].iter(),
+    );
+
+    // Second export: the two proved messages are purged, the stale one kept.
+    fixture_account.delete_after_export = true;
+    let mut exporter = ImapExporter::new(fixture_account.clone(), false);
+    exporter.connect().unwrap();
+    let (stats, _) = exporter
+        .export_account_in(&paths, None, None, None)
+        .unwrap();
+    exporter.disconnect().ok();
+    assert_eq!(stats.values().map(|s| s.purged).sum::<usize>(), 2);
+    assert_eq!(stats.values().map(|s| s.stale_proof).sum::<usize>(), 1);
+    assert_eq!(
+        inbox_message_ids("export-purge"),
+        vec![SEEDED_IDS[0].to_string()]
+    );
+    let deleted_lines = |log: &str| log.lines().filter(|l| l.ends_with("\tdeleted")).count();
+    let log = std::fs::read_to_string(&paths.deletion_log).unwrap();
+    assert_eq!(deleted_lines(&log), 2);
+
+    // Third export: nothing left to purge, nothing logged.
+    let mut exporter = ImapExporter::new(fixture_account, false);
+    exporter.connect().unwrap();
+    let (stats, _) = exporter
+        .export_account_in(&paths, None, None, None)
+        .unwrap();
+    exporter.disconnect().ok();
+    assert_eq!(stats.values().map(|s| s.purged).sum::<usize>(), 0);
+    assert_eq!(std::fs::read_to_string(&paths.deletion_log).unwrap(), log);
+    assert_eq!(
+        inbox_message_ids("export-purge"),
+        vec![SEEDED_IDS[0].to_string()]
+    );
 }

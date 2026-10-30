@@ -8,8 +8,21 @@ permissions:
   contents: read
 
 jobs:
+  audit:
+    name: Security advisories
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.93.0" # same as rust-toolchain.toml
+      - run: cargo install cargo-audit --locked --version 0.22.2
+      # No release ships with an advisory missing from .cargo/audit.toml.
+      - run: cargo audit -D warnings
+
   build:
     name: Build ${{ matrix.label }}
+    needs: audit
     strategy:
       fail-fast: false
       matrix:
