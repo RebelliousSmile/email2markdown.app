@@ -56,9 +56,8 @@ jobs:
         with:
           toolchain: "1.93.0" # same as rust-toolchain.toml
       - run: cargo install cargo-audit --locked --version 0.22.2
-      # Fails on a vulnerability. Unmaintained/unsound notices are reported as
-      # warnings; the ones open on 2026-10-12 are all transitive (fxhash, instant,
-      # proc-macro-error, event-listener, glib, rand) and were left open.
+      # Fails on a vulnerability. Tolerated notices, each with its reason, are
+      # listed in .cargo/audit.toml.
       - run: cargo audit
 
   tools:

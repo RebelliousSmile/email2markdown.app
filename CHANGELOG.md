@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Dépendances** : `event-listener` (5.4.2) et `rand` (0.8.8, 0.9.5) corrigent des avis de code non sûr (RUSTSEC-2026-0221, RUSTSEC-2026-0097). La dépendance inutilisée `trash` est retirée, `imap` est épinglée sur sa préversion. Les avis restants, tous transitifs, sont tolérés un par un, avec leur raison, dans `.cargo/audit.toml`.
+- **Licence** : le texte de la licence MIT est ajouté (`LICENSE`).
+
 ### Removed
 
 - **Sous-commande `dest gui`** : elle ne faisait que demander au tray déjà lancé d'ouvrir la fenêtre des destinations, et échouait sans lui. La fenêtre reste accessible depuis le menu de la barre des tâches (« Gérer les destinations »).
