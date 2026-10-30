@@ -440,6 +440,18 @@ pub struct DeletionRequest {
     pub proof: LocalSourceProof,
 }
 
+/// Why a purge request must not delete its message, `None` when it may: the
+/// note must still exist and carry this very proof.
+pub fn deletion_rejection(request: &DeletionRequest) -> Result<Option<&'static str>> {
+    if !request.markdown.is_file() {
+        return Ok(Some("note absente"));
+    }
+    if read_source_proof(&request.markdown)?.as_ref() != Some(&request.proof) {
+        return Ok(Some("la note porte une autre preuve"));
+    }
+    Ok(None)
+}
+
 pub fn build_deletion_batch(results: &[MessageConversionResult]) -> Vec<DeletionRequest> {
     results
         .iter()

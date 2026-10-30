@@ -2041,7 +2041,7 @@ impl ImapExporter {
         &mut self,
         requests: &[crate::contextual_export::DeletionRequest],
     ) -> Result<Vec<crate::contextual_export::MessageDeletionResult>> {
-        use crate::contextual_export::read_source_proof;
+        use crate::contextual_export::deletion_rejection;
 
         let preflight = self.contextual_deletion_preflight()?;
         if !preflight.required {
@@ -2059,14 +2059,7 @@ impl ImapExporter {
         let mut valid = Vec::new();
         let mut rejected = Vec::new();
         for request in requests {
-            let reason = if !request.markdown.is_file() {
-                Some("note absente")
-            } else if read_source_proof(&request.markdown)?.as_ref() != Some(&request.proof) {
-                Some("la note porte une autre preuve")
-            } else {
-                None
-            };
-            match reason {
+            match deletion_rejection(request)? {
                 Some(reason) => rejected.push(crate::contextual_export::MessageDeletionResult {
                     proof: request.proof.clone(),
                     outcome: crate::contextual_export::DeletionOutcome::Rejected(format!(

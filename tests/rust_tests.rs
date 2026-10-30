@@ -2702,10 +2702,10 @@ mod contextual_export_tests {
     use email_to_markdown::config::Account;
     use email_to_markdown::contextual_export::{
         build_deletion_batch, build_search_batches, candidate_matches_rules, cleanup_stale_staging,
-        convert_raw_contextual, evaluate_deletion_preflight, merge_candidates,
+        convert_raw_contextual, deletion_rejection, evaluate_deletion_preflight, merge_candidates,
         parse_header_candidate, parse_uid_fetch_response, read_source_proof, validate_uidvalidity,
-        ContextualLock, ConversionStatus, DeletionProvider, MessageConversionResult,
-        MessageLocation,
+        ContextualLock, ConversionStatus, DeletionProvider, DeletionRequest, LocalSourceProof,
+        MessageConversionResult, MessageLocation, SourceIdentity,
     };
     use email_to_markdown::route::MatchRule;
     use std::fs;
@@ -2934,6 +2934,88 @@ mod contextual_export_tests {
                 trash_folder: "[Gmail]/Trash".into()
             }
         );
+    }
+
+    fn deletion_request(markdown: std::path::PathBuf, uid: u32) -> DeletionRequest {
+        DeletionRequest {
+            markdown,
+            proof: LocalSourceProof {
+                identity: SourceIdentity {
+                    account: "Work".into(),
+                    message_id: Some("purge@example.com".into()),
+                    header_fingerprint: "fp".into(),
+                    provider_id: None,
+                },
+                location: location("INBOX", uid),
+            },
+        }
+    }
+
+    fn write_proved_note(path: &std::path::Path, proof: &LocalSourceProof) {
+        #[derive(serde::Serialize)]
+        struct Head<'a> {
+            source: &'a LocalSourceProof,
+        }
+        let head = serde_yaml::to_string(&Head { source: proof }).unwrap();
+        fs::write(
+            path,
+            format!(
+                "---
+{head}---
+
+body
+"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_deletion_rejection_missing_note() {
+        let temp = TempDir::new().unwrap();
+        let request = deletion_request(temp.path().join("email_gone.md"), 5);
+        assert_eq!(deletion_rejection(&request).unwrap(), Some("note absente"));
+    }
+
+    #[test]
+    fn test_deletion_rejection_note_with_other_proof() {
+        let temp = TempDir::new().unwrap();
+        let markdown = temp.path().join("email_note.md");
+        write_proved_note(&markdown, &deletion_request(markdown.clone(), 6).proof);
+        let request = deletion_request(markdown, 5);
+        assert_eq!(
+            deletion_rejection(&request).unwrap(),
+            Some("la note porte une autre preuve")
+        );
+    }
+
+    #[test]
+    fn test_deletion_rejection_note_without_proof() {
+        let temp = TempDir::new().unwrap();
+        let markdown = temp.path().join("email_note.md");
+        fs::write(
+            &markdown,
+            "---
+title: x
+---
+
+body
+",
+        )
+        .unwrap();
+        assert_eq!(
+            deletion_rejection(&deletion_request(markdown, 5)).unwrap(),
+            Some("la note porte une autre preuve")
+        );
+    }
+
+    #[test]
+    fn test_deletion_rejection_note_with_same_proof() {
+        let temp = TempDir::new().unwrap();
+        let markdown = temp.path().join("email_note.md");
+        let request = deletion_request(markdown.clone(), 5);
+        write_proved_note(&markdown, &request.proof);
+        assert_eq!(deletion_rejection(&request).unwrap(), None);
     }
 
     #[test]
