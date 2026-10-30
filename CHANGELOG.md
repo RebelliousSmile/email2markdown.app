@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Revue de routage réactive** : l'application des décisions, qui parcourt tout le coffre de notes, tourne désormais hors de la boucle d'événements. La fenêtre reste déplaçable pendant le traitement, le bouton affiche « Application en cours… », et un second envoi ou une suppression est refusé tant que le traitement n'est pas terminé.
 - **Liens de citation** : les notes rangées sous un dossier `_*` (préparation, quarantaine, notes supprimées) ne sont plus jamais proposées comme cible d'un lien de citation.
 
+### Changed
+
+- **Export et suppression plus rapides sur le serveur** : l'export télécharge les messages par lots de dix au lieu d'un par un. La pré-vérification ne lit plus que les en-têtes utiles, et récupère en même temps l'identifiant Gmail. Le registre des messages traités n'est plus lu qu'une seule fois par export, au lieu d'une fois par dossier. Sur un serveur IMAP standard, les messages écartés sont supprimés par lots de 500 : une recherche, un marquage et une purge par lot, au lieu de trois commandes par message.
+
 ### Security
 
 - **Dépendances** : `event-listener` (5.4.2) et `rand` (0.8.8, 0.9.5) corrigent des avis de code non sûr (RUSTSEC-2026-0221, RUSTSEC-2026-0097). La dépendance inutilisée `trash` est retirée, `imap` est épinglée sur sa préversion. Les avis restants, tous transitifs, sont tolérés un par un, avec leur raison, dans `.cargo/audit.toml`.

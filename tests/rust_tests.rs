@@ -3488,7 +3488,9 @@ body
 mod handled_purge_tests {
     use email_to_markdown::contextual_export::{LocalSourceProof, MessageLocation, SourceIdentity};
     use email_to_markdown::email_export::{purge_summary, ExportStats};
-    use email_to_markdown::handled::{load_proofs_from, record_to, PurgeMatch, SeenHandled};
+    use email_to_markdown::handled::{
+        load_from, load_proofs_from, record_to, PurgeMatch, SeenHandled,
+    };
     use tempfile::TempDir;
 
     fn location(folder: &str, uid_validity: u32, uid: u32) -> MessageLocation {
@@ -3611,6 +3613,27 @@ mod handled_purge_tests {
         let proofs = load_proofs_from(&ledger, "Perso");
         assert_eq!(proofs.proofs.get("a@x"), Some(&proof(None)));
         assert!(!proofs.legacy.contains("a@x"));
+    }
+
+    #[test]
+    fn test_message_ids_matches_load() {
+        let temp = TempDir::new().unwrap();
+        let ledger = temp.path().join("handled_messages.txt");
+        record_to(
+            &ledger,
+            &[
+                ("Perso".into(), "legacy@x".into(), None),
+                ("Perso".into(), "proved@x".into(), Some(proof(None))),
+                ("Pro".into(), "other@x".into(), None),
+            ],
+        )
+        .unwrap();
+
+        let ids = load_proofs_from(&ledger, "Perso").message_ids();
+
+        assert_eq!(ids, load_from(&ledger, "Perso"));
+        assert!(ids.contains("legacy@x") && ids.contains("proved@x"));
+        assert!(!ids.contains("other@x"));
     }
 
     #[test]

@@ -451,13 +451,18 @@ pub struct ExportContext<'a> {
     pub errors: Vec<String>,
 }
 
-/// Routing settings read once per account and shared by every folder export.
+/// Routing settings and ledger, read once per account and shared by every
+/// folder export.
 #[derive(Clone, Copy)]
 pub struct FolderRouting<'a> {
     /// Destinations parsed from `destinations.txt`.
     pub dests: &'a [Destination],
     /// Whether notes go into `YYYY/MM` sub-directories.
     pub organize_by_date: bool,
+    /// Ledger of the account (empty without `skip_existing`).
+    pub ledger: &'a crate::handled::LedgerProofs,
+    /// Every `Message-ID` of `ledger`: messages already sorted or discarded.
+    pub handled: &'a HashSet<String>,
 }
 
 /// Directory receiving the images dropped by `skip_signature_images`, and the
@@ -1448,6 +1453,78 @@ pub(crate) fn is_gmail_server(host: &str) -> bool {
     lower.contains("gmail.com") || lower.contains("googlemail.com")
 }
 
+/// Messages downloaded by one FETCH of the export loop. Bounded so a batch of
+/// messages with large attachments stays reasonable in memory.
+const BODY_FETCH_BATCH: usize = 10;
+
+/// Headers read by the export pre-filter: the skip decision and the contact
+/// collection (which tells mailing lists by `List-Id` / `List-Unsubscribe`).
+const PREFILTER_FETCH_FIELDS: &str =
+    "BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE FROM TO CC SUBJECT LIST-ID LIST-UNSUBSCRIBE)]";
+
+/// IMAP set of sequence numbers or UIDs: `ids` joined by commas.
+fn imap_set(ids: &[u32]) -> String {
+    ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
+}
+
+/// Messages of one body FETCH, by sequence number, with their UID.
+type FetchedBodies = HashMap<u32, (Option<u32>, Vec<u8>)>;
+
+/// FETCH the full messages at sequence numbers `seqs` with one command, keyed
+/// by sequence number with their UID. A message the server no longer returns
+/// (expunged meanwhile) is absent.
+fn fetch_bodies(
+    session: &mut Session<Box<dyn ImapConnection>>,
+    seqs: &[u32],
+    network_config: &NetworkConfig,
+) -> Result<FetchedBodies, Box<imap::Error>> {
+    let fetches = with_retry(network_config, "fetch", || {
+        session.fetch(imap_set(seqs), "(UID RFC822)")
+    })
+    .map_err(Box::new)?;
+    Ok(fetches
+        .iter()
+        .filter_map(|fetch| Some((fetch.message, (fetch.uid, fetch.body()?.to_vec()))))
+        .collect())
+}
+
+/// Delete `uids` from the selected mailbox with one UID SEARCH, one UID STORE
+/// and one UID EXPUNGE. A UID the search does not return was already gone.
+fn expunge_uids(
+    session: &mut Session<Box<dyn ImapConnection>>,
+    uids: &[u32],
+) -> Vec<crate::contextual_export::DeletionOutcome> {
+    use crate::contextual_export::DeletionOutcome;
+
+    let present = match session.uid_search(format!("UID {}", imap_set(uids))) {
+        Ok(found) => found,
+        Err(error) => {
+            return vec![DeletionOutcome::RetryRequired(format!("{error:#}")); uids.len()]
+        }
+    };
+    let targets: Vec<u32> = uids
+        .iter()
+        .copied()
+        .filter(|uid| present.contains(uid))
+        .collect();
+    let deleted = if targets.is_empty() {
+        Ok(())
+    } else {
+        let set = imap_set(&targets);
+        session
+            .uid_store(&set, "+FLAGS.SILENT (\\Deleted)")
+            .and_then(|_| session.uid_expunge(&set))
+            .map(|_| ())
+    };
+    uids.iter()
+        .map(|uid| match &deleted {
+            _ if !present.contains(uid) => DeletionOutcome::AlreadyAbsent,
+            Ok(()) => DeletionOutcome::Deleted,
+            Err(error) => DeletionOutcome::RetryRequired(format!("{error:#}")),
+        })
+        .collect()
+}
+
 /// UID FETCH the selected headers of `uids` in the selected mailbox, by
 /// batches of `HEADER_UID_BATCH`, with Gmail's `X-GM-MSGID` when available.
 fn fetch_headers_by_uid(
@@ -1467,11 +1544,7 @@ fn fetch_headers_by_uid(
     };
     let mut fetched = Vec::new();
     for chunk in uids.chunks(HEADER_UID_BATCH) {
-        let uid_set = chunk
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
+        let uid_set = imap_set(chunk);
         let raw = session
             .run_command_and_read_response(format!("UID FETCH {uid_set} {attributes}"))
             .with_context(|| format!("UID FETCH headers in {folder_display}"))?;
@@ -1513,6 +1586,9 @@ struct Prefiltered {
     skipped: usize,
     /// Skipped because handled: candidates for the purge.
     handled: Vec<crate::handled::SeenHandled>,
+    /// Gmail `X-GM-MSGID` of the kept messages, by sequence number: the
+    /// export does not ask for it again.
+    provider_ids: HashMap<u32, String>,
 }
 
 /// Fetch the headers of one window of sequence numbers and drop the messages
@@ -1530,15 +1606,11 @@ fn prefilter_window(
     if window.is_empty() {
         return Prefiltered::default();
     }
-    let seq_set = window
-        .iter()
-        .map(|u| u.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
+    let seq_set = imap_set(window);
     let attributes = if index.gmail {
-        "(UID X-GM-MSGID RFC822.HEADER)"
+        format!("(UID X-GM-MSGID {PREFILTER_FETCH_FIELDS})")
     } else {
-        "(UID RFC822.HEADER)"
+        format!("(UID {PREFILTER_FETCH_FIELDS})")
     };
     let headers = session
         .run_command_and_read_response(format!("FETCH {seq_set} {attributes}"))
@@ -1567,6 +1639,9 @@ fn prefilter_window(
         }
         let (reason, analysis) = should_skip_from_headers(&header, index.exported, index.handled);
         let Some(reason) = reason else {
+            if let Some(provider_id) = provider_id {
+                result.provider_ids.insert(seq, provider_id);
+            }
             continue;
         };
         skip_set.insert(seq);
@@ -2208,27 +2283,18 @@ impl ImapExporter {
                         }));
                         continue;
                     }
-                    for request in group {
-                        let uid = request.proof.location.uid;
-                        let outcome = match session.uid_search(format!("UID {uid}")) {
-                            Ok(found) if found.is_empty() => DeletionOutcome::AlreadyAbsent,
-                            Ok(_) => match session
-                                .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
-                            {
-                                Ok(_) => match session.uid_expunge(uid.to_string()) {
-                                    Ok(_) => DeletionOutcome::Deleted,
-                                    Err(error) => {
-                                        DeletionOutcome::RetryRequired(format!("{error:#}"))
-                                    }
-                                },
-                                Err(error) => DeletionOutcome::RetryRequired(format!("{error:#}")),
-                            },
-                            Err(error) => DeletionOutcome::RetryRequired(format!("{error:#}")),
-                        };
-                        results.push(MessageDeletionResult {
-                            proof: request.proof,
-                            outcome,
-                        });
+                    for chunk in group.chunks(crate::contextual_export::HEADER_UID_BATCH) {
+                        let uids: Vec<u32> = chunk
+                            .iter()
+                            .map(|request| request.proof.location.uid)
+                            .collect();
+                        let outcomes = expunge_uids(session, &uids);
+                        results.extend(chunk.iter().zip(outcomes).map(|(request, outcome)| {
+                            MessageDeletionResult {
+                                proof: request.proof.clone(),
+                                outcome,
+                            }
+                        }));
                     }
                 }
                 Ok(results)
@@ -2251,23 +2317,15 @@ impl ImapExporter {
                         let source_uids =
                             session.uid_search(format!("X-GM-MSGID {provider_id}"))?;
                         if !source_uids.is_empty() {
-                            let uid_set = source_uids
-                                .iter()
-                                .map(u32::to_string)
-                                .collect::<Vec<_>>()
-                                .join(",");
-                            session.uid_mv(&uid_set, &trash_folder)?;
+                            let source_uids: Vec<u32> = source_uids.into_iter().collect();
+                            session.uid_mv(imap_set(&source_uids), &trash_folder)?;
                         }
                         session.select(&trash_folder)?;
                         let trash_uids = session.uid_search(format!("X-GM-MSGID {provider_id}"))?;
                         if trash_uids.is_empty() {
                             return Ok(DeletionOutcome::AlreadyAbsent);
                         }
-                        let uid_set = trash_uids
-                            .iter()
-                            .map(u32::to_string)
-                            .collect::<Vec<_>>()
-                            .join(",");
+                        let uid_set = imap_set(&trash_uids.into_iter().collect::<Vec<_>>());
                         session.uid_store(&uid_set, "+FLAGS.SILENT (\\Deleted)")?;
                         session.uid_expunge(&uid_set)?;
                         Ok(DeletionOutcome::Deleted)
@@ -2311,19 +2369,11 @@ impl ImapExporter {
         };
         // Messages already sorted or discarded: they left the export folder but
         // stay on a server that is not asked to delete.
-        let handled = if self.account.skip_existing {
-            crate::handled::load(&self.account.name)
-        } else {
-            HashSet::new()
-        };
+        let handled = routing.handled;
         // Handled messages still on a server asked to delete: purged when the
         // ledger proves them, counted otherwise.
         let purge_enabled = self.account.delete_after_export && self.account.skip_existing;
-        let ledger_proofs = if purge_enabled {
-            crate::handled::load_proofs(&self.account.name)
-        } else {
-            crate::handled::LedgerProofs::default()
-        };
+        let ledger_proofs = routing.ledger;
         let mut seen_handled: Vec<crate::handled::SeenHandled> = Vec::new();
 
         // Keep the session borrow scoped to the folder traversal.
@@ -2353,14 +2403,10 @@ impl ImapExporter {
             let mut uids_vec: Vec<u32> = session.search("ALL")?.into_iter().collect();
             uids_vec.sort_unstable();
 
-            // With a batch limit the headers are pre-fetched window by window: a
-            // run that stops after `batch_size` exports never reads the whole
-            // mailbox. Without a limit there is a single window.
-            let window_size = if self.account.batch_size > 0 {
-                crate::contextual_export::HEADER_UID_BATCH
-            } else {
-                uids_vec.len().max(1)
-            };
+            // The headers are pre-fetched window by window: the FETCH command
+            // stays bounded, and a run that stops after `batch_size` exports
+            // never reads the whole mailbox.
+            let window_size = crate::contextual_export::HEADER_UID_BATCH;
 
             // [3] Progress indicator
             let total_to_process = uids_vec.len();
@@ -2376,13 +2422,13 @@ impl ImapExporter {
                     break;
                 }
                 // Pre-filter: fetch headers, skip already-exported without downloading body
-                let (filtered_uids, pre_skipped) = if self.account.skip_existing {
+                let (filtered_uids, pre_skipped, mut provider_ids) = if self.account.skip_existing {
                     let prefiltered = prefilter_window(
                         session,
                         window,
                         &PrefilterIndex {
                             exported: &exported,
-                            handled: &handled,
+                            handled,
                             gmail: self.is_gmail,
                         },
                         contacts_collector.as_deref_mut(),
@@ -2390,9 +2436,13 @@ impl ImapExporter {
                         self.debug_mode,
                     );
                     seen_handled.extend(prefiltered.handled);
-                    (prefiltered.kept, prefiltered.skipped)
+                    (
+                        prefiltered.kept,
+                        prefiltered.skipped,
+                        prefiltered.provider_ids,
+                    )
                 } else {
-                    (window.to_vec(), 0)
+                    (window.to_vec(), 0, HashMap::new())
                 };
                 stats.skipped += pre_skipped;
                 examined += pre_skipped;
@@ -2400,196 +2450,247 @@ impl ImapExporter {
                     progress.inc();
                 }
 
-                for uid in filtered_uids {
-                    let idx = examined;
-                    examined += 1;
-                    if idx.is_multiple_of(10) {
-                        if let Some(s) = on_status {
-                            if self.account.batch_size > 0 {
-                                s(&format!(
-                                    "{} — lot {}/{} exportés · {}/{} messages examinés",
-                                    folder.display,
-                                    self.batch_exported,
-                                    self.account.batch_size,
-                                    idx,
-                                    total_to_process
-                                ));
-                            } else {
-                                s(&format!(
-                                    "{} — {}/{} messages examinés, {} exportés",
-                                    folder.display, idx, total_to_process, stats.exported
-                                ));
-                            }
-                        }
-                        if let Some(f) = on_progress {
-                            let (current, total) = progress_counts(
-                                self.account.batch_size,
-                                self.batch_exported,
-                                idx,
-                                total_to_process,
-                            );
-                            f(current, total);
-                        }
-                    }
+                // Bodies are downloaded by batches of `BODY_FETCH_BATCH`, never
+                // beyond what the batch limit still allows.
+                let mut pending = filtered_uids.as_slice();
+                while !pending.is_empty() && !stop {
                     if cancel_token.is_some_and(|t| t.load(Ordering::Relaxed)) {
                         stop = true;
                         break;
                     }
-                    if self.account.batch_size > 0 && self.batch_exported >= self.account.batch_size
-                    {
-                        self.batch_full = true;
-                        stop = true;
-                        break;
+                    let mut take = BODY_FETCH_BATCH.min(pending.len());
+                    if self.account.batch_size > 0 {
+                        if self.batch_exported >= self.account.batch_size {
+                            self.batch_full = true;
+                            stop = true;
+                            break;
+                        }
+                        take = take.min(self.account.batch_size - self.batch_exported);
                     }
-
-                    // [4] Retry logic for fetch
-                    let fetch_result = with_retry(&self.network_config, "fetch", || {
-                        session.fetch(uid.to_string(), "(UID RFC822)")
-                    });
-
-                    let messages = match fetch_result {
-                        Ok(m) => m,
-                        Err(e) => {
-                            if self.debug_mode {
-                                println!("  Failed to fetch message {}: {:#}", uid, e);
-                            }
+                    let (chunk, rest) = pending.split_at(take);
+                    pending = rest;
+                    // When the server rejects the batch, each message is fetched
+                    // alone: one unreadable message does not fail its neighbours.
+                    let mut bodies = match fetch_bodies(session, chunk, &self.network_config) {
+                        Ok(bodies) => Some(bodies),
+                        Err(e) if matches!(*e, imap::Error::Io(_)) => {
                             stats.errors += 1;
                             progress.inc();
-                            // A transport failure (read timeout, reset) leaves the session
-                            // unusable: stop here instead of timing out on every message.
-                            if matches!(e, imap::Error::Io(_)) {
-                                eprintln!(
+                            // A transport failure (read timeout, reset) leaves the
+                            // session unusable: stop here.
+                            eprintln!(
                                 "warning: connection to {} lost in {}, folder export aborted: {e}",
                                 self.account.server, folder.display
                             );
-                                stop = true;
-                                break;
+                            stop = true;
+                            break;
+                        }
+                        Err(e) => {
+                            if self.debug_mode {
+                                println!("  Batch fetch failed, fetching one by one: {:#}", e);
                             }
-                            continue;
+                            None
                         }
                     };
 
-                    // Gmail deletion targets X-GM-MSGID, which RFC822 does not carry.
-                    let provider_id = if self.is_gmail {
-                        fetch_gmail_msgid(session, uid)
-                    } else {
-                        None
-                    };
-
-                    for message in messages.iter() {
-                        if let Some(body) = message.body() {
-                            let source_proof = build_global_source_proof(
-                                &self.account.name,
-                                folder,
-                                mailbox_uid_validity,
-                                message.uid,
-                                body,
-                                provider_id.clone(),
-                                self.is_gmail,
-                            );
-                            if source_proof.is_none() {
-                                proofless += 1;
-                            }
-                            let already_handled = source_proof
-                                .as_ref()
-                                .and_then(|proof| proof.identity.message_id.as_ref())
-                                .is_some_and(|id| handled.contains(id));
-                            if already_handled {
-                                if let Some(proof) = &source_proof {
-                                    seen_handled.push(crate::handled::SeenHandled {
-                                        message_id: proof
-                                            .identity
-                                            .message_id
-                                            .clone()
-                                            .unwrap_or_default(),
-                                        uid: proof.location.uid,
-                                        provider_id: proof.identity.provider_id.clone(),
-                                    });
+                    for &uid in chunk {
+                        let idx = examined;
+                        examined += 1;
+                        if idx.is_multiple_of(10) {
+                            if let Some(s) = on_status {
+                                if self.account.batch_size > 0 {
+                                    s(&format!(
+                                        "{} — lot {}/{} exportés · {}/{} messages examinés",
+                                        folder.display,
+                                        self.batch_exported,
+                                        self.account.batch_size,
+                                        idx,
+                                        total_to_process
+                                    ));
+                                } else {
+                                    s(&format!(
+                                        "{} — {}/{} messages examinés, {} exportés",
+                                        folder.display, idx, total_to_process, stats.exported
+                                    ));
                                 }
-                                stats.skipped += 1;
+                            }
+                            if let Some(f) = on_progress {
+                                let (current, total) = progress_counts(
+                                    self.account.batch_size,
+                                    self.batch_exported,
+                                    idx,
+                                    total_to_process,
+                                );
+                                f(current, total);
+                            }
+                        }
+                        if cancel_token.is_some_and(|t| t.load(Ordering::Relaxed)) {
+                            stop = true;
+                            break;
+                        }
+                        if self.account.batch_size > 0
+                            && self.batch_exported >= self.account.batch_size
+                        {
+                            self.batch_full = true;
+                            stop = true;
+                            break;
+                        }
+
+                        let fetch_result = match bodies.as_mut() {
+                            Some(bodies) => Ok(bodies.remove(&uid)),
+                            None => fetch_bodies(session, &[uid], &self.network_config)
+                                .map(|mut one| one.remove(&uid)),
+                        };
+                        let fetched = match fetch_result {
+                            Ok(fetched) => fetched,
+                            Err(e) => {
+                                if self.debug_mode {
+                                    println!("  Failed to fetch message {}: {:#}", uid, e);
+                                }
+                                stats.errors += 1;
+                                progress.inc();
+                                // A transport failure (read timeout, reset) leaves the session
+                                // unusable: stop here instead of timing out on every message.
+                                if matches!(*e, imap::Error::Io(_)) {
+                                    eprintln!(
+                                "warning: connection to {} lost in {}, folder export aborted: {e}",
+                                self.account.server, folder.display
+                            );
+                                    stop = true;
+                                    break;
+                                }
                                 continue;
                             }
-                            let mut ctx = ExportContext {
-                                errors: Vec::new(),
-                                export_directory: &export_directory,
-                                base_export_directory: &base_export_directory,
-                                account: &self.account,
-                                debug_mode: self.debug_mode,
-                                dests: routing.dests,
-                                source_proof: source_proof.as_ref(),
-                                organize_by_date: routing.organize_by_date,
-                                exported: Some(&mut exported),
-                                quarantine: self.account.delete_after_export.then(|| Quarantine {
-                                    root: &quarantine_root,
-                                    written: &mut quarantined,
-                                }),
-                            };
-                            let result = export_to_markdown(
-                                body,
-                                vec![folder.display.clone()],
-                                contacts_collector.as_deref_mut(),
-                                &mut ctx,
-                            );
-                            for error in &ctx.errors {
-                                println!("  Message {uid} : {error}");
-                            }
-                            stats.errors += ctx.errors.len();
+                        };
 
-                            match result {
-                                Ok(Some((path, decision))) => {
-                                    stats.exported += 1;
-                                    self.batch_exported += 1;
-                                    folder_decisions.push((path, decision));
+                        // Gmail deletion targets X-GM-MSGID, which RFC822 does not carry:
+                        // the pre-filter read it, else it is asked for here.
+                        let provider_id = if self.is_gmail && fetched.is_some() {
+                            provider_ids
+                                .remove(&uid)
+                                .or_else(|| fetch_gmail_msgid(session, uid))
+                        } else {
+                            None
+                        };
+
+                        if let Some((message_uid, body)) = fetched {
+                            let body = body.as_slice();
+                            {
+                                let source_proof = build_global_source_proof(
+                                    &self.account.name,
+                                    folder,
+                                    mailbox_uid_validity,
+                                    message_uid,
+                                    body,
+                                    provider_id.clone(),
+                                    self.is_gmail,
+                                );
+                                if source_proof.is_none() {
+                                    proofless += 1;
                                 }
-                                Ok(None) => stats.skipped += 1,
-                                Err(e) => {
-                                    // Malformed messages (RFC-invalid MIME, broken headers, etc.)
-                                    // are counted as skipped rather than errored: they cannot be
-                                    // exported by design and should not contribute to the error
-                                    // count that signals transient/recoverable failures.
-                                    let is_malformed =
-                                        e.downcast_ref::<mailparse::MailParseError>().is_some();
-                                    if self.debug_mode {
-                                        let label = if is_malformed {
-                                            "Skipping malformed message"
-                                        } else {
-                                            "Error exporting message"
-                                        };
-                                        println!("  {} {}: {:#}", label, uid, e);
-                                        let dump_dir = base_export_directory.join("_failed");
-                                        if fs::create_dir_all(&dump_dir).is_ok() {
-                                            let dump_path = dump_dir.join(format!(
-                                                "{}_uid_{}.eml",
-                                                sanitize_filename(&folder.display),
-                                                uid
-                                            ));
-                                            if fs::write(&dump_path, body).is_ok() {
-                                                println!(
-                                                    "  Raw message dumped to {}",
-                                                    dump_path.display()
-                                                );
+                                let already_handled = source_proof
+                                    .as_ref()
+                                    .and_then(|proof| proof.identity.message_id.as_ref())
+                                    .is_some_and(|id| handled.contains(id));
+                                if already_handled {
+                                    if let Some(proof) = &source_proof {
+                                        seen_handled.push(crate::handled::SeenHandled {
+                                            message_id: proof
+                                                .identity
+                                                .message_id
+                                                .clone()
+                                                .unwrap_or_default(),
+                                            uid: proof.location.uid,
+                                            provider_id: proof.identity.provider_id.clone(),
+                                        });
+                                    }
+                                    stats.skipped += 1;
+                                    continue;
+                                }
+                                let mut ctx = ExportContext {
+                                    errors: Vec::new(),
+                                    export_directory: &export_directory,
+                                    base_export_directory: &base_export_directory,
+                                    account: &self.account,
+                                    debug_mode: self.debug_mode,
+                                    dests: routing.dests,
+                                    source_proof: source_proof.as_ref(),
+                                    organize_by_date: routing.organize_by_date,
+                                    exported: Some(&mut exported),
+                                    quarantine: self.account.delete_after_export.then(|| {
+                                        Quarantine {
+                                            root: &quarantine_root,
+                                            written: &mut quarantined,
+                                        }
+                                    }),
+                                };
+                                let result = export_to_markdown(
+                                    body,
+                                    vec![folder.display.clone()],
+                                    contacts_collector.as_deref_mut(),
+                                    &mut ctx,
+                                );
+                                for error in &ctx.errors {
+                                    println!("  Message {uid} : {error}");
+                                }
+                                stats.errors += ctx.errors.len();
+
+                                match result {
+                                    Ok(Some((path, decision))) => {
+                                        stats.exported += 1;
+                                        self.batch_exported += 1;
+                                        folder_decisions.push((path, decision));
+                                    }
+                                    Ok(None) => stats.skipped += 1,
+                                    Err(e) => {
+                                        // Malformed messages (RFC-invalid MIME, broken headers, etc.)
+                                        // are counted as skipped rather than errored: they cannot be
+                                        // exported by design and should not contribute to the error
+                                        // count that signals transient/recoverable failures.
+                                        let is_malformed =
+                                            e.downcast_ref::<mailparse::MailParseError>().is_some();
+                                        if self.debug_mode {
+                                            let label = if is_malformed {
+                                                "Skipping malformed message"
+                                            } else {
+                                                "Error exporting message"
+                                            };
+                                            println!("  {} {}: {:#}", label, uid, e);
+                                            let dump_dir = base_export_directory.join("_failed");
+                                            if fs::create_dir_all(&dump_dir).is_ok() {
+                                                let dump_path = dump_dir.join(format!(
+                                                    "{}_uid_{}.eml",
+                                                    sanitize_filename(&folder.display),
+                                                    uid
+                                                ));
+                                                if fs::write(&dump_path, body).is_ok() {
+                                                    println!(
+                                                        "  Raw message dumped to {}",
+                                                        dump_path.display()
+                                                    );
+                                                }
                                             }
                                         }
-                                    }
-                                    if is_malformed {
-                                        stats.skipped += 1;
-                                    } else {
-                                        stats.errors += 1;
+                                        if is_malformed {
+                                            stats.skipped += 1;
+                                        } else {
+                                            stats.errors += 1;
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    // [3] Update progress
-                    progress.inc();
-                    if self.account.batch_size > 0
-                        && self.batch_exported != last_reported_batch_exported
-                    {
-                        if let Some(f) = on_progress {
-                            f(self.batch_exported, self.account.batch_size);
+                        // [3] Update progress
+                        progress.inc();
+                        if self.account.batch_size > 0
+                            && self.batch_exported != last_reported_batch_exported
+                        {
+                            if let Some(f) = on_progress {
+                                f(self.batch_exported, self.account.batch_size);
+                            }
+                            last_reported_batch_exported = self.batch_exported;
                         }
-                        last_reported_batch_exported = self.batch_exported;
                     }
                 }
 
@@ -2724,6 +2825,14 @@ impl ImapExporter {
             .context("failed to load settings")?
             .organize_by_date;
 
+        // The ledger is read once per run and shared by every folder.
+        let ledger = if self.account.skip_existing {
+            crate::handled::load_proofs(&self.account.name)
+        } else {
+            crate::handled::LedgerProofs::default()
+        };
+        let handled = ledger.message_ids();
+
         self.batch_exported = 0;
         self.batch_full = false;
         self.purge_targeted.clear();
@@ -2803,6 +2912,8 @@ impl ImapExporter {
                     FolderRouting {
                         dests: &dests,
                         organize_by_date,
+                        ledger: &ledger,
+                        handled: &handled,
                     },
                     on_status,
                     Some(&on_folder_progress),
@@ -2915,6 +3026,11 @@ mod tests {
     #[test]
     fn unbounded_progress_counts_processed_messages() {
         assert_eq!(progress_counts(0, 0, 700, 4_395), (700, 4_395));
+    }
+
+    #[test]
+    fn test_imap_set_joins_with_commas() {
+        assert_eq!(imap_set(&[3, 17, 42]), "3,17,42");
     }
 
     #[test]

@@ -113,6 +113,12 @@ pub enum PurgeMatch {
 }
 
 impl LedgerProofs {
+    /// Every `Message-ID` recorded for the account, with or without proof:
+    /// the set `load` reads, from the same single read of the ledger.
+    pub fn message_ids(&self) -> HashSet<String> {
+        self.proofs.keys().chain(&self.legacy).cloned().collect()
+    }
+
     /// Match a handled message seen at `current` against its stored proof.
     ///
     /// Generic IMAP: the stored folder, UIDVALIDITY and UID must be the

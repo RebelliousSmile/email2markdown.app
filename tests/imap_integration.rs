@@ -363,6 +363,53 @@ fn delete_discarded_message_removed_before_is_already_absent() {
 
 #[test]
 #[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn delete_discarded_batch_mixes_deleted_and_already_absent() {
+    require_fixture();
+    let mut exporter = ImapExporter::new(account("batch"), false);
+    exporter.connect().unwrap();
+    let candidates = exporter
+        .search_contextual(&[MatchRule::Domain("example.com".into())])
+        .unwrap();
+    let proofs: Vec<LocalSourceProof> = candidates
+        .iter()
+        .map(|candidate| LocalSourceProof {
+            identity: candidate.source.clone(),
+            location: candidate.locations[0].clone(),
+        })
+        .collect();
+    assert_eq!(proofs.len(), 3);
+
+    let mut session = raw_session("batch");
+    session.select("INBOX").unwrap();
+    let uid = proofs[1].location.uid.to_string();
+    session
+        .uid_store(&uid, "+FLAGS.SILENT (\\Deleted)")
+        .unwrap();
+    session.uid_expunge(&uid).unwrap();
+    session.logout().ok();
+
+    let results = exporter.delete_discarded_messages(&proofs).unwrap();
+    let outcomes: Vec<DeletionOutcome> = results.into_iter().map(|r| r.outcome).collect();
+    assert_eq!(outcomes.len(), 3);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|o| **o == DeletionOutcome::Deleted)
+            .count(),
+        2
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|o| **o == DeletionOutcome::AlreadyAbsent)
+            .count(),
+        1
+    );
+    assert!(inbox_message_ids("batch").is_empty());
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
 fn delete_discarded_missing_folder_requires_retry() {
     require_fixture();
     let mut exporter = ImapExporter::new(account("clean-missing"), false);
