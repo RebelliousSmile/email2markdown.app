@@ -6,16 +6,23 @@ use email_to_markdown::email_export::ImapExporter;
 use email_to_markdown::handled::{LedgerProofs, PurgeMatch, SeenHandled};
 use email_to_markdown::route::MatchRule;
 
-fn enabled() -> bool {
-    std::env::var("EMAIL_TO_MARKDOWN_IMAP_TEST").as_deref() == Ok("1")
+/// Fails instead of passing silently when an ignored test runs without the fixture.
+fn require_fixture() {
+    assert_eq!(
+        std::env::var("EMAIL_TO_MARKDOWN_IMAP_TEST").as_deref(),
+        Ok("1"),
+        "EMAIL_TO_MARKDOWN_IMAP_TEST=1 is required: start tests/fixtures/imap/compose.yaml first"
+    );
+    std::env::set_var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST", "1");
 }
 
-fn account() -> Account {
+/// Each test owns a Dovecot user seeded by the fixture's `seed` service.
+fn account(username: &str) -> Account {
     Account {
         name: "Dovecot fixture".into(),
         server: "127.0.0.1".into(),
         port: 1993,
-        username: "test".into(),
+        username: username.into(),
         password: Some("password".into()),
         ignored_folders: vec![],
         export_directory: String::new(),
@@ -32,11 +39,8 @@ fn account() -> Account {
 #[test]
 #[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
 fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
-    if !enabled() {
-        return;
-    }
-    std::env::set_var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST", "1");
-    let fixture_account = account();
+    require_fixture();
+    let fixture_account = account("contextual");
     let mut exporter = ImapExporter::new(fixture_account.clone(), true);
     exporter.connect().unwrap();
     let candidates = exporter
@@ -106,7 +110,7 @@ fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
         .connect()
         .unwrap();
     let mut session = client
-        .login("test", "password")
+        .login("contextual", "password")
         .map_err(|(e, _)| e)
         .unwrap();
     session.examine("INBOX").unwrap();
@@ -122,11 +126,8 @@ fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
 #[test]
 #[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
 fn handled_message_with_ledger_proof_is_purged_at_its_current_place() {
-    if !enabled() {
-        return;
-    }
-    std::env::set_var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST", "1");
-    let mut exporter = ImapExporter::new(account(), true);
+    require_fixture();
+    let mut exporter = ImapExporter::new(account("purge"), true);
     exporter.connect().unwrap();
     let candidates = exporter
         .search_contextual(&[MatchRule::Correspondent("alice@example.com".into())])
