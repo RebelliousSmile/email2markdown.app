@@ -1443,7 +1443,7 @@ fn build_global_source_proof(
     proof_is_complete(&proof).then_some(proof)
 }
 
-fn is_gmail_server(host: &str) -> bool {
+pub(crate) fn is_gmail_server(host: &str) -> bool {
     let lower = host.to_lowercase();
     lower.contains("gmail.com") || lower.contains("googlemail.com")
 }

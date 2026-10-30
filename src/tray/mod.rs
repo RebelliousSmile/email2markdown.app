@@ -98,6 +98,8 @@ pub enum AppCommand {
     },
     /// Rebuild the tray menu (account submenus) after the account list changed.
     RefreshMenu,
+    /// Show an operation in progress in the tray tooltip; `None` restores the default.
+    SetTooltip(Option<String>),
     /// Evaluate JS in the WebView of the given window.
     EvalScript {
         window_id: WindowId,

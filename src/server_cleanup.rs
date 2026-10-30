@@ -125,12 +125,14 @@ pub fn record_results(
 }
 
 /// Complete the ledger from the routed notes, list the legacy handled
-/// messages still on the server, and delete them once `confirm` agrees.
+/// messages still on the server, and delete them once `confirm` agrees;
+/// `confirm` receives the account name, the message count and whether the
+/// server is Gmail.
 /// Successful deletions are recorded in the ledger with their proof.
 pub fn clean_server_in(
     paths: &CleanupPaths,
     account_name: &str,
-    confirm: impl Fn(&str, usize) -> bool,
+    confirm: impl Fn(&str, usize, bool) -> bool,
 ) -> Result<String> {
     dotenvy::from_path(&paths.env).ok();
     let config = Config::load_with_settings(&paths.accounts, &paths.settings)
@@ -168,7 +170,8 @@ pub fn clean_server_in(
     if plan.targets.is_empty() {
         return Ok(format!("Rien à nettoyer pour {account_name}{notes}"));
     }
-    if !confirm(account_name, plan.targets.len()) {
+    let is_gmail = crate::email_export::is_gmail_server(&account.server);
+    if !confirm(account_name, plan.targets.len(), is_gmail) {
         return Ok(format!("Nettoyage annulé, rien n'a été supprimé{notes}"));
     }
 

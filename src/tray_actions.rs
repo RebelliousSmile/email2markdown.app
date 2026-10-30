@@ -1214,30 +1214,47 @@ pub fn action_clean_server(account_name: String, result_sender: Sender<ActionRes
         return;
     }
     thread::spawn(move || {
-        let confirm = |account: &str, count: usize| {
-            confirm_yes_no(
+        let _ = crate::tray::send_command(crate::tray::AppCommand::SetTooltip(Some(format!(
+            "Nettoyage du serveur en cours ({account_name})…"
+        ))));
+        let confirm = |account: &str, count: usize, is_gmail: bool| {
+            confirm_deletion(
                 "Nettoyer le serveur",
-                &format!(
-                    "{count} message(s) de {account} sont déjà triés ou écartés mais restent sur le serveur.\n\n\
-                     Le registre ne les connaît que par leur Message-ID : l'appariement repose sur cet identifiant seul.\n\n\
-                     Les supprimer du serveur ?"
-                ),
+                &clean_confirmation_text(account, count, is_gmail),
             )
         };
         let result = match clean_server(&account_name, confirm) {
             Ok(message) => ActionResult::Success("Nettoyer le serveur".to_string(), message),
             Err(e) => ActionResult::Error(format!("Nettoyer le serveur : {:#}", e)),
         };
+        let _ = crate::tray::send_command(crate::tray::AppCommand::SetTooltip(None));
         CLEANING_SERVER.store(false, Ordering::SeqCst);
         let _ = result_sender.send(result);
     });
+}
+
+/// Question asked before the cleanup deletes `count` messages of `account`.
+/// Gmail moves them to its Trash, which the cleanup then purges as well.
+fn clean_confirmation_text(account: &str, count: usize, is_gmail: bool) -> String {
+    let irreversible = if is_gmail {
+        "Sur Gmail, ils passent par la Corbeille, d'où ils sont aussitôt purgés : \
+         la suppression est irréversible."
+    } else {
+        "La suppression est irréversible : le serveur ne les conserve pas."
+    };
+    format!(
+        "{count} message(s) de {account} sont déjà triés ou écartés mais restent sur le serveur.\n\n\
+         Le registre ne les connaît que par leur Message-ID : l'appariement repose sur cet identifiant seul.\n\n\
+         {irreversible}\n\n\
+         Les supprimer du serveur ?"
+    )
 }
 
 /// Yes/No question that stays above the other windows, default answer No.
 /// The cleanup asks only after its census, once the tray menu click no longer
 /// grants the right to take the foreground: a plain dialog opens behind.
 #[cfg(windows)]
-fn confirm_yes_no(title: &str, text: &str) -> bool {
+fn confirm_deletion(title: &str, text: &str) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
     };
@@ -1259,19 +1276,26 @@ fn confirm_yes_no(title: &str, text: &str) -> bool {
     answer == IDYES
 }
 
+/// `rfd` cannot pick the default button: the button that deletes says so.
+/// Every backend answers a custom button with its label, Cancel included.
 #[cfg(not(windows))]
-fn confirm_yes_no(title: &str, text: &str) -> bool {
+fn confirm_deletion(title: &str, text: &str) -> bool {
+    const DELETE: &str = "Supprimer définitivement";
     rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
         .set_title(title)
         .set_description(text)
-        .set_buttons(rfd::MessageButtons::YesNo)
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(
+            DELETE.to_string(),
+            "Annuler".to_string(),
+        ))
         .show()
-        == rfd::MessageDialogResult::Yes
+        == rfd::MessageDialogResult::Custom(DELETE.to_string())
 }
 
 /// Clean the server of the user's config directory: see
 /// `server_cleanup::clean_server_in`.
-fn clean_server(account_name: &str, confirm: impl Fn(&str, usize) -> bool) -> Result<String> {
+fn clean_server(account_name: &str, confirm: impl Fn(&str, usize, bool) -> bool) -> Result<String> {
     crate::server_cleanup::clean_server_in(
         &crate::server_cleanup::CleanupPaths::from_app_config(),
         account_name,
@@ -1299,13 +1323,32 @@ pub fn get_account_names() -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        contextual_summary_message, is_excluded_staging_dir, set_export_dir_in, set_notes_dir_in,
+        clean_confirmation_text, contextual_summary_message, is_excluded_staging_dir,
+        set_export_dir_in, set_notes_dir_in,
     };
     use crate::config::Settings;
     use std::fs;
     use tempfile::TempDir;
 
     const INVALID_YAML: &str = "export_base_dir: [unclosed\naccounts: : :\n";
+
+    #[test]
+    fn test_clean_confirmation_text_says_irreversible() {
+        let text = clean_confirmation_text("Perso", 3, false);
+        assert!(
+            text.contains("irréversible") && !text.contains("Corbeille"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn test_clean_confirmation_text_with_gmail_mentions_trash() {
+        let text = clean_confirmation_text("Gmail", 3, true);
+        assert!(
+            text.contains("Corbeille") && text.contains("irréversible"),
+            "{text}"
+        );
+    }
 
     #[test]
     fn test_is_excluded_staging_dir_with_quarantine() {

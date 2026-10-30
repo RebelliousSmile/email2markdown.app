@@ -152,6 +152,14 @@ pub(super) fn run() -> Result<()> {
                 handle_progress_update(&windows, window_id, update)
             }
             Event::UserEvent(AppCommand::RefreshMenu) => rebuild_tray_menu(&tray_icon),
+            Event::UserEvent(AppCommand::SetTooltip(text)) => {
+                if let Some(icon) = &tray_icon {
+                    let text = text.as_deref().unwrap_or(super::menu::DEFAULT_TOOLTIP);
+                    if let Err(e) = icon.set_tooltip(Some(text)) {
+                        eprintln!("Info-bulle du tray : {e}");
+                    }
+                }
+            }
             Event::UserEvent(AppCommand::EvalScript { window_id, js }) => {
                 handle_eval_script(&windows, window_id, js)
             }

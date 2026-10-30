@@ -28,13 +28,16 @@ mod menu_ids {
     pub const CLEAN_SERVER_PREFIX: &str = "clean_server_";
 }
 
+/// Tray tooltip when no operation is running.
+pub(super) const DEFAULT_TOOLTIP: &str = "Email to Markdown";
+
 /// Create the system tray icon with menu.
 pub(super) fn create_tray_icon() -> Result<TrayIcon> {
     let menu = create_menu()?;
     let icon = load_icon()?;
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("Email to Markdown")
+        .with_tooltip(DEFAULT_TOOLTIP)
         .with_icon(icon)
         .build()
         .context("Failed to create tray icon")?;

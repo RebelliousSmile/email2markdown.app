@@ -239,15 +239,16 @@ pub(super) fn build_config_window(
     Ok((window, webview, window_id))
 }
 
-/// `true` when a settings-page reply reports a successful account save, deletion or
-/// reload: the tray submenus list the accounts and must be rebuilt.
+/// `true` when a settings-page reply reports a successful save (general settings
+/// or account), deletion or reload: the tray submenus list the accounts, and
+/// "Nettoyer le serveur" depends on `delete_after_export`, so they are rebuilt.
 fn reply_changed_accounts(reply: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(reply) else {
         return false;
     };
     let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     let action = value.get("action").and_then(|v| v.as_str()).unwrap_or("");
-    ok && matches!(action, "save_account" | "reload")
+    ok && matches!(action, "save" | "save_account" | "reload")
 }
 
 // ── Update window ─────────────────────────────────────────────────────────────
