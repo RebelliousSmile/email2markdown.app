@@ -491,6 +491,12 @@ pub fn proof_is_complete(proof: &LocalSourceProof) -> bool {
         && proof.location.uid > 0
         && proof.location.uid_validity > 0
         && (proof.identity.provider_id.is_some() || proof.identity.message_id.is_some())
+        // The provider id is sent as `X-GM-MSGID <id>` in a server search.
+        && proof
+            .identity
+            .provider_id
+            .as_deref()
+            .is_none_or(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -140,6 +140,78 @@ mod utils_tests {
     }
 
     #[test]
+    fn test_sanitize_filename_with_separators_and_parent() {
+        assert_eq!(sanitize_filename("../a/b\\c"), ".._a_b_c");
+    }
+
+    #[test]
+    fn test_sanitize_filename_empty() {
+        assert_eq!(sanitize_filename(""), "_");
+        assert_eq!(sanitize_filename(" . "), "_");
+    }
+
+    #[test]
+    fn test_sanitize_filename_with_control_chars() {
+        assert_eq!(sanitize_filename("a\u{0}b\nc.pdf"), "a_b_c.pdf");
+    }
+
+    #[test]
+    fn test_sanitize_filename_with_reserved_name() {
+        assert_eq!(sanitize_filename("CON"), "_CON");
+        assert_eq!(sanitize_filename("nul.txt"), "_nul.txt");
+        assert_eq!(sanitize_filename("COM1.log"), "_COM1.log");
+        assert_eq!(sanitize_filename("CONSOLE.txt"), "CONSOLE.txt");
+    }
+
+    #[test]
+    fn test_sanitize_filename_with_trailing_dot_and_space() {
+        assert_eq!(sanitize_filename("rapport. "), "rapport");
+    }
+
+    #[test]
+    fn test_sanitize_filename_with_long_name_keeps_extension() {
+        let result = sanitize_filename(&format!("{}.pdf", "é".repeat(300)));
+        assert_eq!(result, format!("{}.pdf", "é".repeat(98)));
+    }
+
+    #[test]
+    fn test_imap_folder_relative_path_valid() {
+        for display in ["INBOX", "INBOX.Sent", "[Gmail]/Tous les messages"] {
+            assert_eq!(
+                imap_folder_relative_path(display).expect("safe folder"),
+                std::path::PathBuf::from(display.replace('.', "/")),
+                "{display}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_imap_folder_relative_path_empty_segments_skipped() {
+        assert_eq!(
+            imap_folder_relative_path("INBOX..Archives").expect("safe folder"),
+            std::path::Path::new("INBOX").join("Archives")
+        );
+    }
+
+    #[test]
+    fn test_imap_folder_relative_path_invalid() {
+        let cases = [
+            "/etc",
+            "\\\\hote\\partage",
+            "C:Windows",
+            "INBOX/../..",
+            "a\u{7}b",
+            "INBOX.CON",
+            "INBOX/Archive ",
+            "",
+            "...",
+        ];
+        for display in cases {
+            assert!(imap_folder_relative_path(display).is_err(), "{display:?}");
+        }
+    }
+
+    #[test]
     fn test_decode_imap_utf7_basic() {
         let result = decode_imap_utf7("INBOX");
         assert_eq!(result, "INBOX");
@@ -1387,6 +1459,19 @@ attachments:
         let root = PathBuf::from("/notes");
         assert!(join_safe_segments(&root, "Travail/Projets:Secrets").is_err());
         assert!(join_safe_segments(&root, "Travail/Projets*").is_err());
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_reserved_name() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/con").is_err());
+        assert!(join_safe_segments(&root, "Travail/LPT1.txt").is_err());
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_trailing_dot() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/Projets.").is_err());
     }
 
     // --- move_email: .md + flat sibling attachments moved and bare links preserved ---
@@ -2703,9 +2788,9 @@ mod contextual_export_tests {
     use email_to_markdown::contextual_export::{
         build_deletion_batch, build_search_batches, candidate_matches_rules, cleanup_stale_staging,
         convert_raw_contextual, deletion_rejection, evaluate_deletion_preflight, merge_candidates,
-        parse_header_candidate, parse_uid_fetch_response, read_source_proof, validate_uidvalidity,
-        ContextualLock, ConversionStatus, DeletionProvider, DeletionRequest, LocalSourceProof,
-        MessageConversionResult, MessageLocation, SourceIdentity,
+        parse_header_candidate, parse_uid_fetch_response, proof_is_complete, read_source_proof,
+        validate_uidvalidity, ContextualLock, ConversionStatus, DeletionProvider, DeletionRequest,
+        LocalSourceProof, MessageConversionResult, MessageLocation, SourceIdentity,
     };
     use email_to_markdown::route::MatchRule;
     use std::fs;
@@ -2968,6 +3053,22 @@ body
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_proof_is_complete_with_numeric_provider_id() {
+        let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
+        proof.identity.provider_id = Some("1789456123456789".into());
+        assert!(proof_is_complete(&proof));
+    }
+
+    #[test]
+    fn test_proof_is_complete_with_non_numeric_provider_id() {
+        let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
+        for id in ["", "12 OR ALL", "12\r\nA1 EXPUNGE"] {
+            proof.identity.provider_id = Some(id.into());
+            assert!(!proof_is_complete(&proof), "{id:?}");
+        }
     }
 
     #[test]

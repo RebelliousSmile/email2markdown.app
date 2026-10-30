@@ -18,6 +18,7 @@ static SAFE_PATH_SEGMENT_RE: LazyLock<Regex> =
 /// - contain a Windows separator `\`
 /// - are `..` or `.` (path-traversal)
 /// - contain any character outside `SAFE_PATH_SEGMENT_RE`
+/// - end with a dot, or are a Windows device name (`CON`, `NUL`, `COM1`…)
 ///
 /// Returns the joined `PathBuf` on success, or an error naming the bad segment.
 pub fn join_safe_segments(root: &Path, dest: &str) -> Result<PathBuf> {
@@ -29,6 +30,12 @@ pub fn join_safe_segments(root: &Path, dest: &str) -> Result<PathBuf> {
         }
         if seg == ".." || seg == "." || seg.contains('\\') {
             anyhow::bail!("invalid path segment in notes destination: {:?}", seg);
+        }
+        if seg.ends_with('.') || crate::utils::is_reserved_windows_name(seg) {
+            anyhow::bail!(
+                "notes destination segment is not a valid Windows name: {:?}",
+                seg
+            );
         }
         if !SAFE_PATH_SEGMENT_RE.is_match(seg) {
             anyhow::bail!(
@@ -1082,7 +1089,10 @@ pub fn resolve_contextual_destination(
         .with_context(|| format!("target directory does not exist: {}", target.display()))?;
 
     for destination in destinations {
-        let configured = join_safe_segments(notes_dir, &destination.path)?;
+        // A destination saved before a segment rule existed cannot be the target.
+        let Ok(configured) = join_safe_segments(notes_dir, &destination.path) else {
+            continue;
+        };
         if !configured.exists() {
             continue;
         }

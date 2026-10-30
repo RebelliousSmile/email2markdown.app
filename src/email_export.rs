@@ -1816,8 +1816,11 @@ impl ImapExporter {
             if !selected {
                 continue;
             }
-            let exported =
-                ExportedIndex::build(&base_export_directory.join(folder.display.replace('.', "/")));
+            let Ok(relative) = crate::utils::imap_folder_relative_path(&folder.display) else {
+                println!("Skipping folder with an unsafe name: {:?}", folder.display);
+                continue;
+            };
+            let exported = ExportedIndex::build(&base_export_directory.join(relative));
             let session = self.session.as_mut().context("Not connected")?;
             let uid_validity = session
                 .examine(&folder.raw)
@@ -2243,7 +2246,10 @@ impl ImapExporter {
         on_progress: Option<&(dyn Fn(usize, usize) + Send + Sync)>,
     ) -> Result<(ExportStats, RouteDecisions)> {
         let base_export_directory = PathBuf::from(&self.account.export_directory);
-        let export_directory = base_export_directory.join(folder.display.replace('.', "/"));
+        let export_directory = base_export_directory.join(
+            crate::utils::imap_folder_relative_path(&folder.display)
+                .context("refuse to export a folder with an unsafe name")?,
+        );
         // One walk of the export directory for the whole folder.
         let mut exported = if self.account.skip_existing {
             ExportedIndex::build(&export_directory)
@@ -2696,6 +2702,19 @@ impl ImapExporter {
                             &folder.display,
                         );
                     }
+                }
+
+                // The server chooses folder names: one that would write outside
+                // the export directory is reported and skipped, not fatal.
+                if let Err(e) = crate::utils::imap_folder_relative_path(&folder.display) {
+                    println!("Skipping folder: {e:#}");
+                    if let Some(s) = on_status {
+                        s(&format!(
+                            "{} ignoré : nom de dossier non sûr",
+                            folder.display
+                        ));
+                    }
+                    continue;
                 }
 
                 println!("Exporting {} ...", folder.display);
@@ -3782,13 +3801,22 @@ abc123
         assert_eq!(written.len(), 2);
     }
 
+    // Attachment names are sanitized to a valid name, so the PDF write is made
+    // to fail by a read-only export directory, which Windows does not enforce.
+    #[cfg(unix)]
     #[test]
     fn test_export_to_markdown_discards_quarantine_when_export_fails() {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::TempDir::new().unwrap();
         let root = temp.path().join("_skipped");
-        // The logo reaches the quarantine, then writing the PDF fails: a file
-        // name component over 255 bytes is refused by every filesystem.
-        let long = format!("{}.pdf", "a".repeat(300));
+        // The logo reaches the quarantine, then writing the PDF fails.
+        let long = "devis.pdf";
+        let blocked = temp.path().join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(blocked.join("probe"), "").is_ok() {
+            return; // running as root: permissions are not enforced
+        }
         let raw = String::from_utf8(mail_with_inline_logos("Devis", &["logo.png"]))
             .unwrap()
             .replace(
@@ -3799,7 +3827,7 @@ abc123
         account.skip_signature_images = true;
         let mut written = Vec::new();
         let mut ctx = ExportContext {
-            export_directory: temp.path(),
+            export_directory: &blocked,
             base_export_directory: temp.path(),
             account: &account,
             debug_mode: false,
