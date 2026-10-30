@@ -3,6 +3,7 @@ use email_to_markdown::contextual_export::{
     build_deletion_batch, ConversionStatus, DeletionOutcome,
 };
 use email_to_markdown::email_export::ImapExporter;
+use email_to_markdown::handled::{LedgerProofs, PurgeMatch, SeenHandled};
 use email_to_markdown::route::MatchRule;
 
 fn enabled() -> bool {
@@ -116,6 +117,59 @@ fn contextual_search_uses_uidvalidity_and_keeps_messages_unseen() {
             .iter()
             .all(|flag| !matches!(flag, imap::types::Flag::Seen))
     }));
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn handled_message_with_ledger_proof_is_purged_at_its_current_place() {
+    if !enabled() {
+        return;
+    }
+    std::env::set_var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST", "1");
+    let mut exporter = ImapExporter::new(account(), true);
+    exporter.connect().unwrap();
+    let candidates = exporter
+        .search_contextual(&[MatchRule::Correspondent("alice@example.com".into())])
+        .unwrap();
+    let candidate = &candidates[0];
+    let current = candidate.locations[0].clone();
+    let message_id = candidate.source.message_id.clone().unwrap();
+
+    // The ledger proof recorded at sorting time, for the same place.
+    let mut ledger = LedgerProofs::default();
+    ledger.proofs.insert(
+        message_id.clone(),
+        email_to_markdown::contextual_export::LocalSourceProof {
+            identity: candidate.source.clone(),
+            location: current.clone(),
+        },
+    );
+    let seen = SeenHandled {
+        message_id,
+        uid: current.uid,
+        provider_id: None,
+    };
+    let PurgeMatch::Purge(target) = ledger.match_seen(&seen, &current, false) else {
+        panic!("the stored proof targets this message");
+    };
+    let mut elsewhere = current.clone();
+    elsewhere.uid += 1000;
+    assert_eq!(
+        ledger.match_seen(&seen, &elsewhere, false),
+        PurgeMatch::Stale
+    );
+
+    let results = exporter.delete_discarded_messages(&[target]).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, DeletionOutcome::Deleted);
+    let after = exporter
+        .search_contextual(&[MatchRule::Correspondent("alice@example.com".into())])
+        .unwrap();
+    assert_eq!(
+        after.len(),
+        candidates.len() - 1,
+        "only the proved message is gone"
+    );
 }
 
 #[test]

@@ -173,6 +173,27 @@ enum Commands {
         backup: Option<PathBuf>,
     },
 
+    /// Read-only census of the messages still on the server of one account.
+    ///
+    /// Tells for each message why it is still there: handled with or without a
+    /// proof, staged as a note, or never exported. Nothing is modified.
+    AuditServer {
+        /// Account name, as in accounts.yaml
+        account: String,
+
+        /// Audit only this folder (display or raw IMAP name)
+        #[arg(long)]
+        folder: Option<String>,
+
+        /// List every message, not only the totals
+        #[arg(long)]
+        details: bool,
+
+        /// Path to config file (default: platform config dir)
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+
     /// Search and convert related emails into one configured local directory.
     Contextual {
         /// Exact configured destination directory selected in the file manager.
@@ -427,6 +448,12 @@ fn main() -> Result<()> {
                                     "\nExport completed for {}: {} exported, {} skipped, {} errors",
                                     account.name, total_exported, total_skipped, total_errors
                                 );
+                                let purge = email_to_markdown::email_export::purge_summary(
+                                    results.values(),
+                                );
+                                if !purge.is_empty() {
+                                    println!("{purge}");
+                                }
 
                                 // CLI mode (D8): apply routing decisions automatically, no review.
                                 // Pipeline order: Export → route decisions accumulated above → apply now.
@@ -560,6 +587,35 @@ fn main() -> Result<()> {
             } else {
                 println!("\n{} attachment(s) repaired.", count);
             }
+        }
+
+        Commands::AuditServer {
+            account,
+            folder,
+            details,
+            config,
+        } => {
+            let config_path = config.unwrap_or_else(config::accounts_yaml_path);
+            let config = Config::load(&config_path).context("Failed to load configuration")?;
+            let account = config
+                .accounts
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(&account))
+                .cloned()
+                .with_context(|| format!("account not found: {account}"))?;
+            let handled = email_to_markdown::handled::load(&account.name);
+            let proved = email_to_markdown::handled::load_proofs(&account.name)
+                .proofs
+                .into_keys()
+                .collect();
+            let mut exporter = ImapExporter::new(account.clone(), false);
+            exporter.connect().context("failed to connect")?;
+            let entries = exporter.audit_server(folder.as_deref(), &handled, &proved);
+            exporter.disconnect().ok();
+            print!(
+                "{}",
+                email_to_markdown::server_audit::render(&account.name, &entries?, details)
+            );
         }
 
         Commands::Contextual { directory } => {

@@ -25,6 +25,7 @@ mod menu_ids {
     pub const EXPORT_PREFIX: &str = "export_";
     pub const FIXHTML_PREFIX: &str = "fixhtml_";
     pub const RESUME_SORT_PREFIX: &str = "resume_sort_";
+    pub const CLEAN_SERVER_PREFIX: &str = "clean_server_";
 }
 
 /// Create the system tray icon with menu.
@@ -68,6 +69,20 @@ pub(super) fn create_menu() -> Result<Menu> {
         }
     }
     menu.append(&resume_submenu)?;
+
+    // "Nettoyer le serveur" — delete handled messages recorded without proof,
+    // after confirmation. Only for accounts that delete from the server.
+    let cleanup_accounts = tray_actions::get_cleanup_account_names().unwrap_or_default();
+    if !cleanup_accounts.is_empty() {
+        let clean_submenu = Submenu::new("Nettoyer le serveur", true);
+        for account in &cleanup_accounts {
+            let id = format!("{}{}", menu_ids::CLEAN_SERVER_PREFIX, account);
+            if let Err(e) = clean_submenu.append(&MenuItem::with_id(id, account, true, no_accel)) {
+                eprintln!("Menu nettoyer le serveur: {:#}", e);
+            }
+        }
+        menu.append(&clean_submenu)?;
+    }
 
     let outils_submenu = Submenu::new("Outils", true);
 
@@ -221,6 +236,11 @@ pub(super) fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResu
         id if id.starts_with(menu_ids::RESUME_SORT_PREFIX) => {
             if let Some(account_name) = id.strip_prefix(menu_ids::RESUME_SORT_PREFIX) {
                 tray_actions::action_resume_sort(account_name.to_string(), result_sender);
+            }
+        }
+        id if id.starts_with(menu_ids::CLEAN_SERVER_PREFIX) => {
+            if let Some(account_name) = id.strip_prefix(menu_ids::CLEAN_SERVER_PREFIX) {
+                tray_actions::action_clean_server(account_name.to_string(), result_sender);
             }
         }
         _ => {}

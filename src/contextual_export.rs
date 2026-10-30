@@ -293,13 +293,22 @@ pub type FetchedMessage = (u32, Option<String>, Vec<u8>);
 
 /// Parse a raw low-level UID FETCH response, including Gmail's provider id.
 pub fn parse_uid_fetch_response(raw: &[u8]) -> Result<Vec<FetchedMessage>> {
+    Ok(parse_fetch_response(raw)?
+        .into_iter()
+        .map(|(_, message)| message)
+        .collect())
+}
+
+/// Parse a raw low-level FETCH response that requested `UID`: each message
+/// with its sequence number.
+pub fn parse_fetch_response(raw: &[u8]) -> Result<Vec<(u32, FetchedMessage)>> {
     let mut remaining = raw;
     let mut result = Vec::new();
     while !remaining.is_empty() {
         let (rest, response) = Response::from_bytes(remaining)
             .map_err(|e| anyhow::anyhow!("parse IMAP FETCH response: {e:?}"))?;
         remaining = rest;
-        let Response::Fetch(_, attributes) = response else {
+        let Response::Fetch(seq, attributes) = response else {
             continue;
         };
         let mut uid = None;
@@ -317,7 +326,7 @@ pub fn parse_uid_fetch_response(raw: &[u8]) -> Result<Vec<FetchedMessage>> {
             }
         }
         if let (Some(uid), Some(header)) = (uid, header) {
-            result.push((uid, provider, header));
+            result.push((seq, (uid, provider, header)));
         }
     }
     Ok(result)
@@ -453,6 +462,17 @@ pub fn build_deletion_batch(results: &[MessageConversionResult]) -> Vec<Deletion
         .collect()
 }
 
+/// Key of the server message a proof targets: Gmail's provider id, which
+/// survives label changes, or the exact location.
+pub fn proof_target_key(proof: &LocalSourceProof) -> String {
+    proof.identity.provider_id.clone().unwrap_or_else(|| {
+        format!(
+            "{}\t{}\t{}",
+            proof.location.folder_raw, proof.location.uid_validity, proof.location.uid
+        )
+    })
+}
+
 pub fn proof_is_complete(proof: &LocalSourceProof) -> bool {
     !proof.identity.account.trim().is_empty()
         && !proof.identity.header_fingerprint.trim().is_empty()
@@ -466,13 +486,56 @@ pub enum DeletionOutcome {
     Deleted,
     AlreadyAbsent,
     RetryRequired(String),
-    StaleUidValidity { expected: u32, actual: Option<u32> },
+    StaleUidValidity {
+        expected: u32,
+        actual: Option<u32>,
+    },
+    /// The local note no longer proves this message (missing, or carrying
+    /// another proof): nothing was sent to the server, and a retry would fail
+    /// the same way.
+    Rejected(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageDeletionResult {
     pub proof: LocalSourceProof,
     pub outcome: DeletionOutcome,
+}
+
+/// Outcome counts of one deletion batch.
+#[derive(Debug, Default)]
+pub struct DeletionTally {
+    pub deleted: usize,
+    pub stale_search: bool,
+    /// Requests worth retrying with the same proof.
+    pub retry: Vec<DeletionRequest>,
+    /// Requests whose note no longer proves the message: not retried.
+    pub rejected: usize,
+}
+
+/// Match each request to its own result by proof. Results do not follow the
+/// request order: generic deletion groups them by folder. A request without a
+/// result was not asked of the server (deletion disabled) and is not counted.
+pub fn tally_deletions(
+    requests: Vec<DeletionRequest>,
+    results: &[MessageDeletionResult],
+) -> DeletionTally {
+    let mut tally = DeletionTally::default();
+    for request in requests {
+        let Some(result) = results.iter().find(|result| result.proof == request.proof) else {
+            continue;
+        };
+        match result.outcome {
+            DeletionOutcome::Deleted | DeletionOutcome::AlreadyAbsent => tally.deleted += 1,
+            DeletionOutcome::StaleUidValidity { .. } => {
+                tally.stale_search = true;
+                tally.retry.push(request);
+            }
+            DeletionOutcome::RetryRequired(_) => tally.retry.push(request),
+            DeletionOutcome::Rejected(_) => tally.rejected += 1,
+        }
+    }
+    tally
 }
 
 /// Exclusive lock for one target/account pair. The OS releases the lock even
