@@ -1952,6 +1952,30 @@ attachments:
         );
     }
 
+    #[test]
+    fn test_delete_email_same_attachment_name_keeps_both() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("staging");
+        fs::create_dir_all(&src_dir).unwrap();
+        for (note, content) in [("first.md", "first PDF"), ("second.md", "second PDF")] {
+            fs::write(src_dir.join("invoice.pdf"), content).unwrap();
+            let md = src_dir.join(note);
+            fs::write(&md, "---\nattachments:\n  - invoice.pdf\n---\nBody\n").unwrap();
+
+            delete_email(&md).unwrap();
+        }
+
+        let deleted = src_dir.join("_deleted");
+        assert_eq!(
+            fs::read_to_string(deleted.join("invoice.pdf")).unwrap(),
+            "first PDF"
+        );
+        assert_eq!(
+            fs::read_to_string(deleted.join("invoice_2.pdf")).unwrap(),
+            "second PDF"
+        );
+    }
+
     // delete_email refuses a symlink source (no FS mutation), mirroring move_email.
     #[cfg(not(windows))]
     #[test]
@@ -4353,6 +4377,26 @@ mod dest_gui_tests {
         reorder_destinations(&mut cfg, &["Pro/Clients", "Perso/Banque", "Perso/Work"]);
         let paths: Vec<&str> = cfg.destinations.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths, vec!["Pro/Clients", "Perso/Banque", "Perso/Work"]);
+    }
+
+    /// reorder_destinations: the entries left out keep their relative order.
+    #[test]
+    fn test_reorder_destinations_partial_order_keeps_others() {
+        let mut cfg = sample();
+        cfg.destinations.push(entry("Pro/Fournisseurs"));
+
+        reorder_destinations(&mut cfg, &["Perso/Banque"]);
+
+        let paths: Vec<&str> = cfg.destinations.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "Perso/Banque",
+                "Perso/Work",
+                "Pro/Clients",
+                "Pro/Fournisseurs"
+            ]
+        );
     }
 
     /// suggest_confirm: batch upsert_entry adds Domain rules for each pair.

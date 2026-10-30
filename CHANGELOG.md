@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Import Thunderbird non destructif** : l'import, depuis le CLI comme depuis la barre des tâches, ajoute seulement les comptes absents de `accounts.yaml` et conserve tels quels ceux qui y figurent déjà. Le fichier précédent est d'abord copié dans `accounts.yaml.bak`, et le résumé indique les comptes ajoutés, ceux qui sont conservés et l'emplacement de la sauvegarde.
+- **Pièces jointes homonymes des notes supprimées** : deux notes supprimées qui portaient une pièce jointe du même nom n'en écrasent plus une dans `_deleted/` ; la seconde reçoit un suffixe numérique (`facture_2.pdf`).
+- **Ordre des destinations** : réordonner une destination ne bouleverse plus l'ordre relatif des autres.
+
 ### Security
 
 - **Dépendances** : `event-listener` (5.4.2) et `rand` (0.8.8, 0.9.5) corrigent des avis de code non sûr (RUSTSEC-2026-0221, RUSTSEC-2026-0097). La dépendance inutilisée `trash` est retirée, `imap` est épinglée sur sa préversion. Les avis restants, tous transitifs, sont tolérés un par un, avec leur raison, dans `.cargo/audit.toml`.

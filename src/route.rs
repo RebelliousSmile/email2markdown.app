@@ -484,7 +484,8 @@ pub fn delete_email(md_path: &Path) -> Result<()> {
         // Create the _deleted folder lazily, on first real move.
         fs::create_dir_all(&deleted_dir)
             .with_context(|| format!("failed to create {}", deleted_dir.display()))?;
-        let att_dest = deleted_dir.join(file_name);
+        // Two deleted notes may carry attachments of the same name: never overwrite.
+        let att_dest = deleted_dir.join(unique_name_in(&deleted_dir, &file_name.to_string_lossy()));
 
         if fs::rename(&att_src, &att_dest).is_err() {
             // Cross-device fallback: copy then remove.

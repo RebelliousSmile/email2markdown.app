@@ -869,6 +869,9 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
              • Oui    — importer comptes + mots de passe\n\
              • Non    — importer les comptes uniquement\n\
              • Annuler — ne rien faire\n\n\
+             Les comptes déjà configurés sont conservés tels quels ; seuls les \
+             nouveaux sont ajoutés, et l'état précédent est sauvegardé dans \
+             accounts.yaml.bak.\n\n\
              (Thunderbird doit être fermé pour extraire les mots de passe)",
         )
         .set_buttons(rfd::MessageButtons::YesNoCancel)
@@ -950,16 +953,9 @@ fn run_import_thunderbird(extract_passwords: bool) -> Result<String> {
         return Ok("No IMAP accounts found in Thunderbird".to_string());
     }
 
-    let yaml_content = thunderbird::generate_accounts_yaml(&accounts);
     let output_path = config::accounts_yaml_path();
-
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(&output_path, &yaml_content)?;
-
-    let mut message = format!("Imported {} account(s)", accounts.len());
+    let summary = thunderbird::write_accounts_merged(&accounts, &output_path)?;
+    let mut message = summary.describe(&output_path);
 
     if extract_passwords {
         match thunderbird::extract_passwords(&profile, None) {

@@ -287,17 +287,10 @@ fn main() -> Result<()> {
                 println!("   - {} ({})", acc.name, acc.server);
             }
 
-            // Generate accounts.yaml
-            let yaml_content = thunderbird::generate_accounts_yaml(&accounts);
+            // Merge into accounts.yaml: existing accounts are never overwritten
             let output = output.unwrap_or_else(config::accounts_yaml_path);
-
-            // Create output directory if needed
-            if let Some(parent) = output.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            std::fs::write(&output, &yaml_content)?;
-            println!("\nGenerated: {}", output.display());
+            let summary = thunderbird::write_accounts_merged(&accounts, &output)?;
+            println!("\n{}", summary.describe(&output));
 
             // Generate .env template if requested
             if generate_env {
