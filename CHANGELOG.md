@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Sous-commande `dest gui`** : elle ne faisait que demander au tray déjà lancé d'ouvrir la fenêtre des destinations, et échouait sans lui. La fenêtre reste accessible depuis le menu de la barre des tâches (« Gérer les destinations »).
+
 ## [0.22.1] - 2026-10-30
 
 ### Security
