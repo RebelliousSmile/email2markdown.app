@@ -2335,7 +2335,8 @@ impl ImapExporter {
         for ((raw, display, _), entries) in folders {
             let session = self.session.as_mut().context("Not connected")?;
             session.examine(&raw)?;
-            for chunk in entries.chunks(crate::contextual_export::HEADER_UID_BATCH) {
+            // Full bodies: small batches bound memory, each converted before the next fetch.
+            for chunk in entries.chunks(BODY_FETCH_BATCH) {
                 let uid_set = chunk
                     .iter()
                     .map(|(_, location)| location.uid.to_string())

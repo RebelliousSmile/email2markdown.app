@@ -106,8 +106,8 @@ pub enum AppCommand {
         js: String,
     },
     /// Open the route review window after an Export.
-    /// Carries the list of (staging_path, RouteDecision) produced by export_account.
-    OpenRouteReview(RouteDecisions),
+    /// Carries the decisions produced by export_account and their table rows.
+    OpenRouteReview(RouteReview),
     /// Persist a new routing rule into destinations.yaml and re-inject the updated tree.
     /// IO is done in the event loop (not in the webview IPC callback).
     PersistRoutingRule {
@@ -227,6 +227,21 @@ enum WState {
 static APP_PROXY: OnceLock<EventLoopProxy<AppCommand>> = OnceLock::new();
 
 /// Send a command to the main event loop. Returns Err if the loop is not running yet.
+/// Route decisions with their review table rows, built off the event loop.
+#[derive(Debug)]
+pub struct RouteReview {
+    decisions: RouteDecisions,
+    rows: Vec<serde_json::Value>,
+}
+
+impl RouteReview {
+    /// Read each staging note once to build its row; call it from a worker thread.
+    pub fn new(decisions: RouteDecisions) -> Self {
+        let rows = windows::route_rows(&decisions);
+        Self { decisions, rows }
+    }
+}
+
 pub fn send_command(cmd: AppCommand) -> Result<()> {
     APP_PROXY
         .get()

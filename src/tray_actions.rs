@@ -668,9 +668,11 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
                 // The AutoClose sent by ProgressUpdate::Done will close the progress
                 // window; the route review window opens after that via the event loop.
                 if !decisions.is_empty() {
-                    if let Err(e) = crate::tray::send_command(
-                        crate::tray::AppCommand::OpenRouteReview(decisions),
-                    ) {
+                    if let Err(e) =
+                        crate::tray::send_command(crate::tray::AppCommand::OpenRouteReview(
+                            crate::tray::RouteReview::new(decisions),
+                        ))
+                    {
                         eprintln!("Ouverture de la revue du tri impossible : {:#}", e);
                     }
                 }
@@ -769,9 +771,9 @@ pub fn action_resume_sort(account_name: String, result_sender: Sender<ActionResu
             ));
         }
         Ok(decisions) => {
-            if let Err(e) =
-                crate::tray::send_command(crate::tray::AppCommand::OpenRouteReview(decisions))
-            {
+            if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenRouteReview(
+                crate::tray::RouteReview::new(decisions),
+            )) {
                 let _ = result_sender.send(ActionResult::Error(format!(
                     "Ouverture de la revue : {:#}",
                     e
