@@ -79,14 +79,24 @@ pub fn append_error_to(path: &Path, account: &str, error: &str) -> Result<()> {
 
 /// Best effort: a log failure never blocks a deletion, it is only reported.
 pub fn record_results(results: &[MessageDeletionResult]) {
-    if let Err(error) = append_results_to(&log_path(), results) {
+    record_results_to(&log_path(), results);
+}
+
+/// `record_results` on the log at `path`.
+pub fn record_results_to(path: &Path, results: &[MessageDeletionResult]) {
+    if let Err(error) = append_results_to(path, results) {
         eprintln!("warning: deletion log not updated: {error:#}");
     }
 }
 
 /// Best effort: a log failure never blocks a deletion, it is only reported.
 pub fn record_error(account: &str, error: &str) {
-    if let Err(log_error) = append_error_to(&log_path(), account, error) {
+    record_error_to(&log_path(), account, error);
+}
+
+/// `record_error` on the log at `path`.
+pub fn record_error_to(path: &Path, account: &str, error: &str) {
+    if let Err(log_error) = append_error_to(path, account, error) {
         eprintln!("warning: deletion log not updated: {log_error:#}");
     }
 }

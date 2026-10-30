@@ -440,6 +440,18 @@ pub struct DeletionRequest {
     pub proof: LocalSourceProof,
 }
 
+/// Why a purge request must not delete its message, `None` when it may: the
+/// note must still exist and carry this very proof.
+pub fn deletion_rejection(request: &DeletionRequest) -> Result<Option<&'static str>> {
+    if !request.markdown.is_file() {
+        return Ok(Some("note absente"));
+    }
+    if read_source_proof(&request.markdown)?.as_ref() != Some(&request.proof) {
+        return Ok(Some("la note porte une autre preuve"));
+    }
+    Ok(None)
+}
+
 pub fn build_deletion_batch(results: &[MessageConversionResult]) -> Vec<DeletionRequest> {
     results
         .iter()
@@ -479,6 +491,12 @@ pub fn proof_is_complete(proof: &LocalSourceProof) -> bool {
         && proof.location.uid > 0
         && proof.location.uid_validity > 0
         && (proof.identity.provider_id.is_some() || proof.identity.message_id.is_some())
+        // The provider id is sent as `X-GM-MSGID <id>` in a server search.
+        && proof
+            .identity
+            .provider_id
+            .as_deref()
+            .is_none_or(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -760,6 +778,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
         contextual_account.skip_existing = false;
         contextual_account.export_directory = staging.to_string_lossy().into_owned();
         let mut context = crate::email_export::ExportContext {
+            errors: Vec::new(),
             export_directory: &staging,
             base_export_directory: &staging,
             account: &contextual_account,
@@ -782,6 +801,9 @@ pub(crate) fn convert_raw_contextual_unlocked(
             &mut context,
         )?
         .context("contextual converter skipped a selected message")?;
+        for error in &context.errors {
+            eprintln!("Export contextuel : {error}");
+        }
         install_staged(
             &effective_target,
             &staging,

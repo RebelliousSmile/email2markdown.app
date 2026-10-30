@@ -263,7 +263,7 @@ pub fn reorder_destinations(config: &mut DestinationsConfig, order: &[&str]) {
             .iter()
             .position(|e| e.path.eq_ignore_ascii_case(path))
         {
-            reordered.push(config.destinations.swap_remove(pos));
+            reordered.push(config.destinations.remove(pos));
         }
     }
     reordered.append(&mut config.destinations);

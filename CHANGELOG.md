@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Import Thunderbird non destructif** : l'import, depuis le CLI comme depuis la barre des tâches, ajoute seulement les comptes absents de `accounts.yaml` et conserve tels quels ceux qui y figurent déjà. Le fichier précédent est d'abord copié dans `accounts.yaml.bak`, et le résumé indique les comptes ajoutés, ceux qui sont conservés et l'emplacement de la sauvegarde.
+- **Pièces jointes homonymes des notes supprimées** : deux notes supprimées qui portaient une pièce jointe du même nom n'en écrasent plus une dans `_deleted/` ; la seconde reçoit un suffixe numérique (`facture_2.pdf`).
+- **Ordre des destinations** : réordonner une destination ne bouleverse plus l'ordre relatif des autres.
+- **Revue de routage réactive** : l'application des décisions, qui parcourt tout le coffre de notes, tourne désormais hors de la boucle d'événements. La fenêtre reste déplaçable pendant le traitement, le bouton affiche « Application en cours… », et un second envoi ou une suppression est refusé tant que le traitement n'est pas terminé.
+- **Liens de citation** : les notes rangées sous un dossier `_*` (préparation, quarantaine, notes supprimées) ne sont plus jamais proposées comme cible d'un lien de citation.
+
+### Changed
+
+- **Export et suppression plus rapides sur le serveur** : l'export télécharge les messages par lots de dix au lieu d'un par un. La pré-vérification ne lit plus que les en-têtes utiles, et récupère en même temps l'identifiant Gmail. Le registre des messages traités n'est plus lu qu'une seule fois par export, au lieu d'une fois par dossier. Sur un serveur IMAP standard, les messages écartés sont supprimés par lots de 500 : une recherche, un marquage et une purge par lot, au lieu de trois commandes par message.
+
+### Security
+
+- **Dépendances** : `event-listener` (5.4.2) et `rand` (0.8.8, 0.9.5) corrigent des avis de code non sûr (RUSTSEC-2026-0221, RUSTSEC-2026-0097). La dépendance inutilisée `trash` est retirée, `imap` est épinglée sur sa préversion. Les avis restants, tous transitifs, sont tolérés un par un, avec leur raison, dans `.cargo/audit.toml`.
+- **Licence** : le texte de la licence MIT est ajouté (`LICENSE`).
+
+### Removed
+
+- **Sous-commande `dest gui`** : elle ne faisait que demander au tray déjà lancé d'ouvrir la fenêtre des destinations, et échouait sans lui. La fenêtre reste accessible depuis le menu de la barre des tâches (« Gérer les destinations »).
+
 ## [0.22.1] - 2026-10-30
 
 ### Security

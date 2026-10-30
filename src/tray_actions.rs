@@ -91,9 +91,9 @@ pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualL
         .as_deref()
         .map(std::path::Path::new)
         .context("notes_dir is not configured")?;
-    let destinations_file = route::destinations_path();
+    let destinations_file = route::destinations_path()?;
     ensure_contextual_destination(notes_dir, target, &destinations_file)?;
-    let destinations = route::load_destinations();
+    let destinations = route::load_destinations()?;
     let configured_names: Vec<String> = cfg
         .accounts
         .iter()
@@ -235,7 +235,7 @@ pub fn run_contextual_search(
         anyhow::bail!("No password found for {}", account.name);
     }
     let organize_by_date = Settings::load(&config::settings_path())
-        .unwrap_or_default()
+        .context("failed to load settings")?
         .organize_by_date;
     let mut exporter = ImapExporter::new(account, false);
     exporter
@@ -295,7 +295,7 @@ pub fn run_contextual_batch(
         .clone();
     let delete_after_export = account.delete_after_export;
     let organize_by_date = Settings::load(&config::settings_path())
-        .unwrap_or_default()
+        .context("failed to load settings")?
         .organize_by_date;
     let mut exporter = ImapExporter::new(account, false);
     exporter
@@ -655,7 +655,7 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
                     if let Err(e) = crate::tray::send_command(
                         crate::tray::AppCommand::OpenRouteReview(decisions),
                     ) {
-                        eprintln!("Failed to open route review window: {:#}", e);
+                        eprintln!("Ouverture de la revue du tri impossible : {:#}", e);
                     }
                 }
             }
@@ -794,9 +794,9 @@ fn scan_staged_decisions(account_name: &str) -> Result<RouteDecisions> {
         return Ok(Vec::new());
     }
 
-    let dests = route::load_destinations();
+    let dests = route::load_destinations()?;
     let organize_by_date = Settings::load(&config::settings_path())
-        .unwrap_or_default()
+        .context("failed to load settings")?
         .organize_by_date;
     let mut decisions = Vec::new();
 
@@ -869,6 +869,9 @@ pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
              • Oui    — importer comptes + mots de passe\n\
              • Non    — importer les comptes uniquement\n\
              • Annuler — ne rien faire\n\n\
+             Les comptes déjà configurés sont conservés tels quels ; seuls les \
+             nouveaux sont ajoutés, et l'état précédent est sauvegardé dans \
+             accounts.yaml.bak.\n\n\
              (Thunderbird doit être fermé pour extraire les mots de passe)",
         )
         .set_buttons(rfd::MessageButtons::YesNoCancel)
@@ -950,16 +953,9 @@ fn run_import_thunderbird(extract_passwords: bool) -> Result<String> {
         return Ok("No IMAP accounts found in Thunderbird".to_string());
     }
 
-    let yaml_content = thunderbird::generate_accounts_yaml(&accounts);
     let output_path = config::accounts_yaml_path();
-
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(&output_path, &yaml_content)?;
-
-    let mut message = format!("Imported {} account(s)", accounts.len());
+    let summary = thunderbird::write_accounts_merged(&accounts, &output_path)?;
+    let mut message = summary.describe(&output_path);
 
     if extract_passwords {
         match thunderbird::extract_passwords(&profile, None) {
@@ -1067,12 +1063,12 @@ pub fn action_open_documentation() -> Result<()> {
     for path in &readme_paths {
         let readme_path = PathBuf::from(path);
         if readme_path.exists() {
-            open::that(&readme_path).context("Failed to open documentation")?;
+            open::that(&readme_path).context("ouverture du README impossible")?;
             return Ok(());
         }
     }
 
-    Err(anyhow::anyhow!("README.md not found"))
+    Err(anyhow::anyhow!("README.md introuvable"))
 }
 
 /// Open settings.yaml in the default editor (creates a template if absent).
@@ -1214,30 +1210,47 @@ pub fn action_clean_server(account_name: String, result_sender: Sender<ActionRes
         return;
     }
     thread::spawn(move || {
-        let confirm = |account: &str, count: usize| {
-            confirm_yes_no(
+        let _ = crate::tray::send_command(crate::tray::AppCommand::SetTooltip(Some(format!(
+            "Nettoyage du serveur en cours ({account_name})…"
+        ))));
+        let confirm = |account: &str, count: usize, is_gmail: bool| {
+            confirm_deletion(
                 "Nettoyer le serveur",
-                &format!(
-                    "{count} message(s) de {account} sont déjà triés ou écartés mais restent sur le serveur.\n\n\
-                     Le registre ne les connaît que par leur Message-ID : l'appariement repose sur cet identifiant seul.\n\n\
-                     Les supprimer du serveur ?"
-                ),
+                &clean_confirmation_text(account, count, is_gmail),
             )
         };
         let result = match clean_server(&account_name, confirm) {
             Ok(message) => ActionResult::Success("Nettoyer le serveur".to_string(), message),
             Err(e) => ActionResult::Error(format!("Nettoyer le serveur : {:#}", e)),
         };
+        let _ = crate::tray::send_command(crate::tray::AppCommand::SetTooltip(None));
         CLEANING_SERVER.store(false, Ordering::SeqCst);
         let _ = result_sender.send(result);
     });
+}
+
+/// Question asked before the cleanup deletes `count` messages of `account`.
+/// Gmail moves them to its Trash, which the cleanup then purges as well.
+fn clean_confirmation_text(account: &str, count: usize, is_gmail: bool) -> String {
+    let irreversible = if is_gmail {
+        "Sur Gmail, ils passent par la Corbeille, d'où ils sont aussitôt purgés : \
+         la suppression est irréversible."
+    } else {
+        "La suppression est irréversible : le serveur ne les conserve pas."
+    };
+    format!(
+        "{count} message(s) de {account} sont déjà triés ou écartés mais restent sur le serveur.\n\n\
+         Le registre ne les connaît que par leur Message-ID : l'appariement repose sur cet identifiant seul.\n\n\
+         {irreversible}\n\n\
+         Les supprimer du serveur ?"
+    )
 }
 
 /// Yes/No question that stays above the other windows, default answer No.
 /// The cleanup asks only after its census, once the tray menu click no longer
 /// grants the right to take the foreground: a plain dialog opens behind.
 #[cfg(windows)]
-fn confirm_yes_no(title: &str, text: &str) -> bool {
+fn confirm_deletion(title: &str, text: &str) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
     };
@@ -1259,126 +1272,31 @@ fn confirm_yes_no(title: &str, text: &str) -> bool {
     answer == IDYES
 }
 
+/// `rfd` cannot pick the default button: the button that deletes says so.
+/// Every backend answers a custom button with its label, Cancel included.
 #[cfg(not(windows))]
-fn confirm_yes_no(title: &str, text: &str) -> bool {
+fn confirm_deletion(title: &str, text: &str) -> bool {
+    const DELETE: &str = "Supprimer définitivement";
     rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
         .set_title(title)
         .set_description(text)
-        .set_buttons(rfd::MessageButtons::YesNo)
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(
+            DELETE.to_string(),
+            "Annuler".to_string(),
+        ))
         .show()
-        == rfd::MessageDialogResult::Yes
+        == rfd::MessageDialogResult::Custom(DELETE.to_string())
 }
 
-/// Complete the ledger from the routed notes, list the legacy handled
-/// messages still on the server, and delete them once `confirm` agrees.
-/// Successful deletions are recorded in the ledger with their proof.
-fn clean_server(account_name: &str, confirm: impl Fn(&str, usize) -> bool) -> Result<String> {
-    use crate::contextual_export::DeletionOutcome;
-
-    dotenvy::from_path(config::env_file_path()).ok();
-    let config =
-        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
-    let account = config
-        .get_account(account_name)
-        .context(format!("Account '{}' not found", account_name))?
-        .clone();
-    if !account.delete_after_export {
-        anyhow::bail!("{account_name} ne supprime pas les messages du serveur");
-    }
-    if account.password.is_none() {
-        anyhow::bail!(
-            "No password found for {}. Check {}",
-            account_name,
-            config::env_file_path().display()
-        );
-    }
-
-    // Routed notes may still carry the proof the ledger lacks.
-    let completed = match Settings::load(&config::settings_path())
-        .unwrap_or_default()
-        .notes_dir
-    {
-        Some(notes_dir) => {
-            crate::handled::complete_from_notes(std::path::Path::new(&notes_dir), &account.name)
-                .context("failed to complete the ledger from notes")?
-        }
-        None => 0,
-    };
-
-    let handled = crate::handled::load(&account.name);
-    let proved = crate::handled::load_proofs(&account.name)
-        .proofs
-        .into_keys()
-        .collect();
-    let mut exporter = ImapExporter::new(account.clone(), false);
-    exporter.connect().context("failed to connect")?;
-    let entries = exporter.audit_server(None, &handled, &proved);
-    exporter.disconnect().ok();
-    let entries = entries?;
-    let targets = crate::server_audit::legacy_proofs(&entries);
-    // A Gmail message seen under several labels is one target, not several.
-    let untargetable = entries
-        .iter()
-        .filter(|e| e.status == crate::server_audit::ServerStatus::HandledLegacy)
-        .filter(|e| e.proof.is_none())
-        .count();
-
-    let mut notes = Vec::new();
-    if completed > 0 {
-        notes.push(format!(
-            "{completed} preuve(s) retrouvée(s) dans les notes, purgées au prochain export"
-        ));
-    }
-    if untargetable > 0 {
-        notes.push(format!(
-            "{untargetable} message(s) impossibles à cibler exactement, laissés sur le serveur"
-        ));
-    }
-    let notes = notes
-        .iter()
-        .map(|note| format!(" — {note}"))
-        .collect::<String>();
-
-    if targets.is_empty() {
-        return Ok(format!("Rien à nettoyer pour {account_name}{notes}"));
-    }
-    if !confirm(account_name, targets.len()) {
-        return Ok(format!("Nettoyage annulé, rien n'a été supprimé{notes}"));
-    }
-
-    // The proofs carry UIDVALIDITY: reconnecting after the dialog is safe.
-    let mut exporter = ImapExporter::new(account.clone(), false);
-    exporter.connect().context("failed to connect")?;
-    let results = exporter.delete_discarded_messages(&targets);
-    exporter.disconnect().ok();
-    let results = match results {
-        Ok(results) => results,
-        Err(e) => {
-            crate::deletion_log::record_error(&account.name, &format!("{e:#}"));
-            return Err(e);
-        }
-    };
-    crate::deletion_log::record_results(&results);
-    let gone: Vec<_> = results
-        .iter()
-        .filter(|r| {
-            matches!(
-                r.outcome,
-                DeletionOutcome::Deleted | DeletionOutcome::AlreadyAbsent
-            )
-        })
-        .map(|r| &r.proof)
-        .collect();
-    crate::handled::record_proofs(gone.iter().copied());
-    let deleted = results
-        .iter()
-        .filter(|r| r.outcome == DeletionOutcome::Deleted)
-        .count();
-    let failed = results.len() - gone.len();
-    Ok(format!(
-        "{deleted} supprimé(s), {} déjà absent(s), {failed} échec(s){notes}",
-        gone.len() - deleted
-    ))
+/// Clean the server of the user's config directory: see
+/// `server_cleanup::clean_server_in`.
+fn clean_server(account_name: &str, confirm: impl Fn(&str, usize, bool) -> bool) -> Result<String> {
+    crate::server_cleanup::clean_server_in(
+        &crate::server_cleanup::CleanupPaths::from_app_config(),
+        account_name,
+        confirm,
+    )
 }
 
 pub fn get_account_names() -> Result<Vec<String>> {
@@ -1401,13 +1319,32 @@ pub fn get_account_names() -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        contextual_summary_message, is_excluded_staging_dir, set_export_dir_in, set_notes_dir_in,
+        clean_confirmation_text, contextual_summary_message, is_excluded_staging_dir,
+        set_export_dir_in, set_notes_dir_in,
     };
     use crate::config::Settings;
     use std::fs;
     use tempfile::TempDir;
 
     const INVALID_YAML: &str = "export_base_dir: [unclosed\naccounts: : :\n";
+
+    #[test]
+    fn test_clean_confirmation_text_says_irreversible() {
+        let text = clean_confirmation_text("Perso", 3, false);
+        assert!(
+            text.contains("irréversible") && !text.contains("Corbeille"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn test_clean_confirmation_text_with_gmail_mentions_trash() {
+        let text = clean_confirmation_text("Gmail", 3, true);
+        assert!(
+            text.contains("Corbeille") && text.contains("irréversible"),
+            "{text}"
+        );
+    }
 
     #[test]
     fn test_is_excluded_staging_dir_with_quarantine() {

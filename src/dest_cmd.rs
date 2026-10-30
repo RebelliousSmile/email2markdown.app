@@ -63,15 +63,11 @@ pub enum DestCommand {
 
     /// Scan the default folder and interactively suggest domain rules
     Suggest,
-
-    /// Open the destinations management GUI window (requires --features tray)
-    #[cfg(feature = "tray")]
-    Gui,
 }
 
 /// Entry point dispatched from `main`.
 pub fn run(args: DestArgs) -> Result<()> {
-    let dest_file = route::destinations_path();
+    let dest_file = route::destinations_path()?;
 
     let Some(command) = args.command else {
         return interactive(&dest_file);
@@ -134,20 +130,6 @@ pub fn run(args: DestArgs) -> Result<()> {
         }
 
         DestCommand::Suggest => suggest(&dest_file)?,
-
-        #[cfg(feature = "tray")]
-        DestCommand::Gui => {
-            println!("Ouverture de la fenêtre destinations…");
-            if let Err(e) =
-                crate::tray::send_command(crate::tray::AppCommand::OpenDestGui { dest_file })
-            {
-                eprintln!(
-                    "Erreur : impossible d'ouvrir la fenêtre (tray non démarré ?) — {:#}",
-                    e
-                );
-                std::process::exit(1);
-            }
-        }
     }
 
     Ok(())
@@ -423,7 +405,8 @@ fn rule_label(rule: &DestinationRule) -> String {
 /// Interactive: scan the default folder, group emails by sender domain, and let
 /// the user assign a destination to each uncovered domain.
 fn suggest(dest_file: &Path) -> Result<()> {
-    let settings = config::Settings::load(&config::settings_path()).unwrap_or_default();
+    let settings =
+        config::Settings::load(&config::settings_path()).context("failed to load settings")?;
     let mut cfg = destinations::load_yaml(dest_file)
         .with_context(|| format!("failed to load {}", dest_file.display()))?;
 

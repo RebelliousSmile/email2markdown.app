@@ -13,10 +13,11 @@ pub mod network; // [3][4] Progress indicator et retry logic
 pub mod quote_link; // Replace a quoted message by a wikilink to its note
 pub mod route;
 pub mod server_audit; // Read-only census of messages still on the server
+pub mod server_cleanup; // "Nettoyer le serveur": guard, plan, deletion, recording
 pub mod thunderbird; // [1] Import automatique depuis Thunderbird
 #[cfg(feature = "tray")]
-pub mod updater;
-pub mod utils; // Auto-update: GitHub release check and binary replacement
+pub mod updater; // Auto-update: GitHub release check and binary replacement
+pub mod utils;
 
 // System tray modules (only available with the "tray" feature)
 #[cfg(feature = "tray")]

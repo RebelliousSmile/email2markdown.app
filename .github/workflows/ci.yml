@@ -56,9 +56,8 @@ jobs:
         with:
           toolchain: "1.93.0" # same as rust-toolchain.toml
       - run: cargo install cargo-audit --locked --version 0.22.2
-      # Fails on a vulnerability. Unmaintained/unsound notices are reported as
-      # warnings; the ones open on 2026-10-12 are all transitive (fxhash, instant,
-      # proc-macro-error, event-listener, glib, rand) and were left open.
+      # Fails on a vulnerability. Tolerated notices, each with its reason, are
+      # listed in .cargo/audit.toml.
       - run: cargo audit
 
   tools:
@@ -86,10 +85,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
       - name: Start pinned fixture
         run: docker compose -f tests/fixtures/imap/compose.yaml up -d --wait
-      - name: Run selected ignored IMAP test
+      - name: Run every ignored Dovecot test
         env:
           EMAIL_TO_MARKDOWN_IMAP_TEST: "1"
-        run: cargo test --locked --test imap_integration contextual_search_uses_uidvalidity_and_keeps_messages_unseen -- --ignored --nocapture
+        run: cargo test --locked --test imap_integration -- --ignored --skip gmail_ --nocapture
       - name: Destroy fixture
         if: always()
         run: docker compose -f tests/fixtures/imap/compose.yaml down -v

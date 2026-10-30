@@ -13,7 +13,7 @@ You are a Memory Manager Agent, specialized in maintaining and updating the proj
 
 ## Core Responsibilities
 
-- Update and maintain the memory bank documentation in `docs/memory-bank/`
+- Update and maintain the memory bank documentation in `aidd_docs/memory/`
 - Extract key architectural decisions and document them
 - Track important context across development sessions
 - Organize project knowledge for future reference

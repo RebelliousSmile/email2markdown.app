@@ -140,6 +140,78 @@ mod utils_tests {
     }
 
     #[test]
+    fn test_sanitize_filename_with_separators_and_parent() {
+        assert_eq!(sanitize_filename("../a/b\\c"), ".._a_b_c");
+    }
+
+    #[test]
+    fn test_sanitize_filename_empty() {
+        assert_eq!(sanitize_filename(""), "_");
+        assert_eq!(sanitize_filename(" . "), "_");
+    }
+
+    #[test]
+    fn test_sanitize_filename_with_control_chars() {
+        assert_eq!(sanitize_filename("a\u{0}b\nc.pdf"), "a_b_c.pdf");
+    }
+
+    #[test]
+    fn test_sanitize_filename_with_reserved_name() {
+        assert_eq!(sanitize_filename("CON"), "_CON");
+        assert_eq!(sanitize_filename("nul.txt"), "_nul.txt");
+        assert_eq!(sanitize_filename("COM1.log"), "_COM1.log");
+        assert_eq!(sanitize_filename("CONSOLE.txt"), "CONSOLE.txt");
+    }
+
+    #[test]
+    fn test_sanitize_filename_with_trailing_dot_and_space() {
+        assert_eq!(sanitize_filename("rapport. "), "rapport");
+    }
+
+    #[test]
+    fn test_sanitize_filename_with_long_name_keeps_extension() {
+        let result = sanitize_filename(&format!("{}.pdf", "é".repeat(300)));
+        assert_eq!(result, format!("{}.pdf", "é".repeat(98)));
+    }
+
+    #[test]
+    fn test_imap_folder_relative_path_valid() {
+        for display in ["INBOX", "INBOX.Sent", "[Gmail]/Tous les messages"] {
+            assert_eq!(
+                imap_folder_relative_path(display).expect("safe folder"),
+                std::path::PathBuf::from(display.replace('.', "/")),
+                "{display}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_imap_folder_relative_path_empty_segments_skipped() {
+        assert_eq!(
+            imap_folder_relative_path("INBOX..Archives").expect("safe folder"),
+            std::path::Path::new("INBOX").join("Archives")
+        );
+    }
+
+    #[test]
+    fn test_imap_folder_relative_path_invalid() {
+        let cases = [
+            "/etc",
+            "\\\\hote\\partage",
+            "C:Windows",
+            "INBOX/../..",
+            "a\u{7}b",
+            "INBOX.CON",
+            "INBOX/Archive ",
+            "",
+            "...",
+        ];
+        for display in cases {
+            assert!(imap_folder_relative_path(display).is_err(), "{display:?}");
+        }
+    }
+
+    #[test]
     fn test_decode_imap_utf7_basic() {
         let result = decode_imap_utf7("INBOX");
         assert_eq!(result, "INBOX");
@@ -170,7 +242,25 @@ mod config_tests {
 
         let result = Config::load_with_settings(&accounts, &settings);
 
-        assert!(matches!(result, Err(ConfigError::YamlParseError(_))));
+        assert!(matches!(result, Err(ConfigError::SettingsFile { path, .. }) if path == settings));
+    }
+
+    #[test]
+    fn test_settings_load_invalid_names_file() {
+        let temp = TempDir::new().expect("create tempdir");
+        let settings = temp.path().join("settings.yaml");
+        std::fs::write(&settings, "organize_by_date: [unclosed\n").expect("write settings");
+
+        let message = Settings::load(&settings).unwrap_err().to_string();
+
+        assert!(message.contains("settings.yaml"), "{message}");
+    }
+
+    #[test]
+    fn test_settings_load_absent_is_default() {
+        let temp = TempDir::new().expect("create tempdir");
+        let settings = Settings::load(&temp.path().join("settings.yaml")).expect("defaults");
+        assert!(settings.notes_dir.is_none());
     }
 
     #[test]
@@ -1082,14 +1172,48 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 mod route_tests {
     use chrono::DateTime;
     use email_to_markdown::route::{
-        ai_route, apply_decision, delete_email, ensure_year_month, join_safe_segments, move_email,
-        normalize_address, parse_destinations, repair_legacy_attachments,
-        resolve_contextual_destination, route_email, upsert_rule, Destination, EmailMeta,
-        MatchRule,
+        ai_route, apply_decision, delete_email, destinations_path_from, ensure_year_month,
+        join_safe_segments, move_email, normalize_address, parse_destinations,
+        repair_legacy_attachments, resolve_contextual_destination, route_email, upsert_rule,
+        Destination, EmailMeta, MatchRule,
     };
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_destinations_path_from_invalid_settings_names_file() {
+        let temp = TempDir::new().expect("create tempdir");
+        let settings = temp.path().join("settings.yaml");
+        fs::write(
+            &settings,
+            "destinations_file: [unclosed
+",
+        )
+        .expect("write settings");
+
+        let message = format!("{:#}", destinations_path_from(&settings).unwrap_err());
+
+        assert!(message.contains("settings.yaml"), "{message}");
+    }
+
+    #[test]
+    fn test_destinations_path_from_valid_settings() {
+        let temp = TempDir::new().expect("create tempdir");
+        let settings = temp.path().join("settings.yaml");
+        let dest = temp.path().join("dest.yaml");
+        fs::write(
+            &settings,
+            format!(
+                "destinations_file: '{}'
+",
+                dest.display()
+            ),
+        )
+        .expect("write settings");
+
+        assert_eq!(destinations_path_from(&settings).expect("path"), dest);
+    }
 
     #[test]
     fn test_rewrite_attachment_paths_keeps_email_block_intact() {
@@ -1387,6 +1511,19 @@ attachments:
         let root = PathBuf::from("/notes");
         assert!(join_safe_segments(&root, "Travail/Projets:Secrets").is_err());
         assert!(join_safe_segments(&root, "Travail/Projets*").is_err());
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_reserved_name() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/con").is_err());
+        assert!(join_safe_segments(&root, "Travail/LPT1.txt").is_err());
+    }
+
+    #[test]
+    fn test_join_safe_segments_rejects_trailing_dot() {
+        let root = PathBuf::from("/notes");
+        assert!(join_safe_segments(&root, "Travail/Projets.").is_err());
     }
 
     // --- move_email: .md + flat sibling attachments moved and bare links preserved ---
@@ -1812,6 +1949,30 @@ attachments:
         assert!(
             !src_dir.join("_deleted").exists(),
             "_deleted must not be created when there are no attachments"
+        );
+    }
+
+    #[test]
+    fn test_delete_email_same_attachment_name_keeps_both() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("staging");
+        fs::create_dir_all(&src_dir).unwrap();
+        for (note, content) in [("first.md", "first PDF"), ("second.md", "second PDF")] {
+            fs::write(src_dir.join("invoice.pdf"), content).unwrap();
+            let md = src_dir.join(note);
+            fs::write(&md, "---\nattachments:\n  - invoice.pdf\n---\nBody\n").unwrap();
+
+            delete_email(&md).unwrap();
+        }
+
+        let deleted = src_dir.join("_deleted");
+        assert_eq!(
+            fs::read_to_string(deleted.join("invoice.pdf")).unwrap(),
+            "first PDF"
+        );
+        assert_eq!(
+            fs::read_to_string(deleted.join("invoice_2.pdf")).unwrap(),
+            "second PDF"
         );
     }
 
@@ -2702,10 +2863,10 @@ mod contextual_export_tests {
     use email_to_markdown::config::Account;
     use email_to_markdown::contextual_export::{
         build_deletion_batch, build_search_batches, candidate_matches_rules, cleanup_stale_staging,
-        convert_raw_contextual, evaluate_deletion_preflight, merge_candidates,
-        parse_header_candidate, parse_uid_fetch_response, read_source_proof, validate_uidvalidity,
-        ContextualLock, ConversionStatus, DeletionProvider, MessageConversionResult,
-        MessageLocation,
+        convert_raw_contextual, deletion_rejection, evaluate_deletion_preflight, merge_candidates,
+        parse_header_candidate, parse_uid_fetch_response, proof_is_complete, read_source_proof,
+        validate_uidvalidity, ContextualLock, ConversionStatus, DeletionProvider, DeletionRequest,
+        LocalSourceProof, MessageConversionResult, MessageLocation, SourceIdentity,
     };
     use email_to_markdown::route::MatchRule;
     use std::fs;
@@ -2934,6 +3095,104 @@ mod contextual_export_tests {
                 trash_folder: "[Gmail]/Trash".into()
             }
         );
+    }
+
+    fn deletion_request(markdown: std::path::PathBuf, uid: u32) -> DeletionRequest {
+        DeletionRequest {
+            markdown,
+            proof: LocalSourceProof {
+                identity: SourceIdentity {
+                    account: "Work".into(),
+                    message_id: Some("purge@example.com".into()),
+                    header_fingerprint: "fp".into(),
+                    provider_id: None,
+                },
+                location: location("INBOX", uid),
+            },
+        }
+    }
+
+    fn write_proved_note(path: &std::path::Path, proof: &LocalSourceProof) {
+        #[derive(serde::Serialize)]
+        struct Head<'a> {
+            source: &'a LocalSourceProof,
+        }
+        let head = serde_yaml::to_string(&Head { source: proof }).unwrap();
+        fs::write(
+            path,
+            format!(
+                "---
+{head}---
+
+body
+"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_proof_is_complete_with_numeric_provider_id() {
+        let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
+        proof.identity.provider_id = Some("1789456123456789".into());
+        assert!(proof_is_complete(&proof));
+    }
+
+    #[test]
+    fn test_proof_is_complete_with_non_numeric_provider_id() {
+        let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
+        for id in ["", "12 OR ALL", "12\r\nA1 EXPUNGE"] {
+            proof.identity.provider_id = Some(id.into());
+            assert!(!proof_is_complete(&proof), "{id:?}");
+        }
+    }
+
+    #[test]
+    fn test_deletion_rejection_missing_note() {
+        let temp = TempDir::new().unwrap();
+        let request = deletion_request(temp.path().join("email_gone.md"), 5);
+        assert_eq!(deletion_rejection(&request).unwrap(), Some("note absente"));
+    }
+
+    #[test]
+    fn test_deletion_rejection_note_with_other_proof() {
+        let temp = TempDir::new().unwrap();
+        let markdown = temp.path().join("email_note.md");
+        write_proved_note(&markdown, &deletion_request(markdown.clone(), 6).proof);
+        let request = deletion_request(markdown, 5);
+        assert_eq!(
+            deletion_rejection(&request).unwrap(),
+            Some("la note porte une autre preuve")
+        );
+    }
+
+    #[test]
+    fn test_deletion_rejection_note_without_proof() {
+        let temp = TempDir::new().unwrap();
+        let markdown = temp.path().join("email_note.md");
+        fs::write(
+            &markdown,
+            "---
+title: x
+---
+
+body
+",
+        )
+        .unwrap();
+        assert_eq!(
+            deletion_rejection(&deletion_request(markdown, 5)).unwrap(),
+            Some("la note porte une autre preuve")
+        );
+    }
+
+    #[test]
+    fn test_deletion_rejection_note_with_same_proof() {
+        let temp = TempDir::new().unwrap();
+        let markdown = temp.path().join("email_note.md");
+        let request = deletion_request(markdown.clone(), 5);
+        write_proved_note(&markdown, &request.proof);
+        assert_eq!(deletion_rejection(&request).unwrap(), None);
     }
 
     #[test]
@@ -3229,7 +3488,9 @@ mod contextual_export_tests {
 mod handled_purge_tests {
     use email_to_markdown::contextual_export::{LocalSourceProof, MessageLocation, SourceIdentity};
     use email_to_markdown::email_export::{purge_summary, ExportStats};
-    use email_to_markdown::handled::{load_proofs_from, record_to, PurgeMatch, SeenHandled};
+    use email_to_markdown::handled::{
+        load_from, load_proofs_from, record_to, PurgeMatch, SeenHandled,
+    };
     use tempfile::TempDir;
 
     fn location(folder: &str, uid_validity: u32, uid: u32) -> MessageLocation {
@@ -3352,6 +3613,27 @@ mod handled_purge_tests {
         let proofs = load_proofs_from(&ledger, "Perso");
         assert_eq!(proofs.proofs.get("a@x"), Some(&proof(None)));
         assert!(!proofs.legacy.contains("a@x"));
+    }
+
+    #[test]
+    fn test_message_ids_matches_load() {
+        let temp = TempDir::new().unwrap();
+        let ledger = temp.path().join("handled_messages.txt");
+        record_to(
+            &ledger,
+            &[
+                ("Perso".into(), "legacy@x".into(), None),
+                ("Perso".into(), "proved@x".into(), Some(proof(None))),
+                ("Pro".into(), "other@x".into(), None),
+            ],
+        )
+        .unwrap();
+
+        let ids = load_proofs_from(&ledger, "Perso").message_ids();
+
+        assert_eq!(ids, load_from(&ledger, "Perso"));
+        assert!(ids.contains("legacy@x") && ids.contains("proved@x"));
+        assert!(!ids.contains("other@x"));
     }
 
     #[test]
@@ -4120,6 +4402,26 @@ mod dest_gui_tests {
         assert_eq!(paths, vec!["Pro/Clients", "Perso/Banque", "Perso/Work"]);
     }
 
+    /// reorder_destinations: the entries left out keep their relative order.
+    #[test]
+    fn test_reorder_destinations_partial_order_keeps_others() {
+        let mut cfg = sample();
+        cfg.destinations.push(entry("Pro/Fournisseurs"));
+
+        reorder_destinations(&mut cfg, &["Perso/Banque"]);
+
+        let paths: Vec<&str> = cfg.destinations.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "Perso/Banque",
+                "Perso/Work",
+                "Pro/Clients",
+                "Pro/Fournisseurs"
+            ]
+        );
+    }
+
     /// suggest_confirm: batch upsert_entry adds Domain rules for each pair.
     #[test]
     fn test_dest_gui_suggest_confirm() {
@@ -4231,6 +4533,30 @@ mod quote_link_tests {
     fn test_link_note_without_note_keeps_text() {
         let out = link_note(&reply(), "Reponse.md", &Index::build([]));
         assert_eq!(out.content, reply());
+    }
+
+    #[test]
+    fn test_index_from_dir_skips_underscore_dirs() {
+        let vault = TempDir::new().unwrap();
+        let hidden = vault.path().join("_skipped");
+        std::fs::create_dir_all(&hidden).unwrap();
+        std::fs::write(hidden.join("Devis original.md"), original()).unwrap();
+
+        let out = link_note(&reply(), "Reponse.md", &Index::from_dir(vault.path()));
+
+        assert_eq!(out.left, vec![Left::NoNote]);
+    }
+
+    #[test]
+    fn test_index_from_dir_indexes_regular_dirs() {
+        let vault = TempDir::new().unwrap();
+        let dir = vault.path().join("Clients");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Devis original.md"), original()).unwrap();
+
+        let out = link_note(&reply(), "Reponse.md", &Index::from_dir(vault.path()));
+
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
     }
 
     #[test]

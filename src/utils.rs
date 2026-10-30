@@ -488,7 +488,7 @@ pub fn subject_filename_part(subject: &str) -> String {
         rest = &rest[found.end()..];
     }
 
-    let cleaned: String = sanitize_filename(rest)
+    let cleaned: String = replace_forbidden_chars(rest)
         .chars()
         .map(|c| {
             if c.is_control() && !c.is_whitespace() {
@@ -512,11 +512,91 @@ pub fn hash_md5_prefix(text: &str, length: usize) -> String {
 static FORBIDDEN_FILENAME_CHARS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"[<>:"/\\|?*]"#).expect("static regex"));
 
-/// Sanitize filename for filesystem.
-pub fn sanitize_filename(filename: &str) -> String {
+/// Longest file name `sanitize_filename` returns, in UTF-8 bytes: under the
+/// 255-byte limit of Linux and macOS (and so the 255 UTF-16 units of
+/// Windows), with room left for the date prefix of an attachment.
+const FILENAME_MAX_BYTES: usize = 200;
+
+/// Replace the characters the filesystem forbids by `_`.
+fn replace_forbidden_chars(filename: &str) -> String {
     FORBIDDEN_FILENAME_CHARS_RE
         .replace_all(filename, "_")
         .to_string()
+}
+
+/// Windows device names, refused whatever the extension. Checked on every
+/// platform so that a synced notes tree stays portable.
+pub fn is_reserved_windows_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end();
+    let upper = stem.to_ascii_uppercase();
+    match upper.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" => true,
+        _ => {
+            upper.len() == 4
+                && (upper.starts_with("COM") || upper.starts_with("LPT"))
+                && matches!(upper.as_bytes()[3], b'1'..=b'9')
+        }
+    }
+}
+
+/// Sanitize a file name from a message (attachment, folder): no separator,
+/// no forbidden or control character, no trailing dot or space, no Windows
+/// device name, never empty, at most `FILENAME_MAX_BYTES` bytes with the
+/// extension kept.
+pub fn sanitize_filename(filename: &str) -> String {
+    let replaced: String = replace_forbidden_chars(filename)
+        .chars()
+        .map(|c| if c.is_control() { '_' } else { c })
+        .collect();
+    let mut name = replaced.trim_end_matches(['.', ' ']).to_string();
+    if name.len() > FILENAME_MAX_BYTES {
+        let extension = name
+            .rfind('.')
+            .map(|dot| name[dot..].to_string())
+            .filter(|ext| ext.len() <= 16)
+            .unwrap_or_default();
+        let mut stem_end = FILENAME_MAX_BYTES - extension.len();
+        while !name.is_char_boundary(stem_end) {
+            stem_end -= 1;
+        }
+        name = format!(
+            "{}{extension}",
+            name[..stem_end].trim_end_matches(['.', ' '])
+        );
+    }
+    if name.trim().is_empty() {
+        return "_".to_string();
+    }
+    if is_reserved_windows_name(&name) {
+        name.insert(0, '_');
+    }
+    name
+}
+
+/// Relative path of the export folder of an IMAP folder: the display name
+/// split on `.` and `/`, empty segments skipped. The server chooses the
+/// name, so a rooted name, a `..` segment, a `\` or `:`, a control
+/// character or a Windows device name is refused.
+pub fn imap_folder_relative_path(display: &str) -> anyhow::Result<std::path::PathBuf> {
+    if display.starts_with(['/', '\\'])
+        || display.contains(['\\', ':'])
+        || display.chars().any(char::is_control)
+        || display.split('/').any(|part| part.trim() == "..")
+    {
+        anyhow::bail!("unsafe IMAP folder name {display:?}");
+    }
+    let mut path = std::path::PathBuf::new();
+    for segment in display.split(['.', '/']).filter(|s| !s.is_empty()) {
+        if segment.trim().is_empty() || segment.ends_with(' ') || is_reserved_windows_name(segment)
+        {
+            anyhow::bail!("unsafe segment {segment:?} in IMAP folder name {display:?}");
+        }
+        path.push(segment);
+    }
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("empty IMAP folder name {display:?}");
+    }
+    Ok(path)
 }
 
 static WIKILINK_BREAKING_CHARS_RE: LazyLock<Regex> =

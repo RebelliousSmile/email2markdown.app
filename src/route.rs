@@ -18,6 +18,7 @@ static SAFE_PATH_SEGMENT_RE: LazyLock<Regex> =
 /// - contain a Windows separator `\`
 /// - are `..` or `.` (path-traversal)
 /// - contain any character outside `SAFE_PATH_SEGMENT_RE`
+/// - end with a dot, or are a Windows device name (`CON`, `NUL`, `COM1`…)
 ///
 /// Returns the joined `PathBuf` on success, or an error naming the bad segment.
 pub fn join_safe_segments(root: &Path, dest: &str) -> Result<PathBuf> {
@@ -29,6 +30,12 @@ pub fn join_safe_segments(root: &Path, dest: &str) -> Result<PathBuf> {
         }
         if seg == ".." || seg == "." || seg.contains('\\') {
             anyhow::bail!("invalid path segment in notes destination: {:?}", seg);
+        }
+        if seg.ends_with('.') || crate::utils::is_reserved_windows_name(seg) {
+            anyhow::bail!(
+                "notes destination segment is not a valid Windows name: {:?}",
+                seg
+            );
         }
         if !SAFE_PATH_SEGMENT_RE.is_match(seg) {
             anyhow::bail!(
@@ -477,7 +484,8 @@ pub fn delete_email(md_path: &Path) -> Result<()> {
         // Create the _deleted folder lazily, on first real move.
         fs::create_dir_all(&deleted_dir)
             .with_context(|| format!("failed to create {}", deleted_dir.display()))?;
-        let att_dest = deleted_dir.join(file_name);
+        // Two deleted notes may carry attachments of the same name: never overwrite.
+        let att_dest = deleted_dir.join(unique_name_in(&deleted_dir, &file_name.to_string_lossy()));
 
         if fs::rename(&att_src, &att_dest).is_err() {
             // Cross-device fallback: copy then remove.
@@ -513,9 +521,16 @@ pub fn delete_email(md_path: &Path) -> Result<()> {
 /// `.txt` exists, it is migrated one-shot here. Centralizing the migration at the
 /// single resolution point means every caller (export, `dest` CLI, tray) gets the
 /// migrated file — not just `load_destinations`.
-pub fn destinations_path() -> PathBuf {
+pub fn destinations_path() -> Result<PathBuf> {
+    destinations_path_from(&crate::config::settings_path())
+}
+
+/// [`destinations_path`] with an explicit settings file. An invalid settings
+/// file is an error: falling back to the default path would silently read
+/// another destinations file.
+pub fn destinations_path_from(settings_file: &Path) -> Result<PathBuf> {
     let settings =
-        crate::config::Settings::load(&crate::config::settings_path()).unwrap_or_default();
+        crate::config::Settings::load(settings_file).context("failed to load settings")?;
     let configured = settings
         .destinations_file
         .as_deref()
@@ -543,16 +558,16 @@ pub fn destinations_path() -> PathBuf {
         }
     }
 
-    yaml_path
+    Ok(yaml_path)
 }
 
 /// Load routing destinations from the configured `destinations.yaml`.
 ///
 /// Resolution (and one-shot legacy migration) is handled by [`destinations_path`].
 /// A missing or malformed file yields an empty list (every email then routes to
-/// the default) with a warning.
-pub fn load_destinations() -> Vec<Destination> {
-    let dest_path = destinations_path();
+/// the default) with a warning; an invalid settings file is an error.
+pub fn load_destinations() -> Result<Vec<Destination>> {
+    let dest_path = destinations_path()?;
 
     if !dest_path.exists() {
         eprintln!(
@@ -560,10 +575,10 @@ pub fn load_destinations() -> Vec<Destination> {
              all emails will fall to the default path (Perso/Messy/Emails/<Year>/<Month>)",
             dest_path.display()
         );
-        return vec![];
+        return Ok(vec![]);
     }
 
-    match crate::destinations::load_yaml(&dest_path) {
+    Ok(match crate::destinations::load_yaml(&dest_path) {
         Ok(config) => config
             .destinations
             .into_iter()
@@ -582,7 +597,7 @@ pub fn load_destinations() -> Vec<Destination> {
             );
             vec![]
         }
-    }
+    })
 }
 
 // ── Routing types ────────────────────────────────────────────────────────────
@@ -1082,7 +1097,10 @@ pub fn resolve_contextual_destination(
         .with_context(|| format!("target directory does not exist: {}", target.display()))?;
 
     for destination in destinations {
-        let configured = join_safe_segments(notes_dir, &destination.path)?;
+        // A destination saved before a segment rule existed cannot be the target.
+        let Ok(configured) = join_safe_segments(notes_dir, &destination.path) else {
+            continue;
+        };
         if !configured.exists() {
             continue;
         }

@@ -98,6 +98,8 @@ pub enum AppCommand {
     },
     /// Rebuild the tray menu (account submenus) after the account list changed.
     RefreshMenu,
+    /// Show an operation in progress in the tray tooltip; `None` restores the default.
+    SetTooltip(Option<String>),
     /// Evaluate JS in the WebView of the given window.
     EvalScript {
         window_id: WindowId,
@@ -106,7 +108,7 @@ pub enum AppCommand {
     /// Open the route review window after an Export.
     /// Carries the list of (staging_path, RouteDecision) produced by export_account.
     OpenRouteReview(RouteDecisions),
-    /// Persist a new routing rule into destinations.txt and re-inject the updated tree.
+    /// Persist a new routing rule into destinations.yaml and re-inject the updated tree.
     /// IO is done in the event loop (not in the webview IPC callback).
     PersistRoutingRule {
         window_id: WindowId,
@@ -299,6 +301,18 @@ fn contextual_launch_error_message(target_path: &Path, error: &anyhow::Error) ->
     )
 }
 
+/// The contextual mode has no tray to report into: a window that cannot open
+/// is explained in a dialog before the process exits.
+fn contextual_window_error(error: &anyhow::Error) {
+    eprintln!("Fenêtre contextuelle : {error:#}");
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("Ouverture de la fenêtre impossible")
+        .set_description(format!("{error:#}"))
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
 pub fn run_contextual(target_path: PathBuf) -> Result<()> {
     let (initial_launch, setup_path) = match tray_actions::prepare_contextual_launch(&target_path) {
         Ok(launch) => (Some(launch), None),
@@ -345,14 +359,19 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                         let _ = window_id;
                     }
                     Err(error) => {
-                        eprintln!("Fenêtre contextuelle : {error:#}");
+                        contextual_window_error(&error);
                         *control_flow = ControlFlow::Exit;
                     }
                     }
                 } else if let Some(path) = setup_path.as_deref() {
-                    let dest_file = crate::route::destinations_path();
-                    match windows::build_dest_gui_window(target, &proxy, &dest_file, Some(path), true) {
-                        Ok((window, webview, _window_id, cfg)) => {
+                    let built = crate::route::destinations_path().and_then(|dest_file| {
+                        windows::build_dest_gui_window(target, &proxy, &dest_file, Some(path), true)
+                            .map(|(window, webview, _window_id, cfg)| {
+                                (window, webview, cfg, dest_file)
+                            })
+                    });
+                    match built {
+                        Ok((window, webview, cfg, dest_file)) => {
                             state = Some(ContextualStandaloneState::DestinationSetup(DestGuiState {
                                 cfg,
                                 dest_file,
@@ -361,7 +380,7 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                             }));
                         }
                         Err(error) => {
-                            eprintln!("Fenêtre de configuration contextuelle : {error:#}");
+                            contextual_window_error(&error);
                             *control_flow = ControlFlow::Exit;
                         }
                     }
@@ -565,7 +584,7 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                                 }));
                             }
                             Err(error) => {
-                                eprintln!("Fenêtre contextuelle : {error:#}");
+                                contextual_window_error(&error);
                                 *control_flow = ControlFlow::Exit;
                             }
                         }
@@ -624,10 +643,10 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                     );
                     return;
                 };
-                let dest_file = crate::route::destinations_path();
-                if let Err(error) =
+                let upserted = crate::route::destinations_path().and_then(|dest_file| {
                     crate::route::upsert_rule(&dest_file, &current.launch.relative_path, rule)
-                {
+                });
+                if let Err(error) = upserted {
                     contextual_eval_error(&current.webview, "rule", &format!("{error:#}"));
                     return;
                 }

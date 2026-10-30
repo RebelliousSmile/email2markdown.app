@@ -83,7 +83,10 @@ impl Index {
         for entry in WalkDir::new(root)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| e.depth() == 0 || !e.file_name().to_string_lossy().starts_with('.'))
+            // `_*` holds staging, quarantine and deleted notes, as in `handled`.
+            .filter_entry(|e| {
+                e.depth() == 0 || !e.file_name().to_string_lossy().starts_with(['.', '_'])
+            })
             .filter_map(|e| e.ok())
         {
             if !entry.file_type().is_file() || entry.path().extension().is_none_or(|e| e != "md") {

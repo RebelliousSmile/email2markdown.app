@@ -1041,9 +1041,10 @@ fn save_outcome(action: &str, saved: anyhow::Result<()>) -> ConfigIpcOutcome {
             }
         }
         Err(e) => {
+            // The page shows the message itself: no tray notification on top.
             let message = format!("Erreur de sauvegarde : {:#}", e);
             ConfigIpcOutcome {
-                result: Some(ActionResult::Error(message.clone())),
+                result: None,
                 should_close: false,
                 reply: Some(
                     serde_json::json!({"action": action, "ok": false, "message": message})
@@ -1109,22 +1110,22 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
     match msg.action.as_str() {
         "save" => {
             let result = (|| -> anyhow::Result<()> {
-                let raw_data = msg
-                    .data
-                    .ok_or_else(|| anyhow::anyhow!("save action missing data field"))?;
+                let raw_data = msg.data.ok_or_else(|| {
+                    anyhow::anyhow!("données absentes de la demande d'enregistrement")
+                })?;
                 let data: SettingsData =
-                    serde_json::from_value(raw_data).context("failed to parse settings data")?;
+                    serde_json::from_value(raw_data).context("Réglages reçus illisibles")?;
                 save_settings(data, &config::settings_path())
             })();
             save_outcome("save", result)
         }
         "save_account" => {
             let result = (|| -> anyhow::Result<()> {
-                let raw_data = msg
-                    .data
-                    .ok_or_else(|| anyhow::anyhow!("save_account action missing data field"))?;
+                let raw_data = msg.data.ok_or_else(|| {
+                    anyhow::anyhow!("données absentes de la demande d'enregistrement du compte")
+                })?;
                 let data: AccountData =
-                    serde_json::from_value(raw_data).context("failed to parse account data")?;
+                    serde_json::from_value(raw_data).context("Compte reçu illisible")?;
                 let password = data.password.clone().filter(|p| !p.is_empty());
                 let name = data.account_name.clone();
                 save_account(
@@ -1141,7 +1142,9 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
             save_outcome("save_account", result)
         }
         "open_raw" => {
-            if let Err(e) = action_open_config().context("failed to open settings file in editor") {
+            if let Err(e) =
+                action_open_config().context("Ouverture du fichier de réglages impossible")
+            {
                 return ConfigIpcOutcome::new(
                     Some(ActionResult::Error(format!("Erreur : {:#}", e))),
                     false,
@@ -1154,7 +1157,7 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
             let opened = std::fs::create_dir_all(&dir)
                 .map_err(anyhow::Error::from)
                 .and_then(|()| open::that(&dir).map_err(anyhow::Error::from))
-                .context("failed to open config folder");
+                .context("Ouverture du dossier de configuration impossible");
             match opened {
                 Ok(()) => ConfigIpcOutcome::new(None, false),
                 Err(e) => ConfigIpcOutcome::new(
@@ -1176,7 +1179,7 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
             let deleted = name
-                .ok_or_else(|| anyhow::anyhow!("delete_account action missing account_name"))
+                .ok_or_else(|| anyhow::anyhow!("nom du compte absent de la demande de suppression"))
                 .and_then(|name| {
                     delete_account(
                         &name,
@@ -1215,7 +1218,7 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
         }
         other => ConfigIpcOutcome::new(
             Some(ActionResult::Error(format!(
-                "unknown IPC action '{}'",
+                "Action IPC inconnue « {} »",
                 other
             ))),
             true,
@@ -1243,6 +1246,12 @@ mod tests {
     fn test_save_outcome_with_error() {
         let outcome = save_outcome("save", Err(anyhow::anyhow!("disk full")));
         assert!(!outcome.should_close);
+    }
+
+    #[test]
+    fn test_save_outcome_with_error_notifies_once() {
+        let outcome = save_outcome("save", Err(anyhow::anyhow!("disk full")));
+        assert!(outcome.result.is_none(), "the page already shows the error");
     }
 
     #[test]

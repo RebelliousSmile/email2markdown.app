@@ -1031,7 +1031,9 @@
     var msg = JSON.stringify({ decisions: decisions });
     if (window.ipc && typeof window.ipc.postMessage === 'function') {
       // Disabled until Rust answers (route_review_error) or closes the window.
-      document.getElementById('btn-apply').disabled = true;
+      var applyBtn = document.getElementById('btn-apply');
+      applyBtn.disabled = true;
+      applyBtn.textContent = 'Application en cours…';
       window.ipc.postMessage(msg);
     } else {
       alert('IPC non disponible.');
@@ -1042,7 +1044,9 @@
   // Called by Rust via webview.evaluate_script("route_review_error('...')") if
   // the apply step encounters a validation error for a specific file.
   window.route_review_error = function (msg) {
-    document.getElementById('btn-apply').disabled = false;
+    var applyBtn = document.getElementById('btn-apply');
+    applyBtn.disabled = false;
+    applyBtn.textContent = 'Appliquer';
     showError(msg);
   };
 

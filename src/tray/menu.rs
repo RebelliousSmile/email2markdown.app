@@ -28,13 +28,16 @@ mod menu_ids {
     pub const CLEAN_SERVER_PREFIX: &str = "clean_server_";
 }
 
+/// Tray tooltip when no operation is running.
+pub(super) const DEFAULT_TOOLTIP: &str = "Email to Markdown";
+
 /// Create the system tray icon with menu.
 pub(super) fn create_tray_icon() -> Result<TrayIcon> {
     let menu = create_menu()?;
     let icon = load_icon()?;
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("Email to Markdown")
+        .with_tooltip(DEFAULT_TOOLTIP)
         .with_icon(icon)
         .build()
         .context("Failed to create tray icon")?;
@@ -195,27 +198,30 @@ pub(super) fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResu
             tray_actions::action_choose_notes_dir(result_sender);
         }
         menu_ids::MANAGE_DESTINATIONS => {
-            let dest_file = crate::route::destinations_path();
-            if let Err(e) = send_command(AppCommand::OpenDestGui { dest_file }) {
-                eprintln!("Failed to open destinations window: {:#}", e);
+            let opened = crate::route::destinations_path()
+                .and_then(|dest_file| send_command(AppCommand::OpenDestGui { dest_file }));
+            if let Err(e) = opened {
+                let _ = result_sender.send(ActionResult::Error(format!(
+                    "Ouverture des destinations impossible : {e:#}"
+                )));
             }
         }
         menu_ids::OPEN_CONFIG => {
             if let Err(e) = send_command(AppCommand::OpenConfig {
                 sender: result_sender.clone(),
             }) {
-                eprintln!("Failed to open config window: {:#}", e);
+                eprintln!("Ouverture des paramètres impossible : {:#}", e);
             }
         }
         menu_ids::UPDATE => {
             if let Err(e) = send_command(AppCommand::OpenUpdate) {
-                eprintln!("Failed to open update window: {:#}", e);
+                eprintln!("Ouverture de la mise à jour impossible : {:#}", e);
             }
         }
         menu_ids::OPEN_DOCUMENTATION => {
             if let Err(e) = tray_actions::action_open_documentation() {
                 let _ = result_sender.send(ActionResult::Error(format!(
-                    "Failed to open documentation: {}",
+                    "Ouverture de la documentation impossible : {:#}",
                     e
                 )));
             }

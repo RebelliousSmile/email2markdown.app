@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -239,15 +240,16 @@ pub(super) fn build_config_window(
     Ok((window, webview, window_id))
 }
 
-/// `true` when a settings-page reply reports a successful account save, deletion or
-/// reload: the tray submenus list the accounts and must be rebuilt.
+/// `true` when a settings-page reply reports a successful save (general settings
+/// or account), deletion or reload: the tray submenus list the accounts, and
+/// "Nettoyer le serveur" depends on `delete_after_export`, so they are rebuilt.
 fn reply_changed_accounts(reply: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(reply) else {
         return false;
     };
     let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     let action = value.get("action").and_then(|v| v.as_str()).unwrap_or("");
-    ok && matches!(action, "save_account" | "reload")
+    ok && matches!(action, "save" | "save_account" | "reload")
 }
 
 // ── Update window ─────────────────────────────────────────────────────────────
@@ -552,7 +554,8 @@ pub(super) fn build_route_window(
     decisions: RouteDecisions,
 ) -> Result<(Window, WebView, WindowId)> {
     let settings_path = crate::config::settings_path();
-    let settings = crate::config::Settings::load(&settings_path).unwrap_or_default();
+    let settings =
+        crate::config::Settings::load(&settings_path).context("failed to load settings")?;
     let notes_dir: PathBuf = settings
         .notes_dir
         .as_deref()
@@ -560,7 +563,7 @@ pub(super) fn build_route_window(
         .unwrap_or_else(|| PathBuf::from("notes"));
 
     // Collect known paths from destinations.yaml for the datalist autocomplete.
-    let known_paths: Vec<String> = crate::route::load_destinations()
+    let known_paths: Vec<String> = crate::route::load_destinations()?
         .into_iter()
         .map(|d| d.path)
         .collect();
@@ -600,14 +603,16 @@ pub(super) fn build_route_window(
         .collect();
 
     // Staging files this window may act on, as the exact strings sent to the page
-    // so the comparison never depends on path normalisation.
-    let allowed_files: std::cell::RefCell<std::collections::HashSet<String>> =
-        std::cell::RefCell::new(
-            decisions
-                .iter()
-                .map(|(path, _)| path.to_string_lossy().into_owned())
-                .collect(),
-        );
+    // so the comparison never depends on path normalisation. Shared with the
+    // thread that applies the decisions.
+    let allowed_files: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(
+        decisions
+            .iter()
+            .map(|(path, _)| path.to_string_lossy().into_owned())
+            .collect(),
+    ));
+    // Set while an apply runs in its thread: a second apply or a deletion waits.
+    let applying = Arc::new(AtomicBool::new(false));
 
     let decisions_json =
         serde_json::to_string(&json_rows).context("failed to serialize decisions")?;
@@ -621,7 +626,7 @@ pub(super) fn build_route_window(
     // page can ask before the same rule is posted for a second destination.
     let mut rule_owners: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
-    for dest in crate::route::load_destinations() {
+    for dest in crate::route::load_destinations()? {
         for rule in &dest.rules {
             let key = match rule {
                 crate::route::MatchRule::Domain(v) => format!("domain:{}", v.to_lowercase()),
@@ -659,6 +664,12 @@ pub(super) fn build_route_window(
         Some(&init_script),
         move |req: wry::http::Request<String>| {
             let body = req.body().clone();
+            let send_error = |msg: &str| {
+                if let Ok(js_str) = serde_json::to_string(msg) {
+                    let js = format!("route_review_error({})", escape_json_for_script(&js_str));
+                    let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+                }
+            };
 
             // 1. Raw "cancel" string (not JSON) — close immediately.
             if body.trim() == "cancel" {
@@ -691,13 +702,17 @@ pub(super) fn build_route_window(
                     return;
                 }
                 if kind.action == "delete" {
+                    if applying.load(Ordering::SeqCst) {
+                        send_error(APPLY_IN_PROGRESS);
+                        return;
+                    }
                     match serde_json::from_str::<DeletePayload>(&body) {
                         Ok(p) => {
                             // Proofs must be read before the notes disappear.
                             let proofs = super::ipc::staged_proofs(&p.files);
                             let (deleted, err) = super::ipc::delete_staged_emails(
                                 &p.files,
-                                &mut allowed_files.borrow_mut(),
+                                &mut lock_allowed(&allowed_files),
                             );
                             // Only the notes actually discarded lose their server copy.
                             let discarded: Vec<_> = proofs
@@ -740,52 +755,77 @@ pub(super) fn build_route_window(
             }
 
             // 3. Existing apply flow — payload `{ decisions: [...] }` (no `action` field).
-            let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
-                .unwrap_or_default()
-                .organize_by_date;
-            let outcome = super::ipc::parse_route_decisions(&body)
-                .and_then(|rows| {
-                    super::ipc::apply_route_decisions(
-                        &rows,
-                        &notes_dir,
-                        &mut allowed_files.borrow_mut(),
-                        organize_by_date,
-                    )
-                })
-                .map(|mut report| {
-                    // Sorted notes leave the export folder: remember them so the
-                    // next export does not propose them again.
-                    crate::handled::record_proofs(report.deletions.iter().map(|d| &d.proof));
-                    // Sorted notes: remove their server copy (background).
-                    tray_actions::spawn_server_deletions(std::mem::take(&mut report.deletions));
-                    report
-                });
-            let error = match outcome {
-                Ok(report) if report.is_complete() => {
-                    let _ = proxy_ipc.send_event(AppCommand::CloseWindow { window_id });
-                    return;
-                }
-                Ok(report) => {
-                    // Drop the rows with nothing left to route, keep the failed ones.
-                    if let Ok(js_arr) = serde_json::to_string(&report.settled_files()) {
-                        let js =
-                            format!("route_review_applied({})", escape_json_for_script(&js_arr));
-                        let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
-                    }
-                    report.error_message().unwrap_or_default()
-                }
-                // Validation failed: nothing was moved.
-                Err(e) => format!("{:#}", e),
-            };
-            // Surface the error back to the HTML without closing.
-            if let Ok(js_str) = serde_json::to_string(&error) {
-                let js = format!("route_review_error({})", escape_json_for_script(&js_str));
-                let _ = proxy_ipc.send_event(AppCommand::EvalScript { window_id, js });
+            // Moving the notes scans the vault: it runs off the event loop thread,
+            // and its answer comes back as events.
+            if applying.swap(true, Ordering::SeqCst) {
+                send_error(APPLY_IN_PROGRESS);
+                return;
             }
+            let (allowed_files, applying) = (Arc::clone(&allowed_files), Arc::clone(&applying));
+            let (notes_dir, proxy) = (notes_dir.clone(), proxy_ipc.clone());
+            std::thread::spawn(move || {
+                let outcome = apply_review(&body, &notes_dir, &mut lock_allowed(&allowed_files));
+                applying.store(false, Ordering::SeqCst);
+                let error = match outcome {
+                    Ok(report) if report.is_complete() => {
+                        let _ = proxy.send_event(AppCommand::CloseWindow { window_id });
+                        return;
+                    }
+                    Ok(report) => {
+                        // Drop the rows with nothing left to route, keep the failed ones.
+                        if let Ok(js_arr) = serde_json::to_string(&report.settled_files()) {
+                            let js = format!(
+                                "route_review_applied({})",
+                                escape_json_for_script(&js_arr)
+                            );
+                            let _ = proxy.send_event(AppCommand::EvalScript { window_id, js });
+                        }
+                        report.error_message().unwrap_or_default()
+                    }
+                    // Validation failed: nothing was moved.
+                    Err(e) => format!("{:#}", e),
+                };
+                // Surface the error back to the HTML without closing.
+                if let Ok(js_str) = serde_json::to_string(&error) {
+                    let js = format!("route_review_error({})", escape_json_for_script(&js_str));
+                    let _ = proxy.send_event(AppCommand::EvalScript { window_id, js });
+                }
+            });
         },
     )?;
 
     Ok((window, webview, window_id))
+}
+
+/// Answer to a review request sent while the decisions are being applied.
+const APPLY_IN_PROGRESS: &str = "Routage en cours : attendre la fin de l'application.";
+
+/// The review's allowed staging files; a panicked apply leaves the set usable.
+fn lock_allowed(allowed: &Mutex<HashSet<String>>) -> std::sync::MutexGuard<'_, HashSet<String>> {
+    allowed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Apply the decisions of `body`, record the proofs of the sorted notes and
+/// start the deletion of their server copy.
+fn apply_review(
+    body: &str,
+    notes_dir: &Path,
+    allowed_files: &mut HashSet<String>,
+) -> Result<super::ipc::RouteApplyReport> {
+    let rows = super::ipc::parse_route_decisions(body)?;
+    let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
+        .context("failed to load settings")?
+        .organize_by_date;
+    let mut report =
+        super::ipc::apply_route_decisions(&rows, notes_dir, allowed_files, organize_by_date)?;
+    // Sorted notes leave the export folder: remember them so the
+    // next export does not propose them again.
+    crate::handled::record_proofs(report.deletions.iter().map(|d| &d.proof));
+    // Sorted notes: remove their server copy (background).
+    tray_actions::spawn_server_deletions(std::mem::take(&mut report.deletions));
+    Ok(report)
 }
 
 #[cfg(test)]

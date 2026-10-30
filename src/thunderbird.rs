@@ -286,25 +286,72 @@ fn default_ignored_folders(name: &str) -> Vec<String> {
     }
 }
 
-/// Generate accounts.yaml content from extracted accounts
-pub fn generate_accounts_yaml(accounts: &[Account]) -> String {
-    let mut yaml = String::from("# Auto-generated from Thunderbird configuration\n");
-    yaml.push_str("# Connection info only — behaviour is configured in settings.yaml\n\n");
-    yaml.push_str("accounts:\n");
+/// What [`write_accounts_merged`] did to `accounts.yaml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportSummary {
+    /// Imported accounts that were not in the file yet.
+    pub added: usize,
+    /// Accounts already in the file, left exactly as they were.
+    pub kept: usize,
+    /// Copy of the previous file, when there was one.
+    pub backup: Option<PathBuf>,
+}
+
+impl ImportSummary {
+    /// Report shown by the CLI and the tray after an import.
+    pub fn describe(&self, path: &Path) -> String {
+        let mut message = format!(
+            "{} compte(s) importé(s), {} compte(s) existant(s) conservé(s) tel(s) quel(s) dans {}",
+            self.added,
+            self.kept,
+            path.display()
+        );
+        if let Some(backup) = &self.backup {
+            message.push_str(&format!(
+                "\nÉtat précédent sauvegardé dans {}",
+                backup.display()
+            ));
+        }
+        message
+    }
+}
+
+/// Add the imported `accounts` to `path` without touching the accounts it
+/// already lists (matched by name), after copying it to `accounts.yaml.bak`.
+pub fn write_accounts_merged(accounts: &[Account], path: &Path) -> Result<ImportSummary> {
+    let mut merged = crate::config::load_raw_accounts(path)
+        .with_context(|| format!("read {}", path.display()))?;
+    let kept = merged.len();
+
+    let backup = if path.exists() {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".bak");
+        let backup = path.with_file_name(name);
+        fs::copy(path, &backup).with_context(|| format!("back up to {}", backup.display()))?;
+        Some(backup)
+    } else {
+        None
+    };
 
     for account in accounts {
-        yaml.push_str(&format!("  - name: \"{}\"\n", account.name));
-        yaml.push_str(&format!("    server: \"{}\"\n", account.server));
-        yaml.push_str(&format!("    port: {}\n", account.port));
-        yaml.push_str(&format!("    username: \"{}\"\n", account.username));
-        yaml.push_str("    ignored_folders:\n");
-        for folder in &account.ignored_folders {
-            yaml.push_str(&format!("      - \"{}\"\n", folder));
+        if !merged.iter().any(|raw| raw.name == account.name) {
+            merged.push(crate::config::RawAccount {
+                name: account.name.clone(),
+                server: account.server.clone(),
+                port: account.port,
+                username: account.username.clone(),
+                ignored_folders: account.ignored_folders.clone(),
+            });
         }
-        yaml.push('\n');
     }
+    crate::config::save_accounts(&merged, path)
+        .with_context(|| format!("write {}", path.display()))?;
 
-    yaml
+    Ok(ImportSummary {
+        added: merged.len() - kept,
+        kept,
+        backup,
+    })
 }
 
 /// Generate .env template from extracted accounts
@@ -669,6 +716,77 @@ pub fn write_passwords_to_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn imported(name: &str, server: &str) -> Account {
+        Account {
+            name: name.to_string(),
+            server: server.to_string(),
+            port: 993,
+            username: format!("{name}@example.com"),
+            password: None,
+            ignored_folders: vec!["Spam".to_string()],
+            export_directory: String::new(),
+            quote_depth: 1,
+            skip_existing: true,
+            collect_contacts: false,
+            skip_signature_images: false,
+            delete_after_export: false,
+            cleanup_empty_dirs: true,
+            batch_size: 0,
+        }
+    }
+
+    #[test]
+    fn test_write_accounts_merged_keeps_existing_account() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("accounts.yaml");
+        let before = "accounts:\n- name: Perso\n  server: imap.custom.example\n  port: 143\n  username: moi\n  ignored_folders:\n  - Archives\n";
+        fs::write(&path, before).unwrap();
+
+        let summary = write_accounts_merged(
+            &[
+                imported("Perso", "imap.thunderbird.example"),
+                imported("Pro", "imap.pro.example"),
+            ],
+            &path,
+        )
+        .unwrap();
+
+        let backup = temp.path().join("accounts.yaml.bak");
+        assert_eq!(
+            summary,
+            ImportSummary {
+                added: 1,
+                kept: 1,
+                backup: Some(backup.clone())
+            }
+        );
+        assert_eq!(fs::read_to_string(&backup).unwrap(), before);
+        let accounts = crate::config::load_raw_accounts(&path).unwrap();
+        let names: Vec<&str> = accounts.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["Perso", "Pro"]);
+        assert_eq!(accounts[0].server, "imap.custom.example");
+        assert_eq!(accounts[0].port, 143);
+        assert_eq!(accounts[0].ignored_folders, vec!["Archives".to_string()]);
+    }
+
+    #[test]
+    fn test_write_accounts_merged_without_file_writes_no_backup() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("config").join("accounts.yaml");
+
+        let summary = write_accounts_merged(&[imported("Perso", "imap.example")], &path).unwrap();
+
+        assert_eq!(
+            summary,
+            ImportSummary {
+                added: 1,
+                kept: 0,
+                backup: None
+            }
+        );
+        assert_eq!(crate::config::load_raw_accounts(&path).unwrap().len(), 1);
+    }
 
     #[test]
     fn test_sanitize_name() {
