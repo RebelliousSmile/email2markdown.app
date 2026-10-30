@@ -334,7 +334,10 @@ pub fn write_accounts_merged(accounts: &[Account], path: &Path) -> Result<Import
     };
 
     for account in accounts {
-        if !merged.iter().any(|raw| raw.name == account.name) {
+        if !merged
+            .iter()
+            .any(|raw| raw.name.eq_ignore_ascii_case(&account.name))
+        {
             merged.push(crate::config::RawAccount {
                 name: account.name.clone(),
                 server: account.server.clone(),
@@ -689,6 +692,13 @@ pub fn write_passwords_to_env(
             }
         };
 
+        if !crate::config::env_value_is_valid(&pw.password) {
+            eprintln!(
+                "Warning: Thunderbird password for account '{}' contains a line break; skipped",
+                account.name
+            );
+            continue;
+        }
         let env_key = format!("{}_PASSWORD", crate::config::env_var_name(&account.name));
         let escaped = pw.password.replace('\'', "'\\''");
         let env_line = format!("{}='{}'", env_key, escaped);
@@ -703,12 +713,7 @@ pub fn write_passwords_to_env(
         written += 1;
     }
 
-    // Write back (join with newline, ensure trailing newline)
-    let mut content = lines.join("\n");
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
-    }
-    fs::write(env_path, content).context("Failed to write .env")?;
+    crate::config::write_env_file(env_path, &lines).context("Failed to write .env")?;
 
     Ok(written)
 }
@@ -768,6 +773,38 @@ mod tests {
         assert_eq!(accounts[0].server, "imap.custom.example");
         assert_eq!(accounts[0].port, 143);
         assert_eq!(accounts[0].ignored_folders, vec!["Archives".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_profiles_ini_with_several_profiles() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let ini = temp.path().join("profiles.ini");
+        let absolute = temp.path().join("ailleurs");
+        fs::write(
+            &ini,
+            format!(
+                "[General]\nStartWithLastProfile=1\n\n\
+                 [Profile0]\nName=default\nIsRelative=1\nPath=Profiles/abc.default\n\n\
+                 [Install123]\nDefault=Profiles/abc.default\n\n\
+                 [Profile1]\nName=travail\nIsRelative=0\nPath={}\nDefault=1\n",
+                absolute.display()
+            ),
+        )
+        .unwrap();
+
+        let profiles = parse_profiles_ini(&ini, temp.path()).unwrap();
+
+        let summary: Vec<(&str, PathBuf, bool)> = profiles
+            .iter()
+            .map(|p| (p.name.as_str(), p.path.clone(), p.is_default))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("default", temp.path().join("Profiles/abc.default"), false),
+                ("travail", absolute, true),
+            ]
+        );
     }
 
     #[test]

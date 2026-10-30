@@ -232,6 +232,47 @@ pub fn save_accounts(accounts: &[RawAccount], path: &Path) -> Result<(), ConfigE
     Ok(())
 }
 
+/// `false` when `value` would break out of its `.env` line (`\r`, `\n`, NUL).
+pub fn env_value_is_valid(value: &str) -> bool {
+    !value.contains(['\r', '\n', '\0'])
+}
+
+/// Write `lines` to the `.env` at `path`, created owner-only (0600) on Unix.
+/// Refuses any line that would split into several.
+pub fn write_env_file(path: &Path, lines: &[String]) -> Result<(), ConfigError> {
+    use std::io::Write;
+
+    if let Some(line) = lines.iter().find(|line| !env_value_is_valid(line)) {
+        return Err(ConfigError::ValidationError(format!(
+            "ligne de .env invalide (retour à la ligne ou NUL) : {}",
+            line.split('=').next().unwrap_or_default()
+        )));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut content = lines.join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    // `mode` only applies on creation: tighten a pre-existing file too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(content.as_bytes())?;
+    Ok(())
+}
+
 /// Merge a raw account with the app settings to produce a fully-resolved Account.
 fn merge_account(raw: &RawAccount, settings: &Settings) -> Account {
     let per = settings.accounts.get(&raw.name);

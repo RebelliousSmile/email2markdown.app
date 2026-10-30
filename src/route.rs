@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
 use regex::Regex;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
 
@@ -235,6 +235,20 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
     let mut renamed: Vec<(String, String)> = Vec::new();
     for link in &attachments {
         let link_native = link.replace('/', std::path::MAIN_SEPARATOR_STR);
+        // `starts_with` below does not normalise `..`: reject escaping links up front.
+        let escapes = Path::new(&link_native).components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        });
+        if escapes {
+            eprintln!(
+                "warning: attachment {:?} is absolute or climbs out of its folder; skipping",
+                link
+            );
+            continue;
+        }
         let att_src_primary = old_parent.join(&link_native);
 
         // Resolve the actual source file:

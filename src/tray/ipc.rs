@@ -835,14 +835,7 @@ fn read_env_lines(env_path: &Path) -> anyhow::Result<Vec<String>> {
 }
 
 fn write_env_lines(env_path: &Path, lines: &[String]) -> anyhow::Result<()> {
-    if let Some(parent) = env_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut content = lines.join("\n");
-    if !content.is_empty() {
-        content.push('\n');
-    }
-    std::fs::write(env_path, content)
+    config::write_env_file(env_path, lines)
         .with_context(|| format!("failed to write {}", env_path.display()))
 }
 
@@ -857,6 +850,9 @@ fn env_line_has_key(line: &str, key: &str) -> bool {
 /// `<NAME>_APPLICATION_PASSWORD` wins over `<NAME>_PASSWORD` when loading, so an
 /// existing application password is the key to update.
 fn set_env_password(env_path: &Path, account_name: &str, password: &str) -> anyhow::Result<()> {
+    if !config::env_value_is_valid(password) {
+        anyhow::bail!("Le mot de passe ne peut contenir ni retour à la ligne ni caractère NUL");
+    }
     let mut lines = read_env_lines(env_path)?;
     let [app_key, plain_key] = env_password_keys(account_name);
     let key = if lines.iter().any(|l| env_line_has_key(l, &app_key)) {
@@ -1730,6 +1726,16 @@ hi
             fs::read_to_string(&env).unwrap(),
             "OTHER_PASSWORD='c'\nMON_COMPTE_PASSWORD='secret'\n"
         );
+    }
+
+    #[test]
+    fn test_set_env_password_with_newline_invalid() {
+        let temp = TempDir::new().unwrap();
+        let env = temp.path().join(".env");
+        fs::write(&env, "OTHER_PASSWORD='c'\n").unwrap();
+
+        assert!(set_env_password(&env, "Perso", "pw'\nINJECTED=1").is_err());
+        assert_eq!(fs::read_to_string(&env).unwrap(), "OTHER_PASSWORD='c'\n");
     }
 
     #[test]

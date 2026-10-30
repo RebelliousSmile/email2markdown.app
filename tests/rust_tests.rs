@@ -1616,6 +1616,30 @@ attachments:
         );
     }
 
+    #[test]
+    fn test_move_email_with_parent_dir_link_skipped() {
+        let temp = TempDir::new().unwrap();
+        let src_dir = temp.path().join("account").join("staging");
+        let dst_dir = temp.path().join("account").join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
+        // Outside the account root: `account/../secret.txt`
+        let outside = temp.path().join("secret.txt");
+        fs::write(&outside, b"secret").unwrap();
+        let md_src = src_dir.join("email.md");
+        fs::write(
+            &md_src,
+            "---\nsubject: Test\nattachments:\n  - ../secret.txt\n---\nBody\n",
+        )
+        .unwrap();
+
+        move_email(&md_src, &dst_dir).unwrap();
+
+        assert!(dst_dir.join("email.md").exists());
+        assert!(outside.exists(), "file outside the account must stay put");
+        assert!(!dst_dir.join("secret.txt").exists());
+    }
+
     /// Anti-regression: frontmatter with a YAML-quoted attachment name (e.g. `invoice #5.pdf`
     /// serialized as `- 'email__a1b2c3d4_invoice #5.pdf'`) must be correctly dequoted by
     /// `serde_yaml` so that `move_email` locates and moves the real file.
@@ -5032,5 +5056,145 @@ mod quote_link_tests {
         let (text, index) = nested_without_parent_note();
         let out = link_note(&text, "Reponse.md", &index);
         assert!(out.content.contains("Texte du parent sans note."));
+    }
+}
+
+mod thunderbird_tests {
+    use super::*;
+    use email_to_markdown::config::Account;
+    use email_to_markdown::thunderbird::{
+        write_accounts_merged, write_passwords_to_env, ThunderbirdPassword,
+    };
+
+    fn account(name: &str, server: &str) -> Account {
+        Account {
+            name: name.to_string(),
+            server: server.to_string(),
+            port: 993,
+            username: format!("{name}@example.com"),
+            password: None,
+            ignored_folders: Vec::new(),
+            export_directory: String::new(),
+            quote_depth: 1,
+            skip_existing: true,
+            collect_contacts: false,
+            skip_signature_images: false,
+            delete_after_export: false,
+            cleanup_empty_dirs: true,
+            batch_size: 0,
+        }
+    }
+
+    fn password(server: &str, secret: &str) -> ThunderbirdPassword {
+        ThunderbirdPassword {
+            imap_server: server.to_string(),
+            username: "moi".to_string(),
+            password: secret.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_write_accounts_merged_with_differently_cased_name() {
+        let temp = TempDir::new().expect("create tempdir");
+        let path = temp.path().join("accounts.yaml");
+        std::fs::write(
+            &path,
+            "accounts:\n- name: gmail\n  server: imap.gmail.com\n  port: 993\n  username: moi\n",
+        )
+        .expect("write accounts");
+
+        write_accounts_merged(&[account("Gmail", "imap.gmail.com")], &path).expect("merge");
+
+        let names: Vec<String> = load_raw_accounts(&path)
+            .expect("load")
+            .into_iter()
+            .map(|a| a.name)
+            .collect();
+        assert_eq!(names, vec!["gmail".to_string()]);
+    }
+
+    #[test]
+    fn test_write_passwords_to_env_with_existing_env() {
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join(".env");
+        std::fs::write(&env, "OTHER=1\nPERSO_PASSWORD='old'\n").expect("write env");
+
+        let written = write_passwords_to_env(
+            &[account("Perso", "imap.example.org")],
+            &[password("IMAP.example.org", "it's")],
+            &env,
+        )
+        .expect("write passwords");
+
+        assert_eq!(written, 1);
+        assert_eq!(
+            std::fs::read_to_string(&env).expect("read env"),
+            r"OTHER=1
+PERSO_PASSWORD='it'\''s'
+"
+        );
+    }
+
+    #[test]
+    fn test_write_passwords_to_env_with_newline_password_skipped() {
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join(".env");
+        std::fs::write(&env, "OTHER=1\n").expect("write env");
+
+        let written = write_passwords_to_env(
+            &[account("Perso", "imap.example.org")],
+            &[password("imap.example.org", "a\nINJECTED=1")],
+            &env,
+        )
+        .expect("write passwords");
+
+        assert_eq!(written, 0);
+        let content = std::fs::read_to_string(&env).expect("read env");
+        assert_eq!(content, "OTHER=1\n");
+        assert!(!content.contains("INJECTED"));
+    }
+}
+
+mod env_file_tests {
+    use super::*;
+    use email_to_markdown::config::write_env_file;
+
+    #[test]
+    fn test_write_env_file_with_newline_invalid() {
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join(".env");
+
+        let result = write_env_file(&env, &["A_PASSWORD='x\nB=1'".to_string()]);
+
+        assert!(matches!(result, Err(ConfigError::ValidationError(_))));
+        assert!(!env.exists());
+    }
+
+    #[test]
+    fn test_write_env_file_valid() {
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join("config").join(".env");
+
+        write_env_file(&env, &["A=1".to_string(), "B=2".to_string()]).expect("write env");
+
+        assert_eq!(std::fs::read_to_string(&env).expect("read"), "A=1\nB=2\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_env_file_mode_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().expect("create tempdir");
+        let env = temp.path().join(".env");
+        std::fs::write(&env, "A=0\n").expect("seed env");
+        std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        write_env_file(&env, &["A=1".to_string()]).expect("write env");
+
+        let mode = std::fs::metadata(&env)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }
