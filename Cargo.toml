@@ -96,7 +96,7 @@ base64 = "0.22"
 tray-icon = { version = "0.19", optional = true }
 tao = { version = "0.30", optional = true }
 wry = { version = "0.44", optional = true }
-rfd = { version = "0.15", optional = true }
+rfd = { version = "0.15", optional = true, default-features = false, features = ["gtk3"] }
 
 # Open files with default application
 open = "5.3"

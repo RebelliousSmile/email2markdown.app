@@ -56,9 +56,9 @@ jobs:
         with:
           toolchain: "1.93.0" # same as rust-toolchain.toml
       - run: cargo install cargo-audit --locked --version 0.22.2
-      # Fails on a vulnerability. Tolerated notices, each with its reason, are
-      # listed in .cargo/audit.toml.
-      - run: cargo audit
+      # Fails on any advisory, notices included, unless .cargo/audit.toml
+      # tolerates it with a reason.
+      - run: cargo audit -D warnings
 
   tools:
     name: Ubuntu — Python tools
