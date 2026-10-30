@@ -410,6 +410,38 @@ fn delete_discarded_batch_mixes_deleted_and_already_absent() {
 
 #[test]
 #[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn delete_discarded_forged_proof_is_rejected_and_keeps_messages() {
+    require_fixture();
+    let mut exporter = ImapExporter::new(account("forged"), false);
+    exporter.connect().unwrap();
+    let candidates = exporter
+        .search_contextual(&[MatchRule::Domain("example.com".into())])
+        .unwrap();
+    let false_positive = candidates
+        .iter()
+        .find(|c| c.source.message_id.as_deref() == Some("fixture-false-positive@example.com"))
+        .unwrap();
+    // Alice's identity, pointed at the false positive's UID.
+    let mut forged = alice_proof(&mut exporter);
+    forged.location = false_positive.locations[0].clone();
+
+    let results = exporter.delete_discarded_messages(&[forged]).unwrap();
+    assert_eq!(
+        results[0].outcome,
+        DeletionOutcome::Rejected("identité serveur différente de la preuve".into())
+    );
+    assert_eq!(inbox_message_ids("forged"), SEEDED_IDS.to_vec());
+
+    let log = tempfile::TempDir::new().unwrap();
+    let log_path = log.path().join("deletions.log");
+    email_to_markdown::deletion_log::record_results_to(&log_path, &results);
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("rejected: identité serveur différente de la preuve"));
+    assert!(!log.contains("\tdeleted"));
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
 fn delete_discarded_missing_folder_requires_retry() {
     require_fixture();
     let mut exporter = ImapExporter::new(account("clean-missing"), false);

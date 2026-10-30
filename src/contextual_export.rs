@@ -509,9 +509,57 @@ pub enum DeletionOutcome {
         actual: Option<u32>,
     },
     /// The local note no longer proves this message (missing, or carrying
-    /// another proof): nothing was sent to the server, and a retry would fail
-    /// the same way.
+    /// another proof), or the server message at the proved place is another
+    /// one: nothing was sent to the server, and a retry would fail the same way.
     Rejected(String),
+}
+
+pub const IDENTITY_MISMATCH: &str = "identité serveur différente de la preuve";
+
+/// `true` when the server headers `fetched` are those of the message `proof`
+/// was taken from: same Message-ID and same header fingerprint.
+pub fn identity_matches(proof: &LocalSourceProof, fetched: &FetchedMessage) -> bool {
+    let (_, provider_id, header) = fetched;
+    parse_header_candidate(
+        &proof.identity.account,
+        proof.location.clone(),
+        header,
+        provider_id.clone(),
+    )
+    .is_ok_and(|candidate| {
+        candidate.source.message_id == proof.identity.message_id
+            && candidate.source.header_fingerprint == proof.identity.header_fingerprint
+    })
+}
+
+/// The step of a UID STORE + UID EXPUNGE that failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpungeFailure {
+    Store(String),
+    Expunge(String),
+}
+
+/// Outcome of each of `uids` after a UID SEARCH that returned `present` (or
+/// failed) and a STORE + EXPUNGE of the present ones that gave `result`.
+pub fn classify_expunge(
+    uids: &[u32],
+    present: std::result::Result<&BTreeSet<u32>, String>,
+    result: std::result::Result<(), ExpungeFailure>,
+) -> Vec<DeletionOutcome> {
+    let present = match present {
+        Ok(present) => present,
+        Err(error) => return vec![DeletionOutcome::RetryRequired(error); uids.len()],
+    };
+    uids.iter()
+        .map(|uid| match &result {
+            _ if !present.contains(uid) => DeletionOutcome::AlreadyAbsent,
+            Ok(()) => DeletionOutcome::Deleted,
+            Err(ExpungeFailure::Store(error)) => DeletionOutcome::RetryRequired(error.clone()),
+            Err(ExpungeFailure::Expunge(error)) => DeletionOutcome::RetryRequired(format!(
+                "drapeau \\Deleted déjà posé, EXPUNGE en échec : {error}"
+            )),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

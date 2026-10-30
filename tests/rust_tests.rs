@@ -3519,6 +3519,133 @@ body
             assert!(!retried.contains(&1));
         }
     }
+
+    mod identity_tests {
+        use super::*;
+        use email_to_markdown::contextual_export::identity_matches;
+
+        fn proof_of(header: &[u8]) -> LocalSourceProof {
+            let candidate =
+                parse_header_candidate("Work", location("INBOX", 7), header, None).unwrap();
+            LocalSourceProof {
+                identity: candidate.source,
+                location: location("INBOX", 7),
+            }
+        }
+
+        #[test]
+        fn test_identity_matches_same_headers() {
+            let header = header(
+                "a@example.com",
+                "alice@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            assert!(identity_matches(&proof_of(&header), &(7, None, header)));
+        }
+
+        #[test]
+        fn test_identity_matches_other_message_id_invalid() {
+            let proved = header(
+                "a@example.com",
+                "alice@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            let server = header(
+                "b@example.com",
+                "alice@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            assert!(!identity_matches(&proof_of(&proved), &(7, None, server)));
+        }
+
+        #[test]
+        fn test_identity_matches_same_message_id_other_fingerprint_invalid() {
+            let proved = header(
+                "a@example.com",
+                "alice@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            let server = header(
+                "a@example.com",
+                "mallory@example.com",
+                "bob@example.com",
+                "Hi",
+            );
+            assert!(!identity_matches(&proof_of(&proved), &(7, None, server)));
+        }
+
+        /// Export proofs are built on the full message, the server check on
+        /// `HEADER_FETCH_FIELDS`: both must give the same fingerprint.
+        #[test]
+        fn test_identity_matches_full_message_proof_with_fetched_fields() {
+            let full = multipart_raw("report@example.com");
+            let fields = b"Message-ID: <report@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Project report\r\n\r\n".to_vec();
+            assert!(identity_matches(&proof_of(&full), &(7, None, fields)));
+        }
+    }
+
+    mod classify_expunge_tests {
+        use email_to_markdown::contextual_export::{
+            classify_expunge, DeletionOutcome, ExpungeFailure,
+        };
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn test_classify_expunge_valid() {
+            let present = BTreeSet::from([1, 3]);
+            let outcomes = classify_expunge(&[1, 2, 3], Ok(&present), Ok(()));
+            assert_eq!(
+                outcomes,
+                vec![
+                    DeletionOutcome::Deleted,
+                    DeletionOutcome::AlreadyAbsent,
+                    DeletionOutcome::Deleted,
+                ]
+            );
+        }
+
+        #[test]
+        fn test_classify_expunge_with_search_failure() {
+            let outcomes = classify_expunge(&[1, 2], Err("search down".into()), Ok(()));
+            assert_eq!(
+                outcomes,
+                vec![DeletionOutcome::RetryRequired("search down".into()); 2]
+            );
+        }
+
+        #[test]
+        fn test_classify_expunge_with_expunge_failure_after_store() {
+            let present = BTreeSet::from([1]);
+            let outcomes = classify_expunge(
+                &[1, 2],
+                Ok(&present),
+                Err(ExpungeFailure::Expunge("expunge down".into())),
+            );
+            assert_eq!(outcomes[1], DeletionOutcome::AlreadyAbsent);
+            let DeletionOutcome::RetryRequired(reason) = &outcomes[0] else {
+                panic!("retry expected, got {:?}", outcomes[0]);
+            };
+            assert!(reason.contains("\\Deleted déjà posé") && reason.contains("expunge down"));
+        }
+
+        #[test]
+        fn test_classify_expunge_with_store_failure() {
+            let present = BTreeSet::from([1]);
+            let outcomes = classify_expunge(
+                &[1],
+                Ok(&present),
+                Err(ExpungeFailure::Store("store down".into())),
+            );
+            assert_eq!(
+                outcomes,
+                vec![DeletionOutcome::RetryRequired("store down".into())]
+            );
+        }
+    }
 }
 
 mod handled_purge_tests {

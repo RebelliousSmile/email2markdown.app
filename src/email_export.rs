@@ -1494,35 +1494,33 @@ fn expunge_uids(
     session: &mut Session<Box<dyn ImapConnection>>,
     uids: &[u32],
 ) -> Vec<crate::contextual_export::DeletionOutcome> {
-    use crate::contextual_export::DeletionOutcome;
+    use crate::contextual_export::{classify_expunge, ExpungeFailure};
+    use std::collections::BTreeSet;
 
-    let present = match session.uid_search(format!("UID {}", imap_set(uids))) {
-        Ok(found) => found,
-        Err(error) => {
-            return vec![DeletionOutcome::RetryRequired(format!("{error:#}")); uids.len()]
-        }
+    let present: BTreeSet<u32> = match session.uid_search(format!("UID {}", imap_set(uids))) {
+        Ok(found) => found.into_iter().collect(),
+        Err(error) => return classify_expunge(uids, Err(format!("{error:#}")), Ok(())),
     };
     let targets: Vec<u32> = uids
         .iter()
         .copied()
         .filter(|uid| present.contains(uid))
         .collect();
-    let deleted = if targets.is_empty() {
+    let result = if targets.is_empty() {
         Ok(())
     } else {
         let set = imap_set(&targets);
         session
             .uid_store(&set, "+FLAGS.SILENT (\\Deleted)")
-            .and_then(|_| session.uid_expunge(&set))
+            .map_err(|error| ExpungeFailure::Store(format!("{error:#}")))
+            .and_then(|_| {
+                session
+                    .uid_expunge(&set)
+                    .map_err(|error| ExpungeFailure::Expunge(format!("{error:#}")))
+            })
             .map(|_| ())
     };
-    uids.iter()
-        .map(|uid| match &deleted {
-            _ if !present.contains(uid) => DeletionOutcome::AlreadyAbsent,
-            Ok(()) => DeletionOutcome::Deleted,
-            Err(error) => DeletionOutcome::RetryRequired(format!("{error:#}")),
-        })
-        .collect()
+    classify_expunge(uids, Ok(&present), result)
 }
 
 /// UID FETCH the selected headers of `uids` in the selected mailbox, by
@@ -2271,7 +2269,10 @@ impl ImapExporter {
         provider: crate::contextual_export::DeletionProvider,
         valid: Vec<crate::contextual_export::DeletionRequest>,
     ) -> Result<Vec<crate::contextual_export::MessageDeletionResult>> {
-        use crate::contextual_export::{DeletionOutcome, DeletionProvider, MessageDeletionResult};
+        use crate::contextual_export::{
+            identity_matches, DeletionOutcome, DeletionProvider, MessageDeletionResult,
+            IDENTITY_MISMATCH,
+        };
         use std::collections::BTreeMap;
 
         match provider {
@@ -2288,7 +2289,7 @@ impl ImapExporter {
                         .push(request);
                 }
                 let mut results = Vec::new();
-                for ((raw, _display, expected_validity), group) in grouped {
+                for ((raw, display, expected_validity), group) in grouped {
                     let session = self.session.as_mut().context("Not connected")?;
                     let mailbox = match session.select(&raw) {
                         Ok(mailbox) => mailbox,
@@ -2317,13 +2318,51 @@ impl ImapExporter {
                             .iter()
                             .map(|request| request.proof.location.uid)
                             .collect();
-                        let outcomes = expunge_uids(session, &uids);
-                        results.extend(chunk.iter().zip(outcomes).map(|(request, outcome)| {
-                            MessageDeletionResult {
+                        // Re-read the server identity: a proof only authorises
+                        // deleting the message it was taken from.
+                        let fetched = match fetch_headers_by_uid(session, &display, &uids, false) {
+                            Ok(fetched) => fetched,
+                            Err(error) => {
+                                results.extend(chunk.iter().map(|request| MessageDeletionResult {
+                                    proof: request.proof.clone(),
+                                    outcome: DeletionOutcome::RetryRequired(format!("{error:#}")),
+                                }));
+                                continue;
+                            }
+                        };
+                        let mut confirmed = Vec::new();
+                        for request in chunk {
+                            let uid = request.proof.location.uid;
+                            let outcome = match fetched.iter().find(|message| message.0 == uid) {
+                                None => DeletionOutcome::AlreadyAbsent,
+                                Some(message) if !identity_matches(&request.proof, message) => {
+                                    DeletionOutcome::Rejected(IDENTITY_MISMATCH.into())
+                                }
+                                Some(_) => {
+                                    confirmed.push(request);
+                                    continue;
+                                }
+                            };
+                            results.push(MessageDeletionResult {
                                 proof: request.proof.clone(),
                                 outcome,
-                            }
-                        }));
+                            });
+                        }
+                        let confirmed_uids: Vec<u32> = confirmed
+                            .iter()
+                            .map(|request| request.proof.location.uid)
+                            .collect();
+                        let outcomes = if confirmed_uids.is_empty() {
+                            Vec::new()
+                        } else {
+                            expunge_uids(session, &confirmed_uids)
+                        };
+                        results.extend(confirmed.into_iter().zip(outcomes).map(
+                            |(request, outcome)| MessageDeletionResult {
+                                proof: request.proof.clone(),
+                                outcome,
+                            },
+                        ));
                     }
                 }
                 Ok(results)
@@ -2347,6 +2386,18 @@ impl ImapExporter {
                             session.uid_search(format!("X-GM-MSGID {provider_id}"))?;
                         if !source_uids.is_empty() {
                             let source_uids: Vec<u32> = source_uids.into_iter().collect();
+                            let fetched = fetch_headers_by_uid(
+                                session,
+                                &request.proof.location.folder_display,
+                                &source_uids,
+                                true,
+                            )?;
+                            if fetched
+                                .iter()
+                                .any(|message| !identity_matches(&request.proof, message))
+                            {
+                                return Ok(DeletionOutcome::Rejected(IDENTITY_MISMATCH.into()));
+                            }
                             session.uid_mv(imap_set(&source_uids), &trash_folder)?;
                         }
                         session.select(&trash_folder)?;
