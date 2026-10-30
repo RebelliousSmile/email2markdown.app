@@ -3588,6 +3588,78 @@ body
         }
     }
 
+    mod gmail_plan_tests {
+        use super::*;
+        use email_to_markdown::email_export::plan_gmail_deletion;
+
+        fn request(folder: &str, uid: u32, provider_id: Option<&str>) -> DeletionRequest {
+            DeletionRequest {
+                markdown: std::path::PathBuf::new(),
+                proof: LocalSourceProof {
+                    identity: SourceIdentity {
+                        account: "Gmail".into(),
+                        message_id: Some(format!("m{uid}@example.com")),
+                        header_fingerprint: "fp".into(),
+                        provider_id: provider_id.map(str::to_string),
+                    },
+                    location: location(folder, uid),
+                },
+            }
+        }
+
+        #[test]
+        fn test_plan_gmail_deletion_groups_by_folder() {
+            let plan = plan_gmail_deletion(vec![
+                request("Work", 1, Some("11")),
+                request("INBOX", 2, Some("22")),
+                request("Work", 3, None),
+                request("Work", 4, Some("44")),
+            ]);
+            let groups: Vec<(&str, Vec<&str>)> = plan
+                .groups
+                .iter()
+                .map(|g| {
+                    (
+                        g.folder_raw.as_str(),
+                        g.provider_ids.iter().map(String::as_str).collect(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                groups,
+                vec![("INBOX", vec!["22"]), ("Work", vec!["11", "44"])]
+            );
+        }
+
+        #[test]
+        fn test_plan_gmail_deletion_without_provider_id() {
+            let plan = plan_gmail_deletion(vec![
+                request("Work", 1, Some("11")),
+                request("Work", 3, None),
+            ]);
+            let missing: Vec<u32> = plan
+                .missing_id
+                .iter()
+                .map(|r| r.proof.location.uid)
+                .collect();
+            assert_eq!(missing, vec![3]);
+            assert!(plan.groups[0]
+                .requests
+                .iter()
+                .all(|r| r.proof.location.uid != 3));
+        }
+
+        #[test]
+        fn test_plan_gmail_deletion_with_same_id_twice() {
+            let plan = plan_gmail_deletion(vec![
+                request("Work", 1, Some("11")),
+                request("Work", 2, Some("11")),
+            ]);
+            assert_eq!(plan.groups[0].provider_ids, vec!["11".to_string()]);
+            assert_eq!(plan.groups[0].requests.len(), 2);
+        }
+    }
+
     mod classify_expunge_tests {
         use email_to_markdown::contextual_export::{
             classify_expunge, DeletionOutcome, ExpungeFailure,

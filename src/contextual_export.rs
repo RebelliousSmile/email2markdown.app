@@ -141,6 +141,18 @@ fn quote_imap(value: &str) -> Result<String> {
     ))
 }
 
+/// UID SEARCH queries matching Gmail `provider_ids` (`X-GM-MSGID`), by
+/// batches of `SEARCH_RULE_BATCH`.
+pub fn gmail_id_searches(provider_ids: &[String]) -> Vec<String> {
+    provider_ids
+        .chunks(SEARCH_RULE_BATCH)
+        .map(|chunk| {
+            let atoms: Vec<String> = chunk.iter().map(|id| format!("X-GM-MSGID {id}")).collect();
+            fold_or(&atoms)
+        })
+        .collect()
+}
+
 fn fold_or(atoms: &[String]) -> String {
     match atoms {
         [] => String::new(),
