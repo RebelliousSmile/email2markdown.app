@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -22,6 +22,10 @@ const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
 /// transfer, so a silent server fails fast while a slow link still completes.
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Largest asset accepted: the release binary weighs about 10 MB, so a larger
+/// download is not ours and must not fill the disk.
+const MAX_ASSET_BYTES: u64 = 100 * 1024 * 1024;
 
 static SEMVER_V_PREFIX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^v").expect("static regex"));
@@ -182,29 +186,57 @@ pub fn download_and_apply(release: &Release, on_progress: impl Fn(&str)) -> Resu
         .call()
         .map_err(|e| anyhow!("Download error: {}", e))?;
 
-    let mut tmp = tempfile::NamedTempFile::new()?;
-    let mut reader = response.into_reader();
-    std::io::copy(&mut reader, &mut tmp).context("failed to download update")?;
-    tmp.flush()?;
-
-    // Verify before `keep()`: on mismatch `tmp` is dropped, which deletes the
-    // download, and the running binary is never touched.
-    on_progress("Vérification de l'intégrité…");
-    verify_checksum(tmp.path(), &expected)?;
-
-    on_progress("Application de la mise à jour…");
-    let (_, tmp_path) = tmp
-        .keep()
-        .map_err(|e| anyhow!("failed to persist temp file: {}", e))?;
-    self_replace::self_replace(&tmp_path)?;
+    install_download(
+        response.into_reader(),
+        &expected,
+        &std::env::temp_dir(),
+        MAX_ASSET_BYTES,
+        &on_progress,
+        |path| Ok(self_replace::self_replace(path)?),
+    )?;
 
     on_progress("Mise à jour terminée — fermez et relancez l'application.");
     Ok(())
 }
 
+/// Copy at most `max_bytes` of `reader` into a temporary file of `temp_dir`,
+/// check it against `expected`, then hand the kept file to `replace`. Any
+/// failure before `replace` deletes the download and leaves the binary intact.
+fn install_download(
+    reader: impl Read,
+    expected: &str,
+    temp_dir: &Path,
+    max_bytes: u64,
+    on_progress: &impl Fn(&str),
+    replace: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let mut tmp = tempfile::NamedTempFile::new_in(temp_dir)?;
+    let copied = std::io::copy(&mut reader.take(max_bytes + 1), &mut tmp)
+        .context("failed to download update")?;
+    if copied > max_bytes {
+        anyhow::bail!("update download exceeds {max_bytes} bytes, refuse to install it");
+    }
+    tmp.flush()?;
+
+    // Verify before `keep()`: on mismatch `tmp` is dropped, which deletes the
+    // download, and the running binary is never touched.
+    on_progress("Vérification de l'intégrité…");
+    verify_checksum(tmp.path(), expected)?;
+
+    on_progress("Application de la mise à jour…");
+    let (_, tmp_path) = tmp
+        .keep()
+        .map_err(|e| anyhow!("failed to persist temp file: {}", e))?;
+    replace(&tmp_path)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{checksum_for, select_release, verify_checksum, GhRelease, Release};
+    use super::{
+        checksum_for, install_download, select_release, verify_checksum, GhRelease, Release,
+    };
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
     #[cfg(target_os = "windows")]
@@ -349,5 +381,66 @@ mod tests {
         assert!(
             message.contains("a52d159f262b2c6ddb724a61840befc36eb30c88877a4030b65cbe86298449c9")
         );
+    }
+
+    /// Run `install_download` on `content` in `dir`; returns the result and the
+    /// path handed to the replacement, if it was called.
+    fn install(
+        content: &[u8],
+        expected: &str,
+        dir: &Path,
+        max_bytes: u64,
+    ) -> (anyhow::Result<()>, Option<PathBuf>) {
+        let replaced = RefCell::new(None);
+        let result = install_download(content, expected, dir, max_bytes, &|_| {}, |path| {
+            *replaced.borrow_mut() = Some(path.to_path_buf());
+            Ok(())
+        });
+        (result, replaced.into_inner())
+    }
+
+    fn dir_entries(dir: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect()
+    }
+
+    #[test]
+    fn test_install_download_matching_sum_replaces() {
+        let temp = TempDir::new().unwrap();
+
+        let (result, replaced) = install(b"abc", ABC_SHA256, temp.path(), 3);
+
+        result.unwrap();
+        let path = replaced.expect("replacement called");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"abc",
+            "kept file handed over"
+        );
+    }
+
+    #[test]
+    fn test_install_download_wrong_sum_never_replaces() {
+        let temp = TempDir::new().unwrap();
+
+        let (result, replaced) = install(b"abc", OTHER_SHA256, temp.path(), 3);
+
+        assert!(result.is_err());
+        assert_eq!(replaced, None);
+        assert!(dir_entries(temp.path()).is_empty(), "download deleted");
+    }
+
+    #[test]
+    fn test_install_download_oversized_stream_never_replaces() {
+        let temp = TempDir::new().unwrap();
+
+        let (result, replaced) = install(b"abcd", ABC_SHA256, temp.path(), 3);
+
+        let error = format!("{:#}", result.unwrap_err());
+        assert!(error.contains("exceeds 3 bytes"), "{error}");
+        assert_eq!(replaced, None);
+        assert!(dir_entries(temp.path()).is_empty(), "download deleted");
     }
 }
