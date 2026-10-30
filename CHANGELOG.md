@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-30
+
+### Security
+
+- **Bibliothèques TLS mises à jour** : `rustls` (0.23.46), `rustls-webpki` (0.103.16) et `webpki-roots` (1.0.11) corrigent six failles touchant les connexions chiffrées au serveur IMAP, dont l'acceptation de certificats intermédiaires révoqués et l'exposition de secrets TLS dans les journaux de débogage (RUSTSEC-2026-0346 à 0349, 0381 et 0382).
+
 ## [0.22.0] - 2026-10-30
 
 ### Added
