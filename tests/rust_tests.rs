@@ -4513,6 +4513,30 @@ mod quote_link_tests {
     }
 
     #[test]
+    fn test_index_from_dir_skips_underscore_dirs() {
+        let vault = TempDir::new().unwrap();
+        let hidden = vault.path().join("_skipped");
+        std::fs::create_dir_all(&hidden).unwrap();
+        std::fs::write(hidden.join("Devis original.md"), original()).unwrap();
+
+        let out = link_note(&reply(), "Reponse.md", &Index::from_dir(vault.path()));
+
+        assert_eq!(out.left, vec![Left::NoNote]);
+    }
+
+    #[test]
+    fn test_index_from_dir_indexes_regular_dirs() {
+        let vault = TempDir::new().unwrap();
+        let dir = vault.path().join("Clients");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Devis original.md"), original()).unwrap();
+
+        let out = link_note(&reply(), "Reponse.md", &Index::from_dir(vault.path()));
+
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
+    }
+
+    #[test]
     fn test_link_note_without_note_reports_reason() {
         let out = link_note(&reply(), "Reponse.md", &Index::build([]));
         assert_eq!(out.left, vec![Left::NoNote]);
