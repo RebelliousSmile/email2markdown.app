@@ -1,5 +1,5 @@
 #define AppName "Email to Markdown"
-#define AppVersion "0.22.1"
+#define AppVersion "0.23.0"
 #define AppPublisher "FX Guillois"
 #define AppExeName "email-to-markdown.exe"
 

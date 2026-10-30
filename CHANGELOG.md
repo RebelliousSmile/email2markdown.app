@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-30
+
 ### Fixed
 
+- **Noms venus du serveur contrôlés** : le nom d'un dossier IMAP est converti en chemin relatif qui ne peut pas sortir du dossier d'export ; un nom absolu, contenant `..`, `\`, `:` ou un caractère de contrôle est refusé, et le dossier est ignoré avec un avertissement. Les noms réservés de Windows (`CON`, `NUL`…) et les points finaux sont refusés dans les segments de routage, et les noms de fichiers sont limités à 200 octets. Une preuve de suppression Gmail exige un identifiant numérique.
+- **Erreurs visibles au lieu de valeurs par défaut** : un `settings.yaml` illisible ou invalide est signalé avec son chemin, au lieu d'être remplacé en silence par les réglages par défaut. Une pièce jointe illisible ou une conversion HTML ratée compte désormais comme une erreur d'export ; en mode suppression, le message correspondant reste sur le serveur. Le tray signale en français, une seule fois, les échecs d'ouverture de fenêtre, d'enregistrement et d'ouverture de la documentation.
+- **« Nettoyer le serveur » explicite** : la confirmation précise que la suppression est irréversible (sur Gmail, les messages sont aussitôt purgés de la Corbeille) et, hors Windows, le bouton s'intitule « Supprimer définitivement ». L'info-bulle du tray indique le nettoyage en cours, et l'enregistrement des réglages généraux reconstruit le menu.
 - **Import Thunderbird non destructif** : l'import, depuis le CLI comme depuis la barre des tâches, ajoute seulement les comptes absents de `accounts.yaml` et conserve tels quels ceux qui y figurent déjà. Le fichier précédent est d'abord copié dans `accounts.yaml.bak`, et le résumé indique les comptes ajoutés, ceux qui sont conservés et l'emplacement de la sauvegarde.
 - **Pièces jointes homonymes des notes supprimées** : deux notes supprimées qui portaient une pièce jointe du même nom n'en écrasent plus une dans `_deleted/` ; la seconde reçoit un suffixe numérique (`facture_2.pdf`).
 - **Ordre des destinations** : réordonner une destination ne bouleverse plus l'ordre relatif des autres.
@@ -21,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Mise à jour automatique bornée** : le téléchargement d'une nouvelle version est limité à 100 Mo et sa somme SHA-256 est vérifiée avant le remplacement du binaire ; en cas d'échec, le fichier téléchargé est supprimé et l'exécutable reste intact.
 - **Dépendances** : `event-listener` (5.4.2) et `rand` (0.8.8, 0.9.5) corrigent des avis de code non sûr (RUSTSEC-2026-0221, RUSTSEC-2026-0097). La dépendance inutilisée `trash` est retirée, `imap` est épinglée sur sa préversion. Les avis restants, tous transitifs, sont tolérés un par un, avec leur raison, dans `.cargo/audit.toml`.
 - **Licence** : le texte de la licence MIT est ajouté (`LICENSE`).
 
