@@ -372,8 +372,23 @@ fn handle_persist_routing_rule(
     attr_value: String,
     move_rule: bool,
 ) {
+    let eval_error = |msg: &str| {
+        if let (Ok(js_str), Some(WState::Route(state))) =
+            (serde_json::to_string(msg), windows.get(&window_id))
+        {
+            let _ = state
+                .webview
+                .evaluate_script(&format!("route_review_error({})", js_str));
+        }
+    };
     // Resolve destinations.yaml path from settings (shared resolver).
-    let dest_file = crate::route::destinations_path();
+    let dest_file = match crate::route::destinations_path() {
+        Ok(dest_file) => dest_file,
+        Err(e) => {
+            eval_error(&format!("{e:#}"));
+            return;
+        }
+    };
 
     // Reject subject/account; only domain/from are surfaced in the UI.
     let rule_opt = match attr_kind.as_str() {
@@ -383,37 +398,25 @@ fn handle_persist_routing_rule(
     };
 
     let Some(rule) = rule_opt else {
-        let msg = format!(
+        eval_error(&format!(
             "unsupported attr_kind {:?} — only domain/from allowed",
             attr_kind
-        );
-        if let (Ok(js_str), Some(WState::Route(state))) =
-            (serde_json::to_string(&msg), windows.get(&window_id))
-        {
-            let _ = state
-                .webview
-                .evaluate_script(&format!("route_review_error({})", js_str));
-        }
+        ));
         return;
     };
 
     match crate::route::upsert_rule_exclusive(&dest_file, &dest_path, rule, move_rule) {
-        Err(e) => {
-            let msg = format!("{:#}", e);
-            if let (Ok(js_str), Some(WState::Route(state))) =
-                (serde_json::to_string(&msg), windows.get(&window_id))
-            {
-                let _ = state
-                    .webview
-                    .evaluate_script(&format!("route_review_error({})", js_str));
-            }
-        }
+        Err(e) => eval_error(&format!("{:#}", e)),
         Ok(()) => {
             // Re-read destinations and inject the updated path list.
-            let known_paths: Vec<String> = crate::route::load_destinations()
-                .into_iter()
-                .map(|d| d.path)
-                .collect();
+            let destinations = match crate::route::load_destinations() {
+                Ok(destinations) => destinations,
+                Err(e) => {
+                    eval_error(&format!("{:#}", e));
+                    return;
+                }
+            };
+            let known_paths: Vec<String> = destinations.into_iter().map(|d| d.path).collect();
             if let (Ok(json), Some(WState::Route(state))) =
                 (serde_json::to_string(&known_paths), windows.get(&window_id))
             {

@@ -778,6 +778,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
         contextual_account.skip_existing = false;
         contextual_account.export_directory = staging.to_string_lossy().into_owned();
         let mut context = crate::email_export::ExportContext {
+            errors: Vec::new(),
             export_directory: &staging,
             base_export_directory: &staging,
             account: &contextual_account,
@@ -800,6 +801,9 @@ pub(crate) fn convert_raw_contextual_unlocked(
             &mut context,
         )?
         .context("contextual converter skipped a selected message")?;
+        for error in &context.errors {
+            eprintln!("Export contextuel : {error}");
+        }
         install_staged(
             &effective_target,
             &staging,

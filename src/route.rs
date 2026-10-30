@@ -520,9 +520,16 @@ pub fn delete_email(md_path: &Path) -> Result<()> {
 /// `.txt` exists, it is migrated one-shot here. Centralizing the migration at the
 /// single resolution point means every caller (export, `dest` CLI, tray) gets the
 /// migrated file — not just `load_destinations`.
-pub fn destinations_path() -> PathBuf {
+pub fn destinations_path() -> Result<PathBuf> {
+    destinations_path_from(&crate::config::settings_path())
+}
+
+/// [`destinations_path`] with an explicit settings file. An invalid settings
+/// file is an error: falling back to the default path would silently read
+/// another destinations file.
+pub fn destinations_path_from(settings_file: &Path) -> Result<PathBuf> {
     let settings =
-        crate::config::Settings::load(&crate::config::settings_path()).unwrap_or_default();
+        crate::config::Settings::load(settings_file).context("failed to load settings")?;
     let configured = settings
         .destinations_file
         .as_deref()
@@ -550,16 +557,16 @@ pub fn destinations_path() -> PathBuf {
         }
     }
 
-    yaml_path
+    Ok(yaml_path)
 }
 
 /// Load routing destinations from the configured `destinations.yaml`.
 ///
 /// Resolution (and one-shot legacy migration) is handled by [`destinations_path`].
 /// A missing or malformed file yields an empty list (every email then routes to
-/// the default) with a warning.
-pub fn load_destinations() -> Vec<Destination> {
-    let dest_path = destinations_path();
+/// the default) with a warning; an invalid settings file is an error.
+pub fn load_destinations() -> Result<Vec<Destination>> {
+    let dest_path = destinations_path()?;
 
     if !dest_path.exists() {
         eprintln!(
@@ -567,10 +574,10 @@ pub fn load_destinations() -> Vec<Destination> {
              all emails will fall to the default path (Perso/Messy/Emails/<Year>/<Month>)",
             dest_path.display()
         );
-        return vec![];
+        return Ok(vec![]);
     }
 
-    match crate::destinations::load_yaml(&dest_path) {
+    Ok(match crate::destinations::load_yaml(&dest_path) {
         Ok(config) => config
             .destinations
             .into_iter()
@@ -589,7 +596,7 @@ pub fn load_destinations() -> Vec<Destination> {
             );
             vec![]
         }
-    }
+    })
 }
 
 // ── Routing types ────────────────────────────────────────────────────────────

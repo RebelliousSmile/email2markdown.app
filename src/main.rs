@@ -459,8 +459,8 @@ fn main() -> Result<()> {
                                 // Pipeline order: Export → route decisions accumulated above → apply now.
                                 // IMAP deletion flags were set during Export; local .md files remain
                                 // in staging until this apply step moves them into notes_dir.
-                                let settings =
-                                    Settings::load(&config::settings_path()).unwrap_or_default();
+                                let settings = Settings::load(&config::settings_path())
+                                    .context("failed to load settings")?;
                                 if let Some(notes_dir_str) = &settings.notes_dir {
                                     let notes_dir = PathBuf::from(notes_dir_str);
                                     let mut moved = 0usize;
@@ -550,7 +550,7 @@ fn main() -> Result<()> {
             config,
         } => {
             let settings = Settings::load(config.as_deref().unwrap_or(&config::settings_path()))
-                .unwrap_or_default();
+                .context("failed to load settings")?;
 
             let export_base = settings.export_base_dir.as_deref().unwrap_or(".");
             let notes_dir_str = settings.notes_dir.as_deref().unwrap_or(".");

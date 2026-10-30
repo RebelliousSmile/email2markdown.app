@@ -140,12 +140,18 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Defaults when the file is absent; an unreadable or invalid file is an
+    /// error naming the file, never silently replaced by the defaults.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
             return Ok(Settings::default());
         }
-        let content = fs::read_to_string(path)?;
-        Ok(serde_yaml::from_str(&content)?)
+        let invalid = |reason: String| ConfigError::SettingsFile {
+            path: path.to_path_buf(),
+            reason,
+        };
+        let content = fs::read_to_string(path).map_err(|e| invalid(e.to_string()))?;
+        serde_yaml::from_str(&content).map_err(|e| invalid(e.to_string()))
     }
 
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
@@ -267,6 +273,8 @@ pub enum ConfigError {
     FileReadError(#[from] std::io::Error),
     #[error("Failed to parse YAML: {0}")]
     YamlParseError(#[from] serde_yaml::Error),
+    #[error("Lecture de {} impossible : {reason}", path.display())]
+    SettingsFile { path: PathBuf, reason: String },
     #[error("Account not found: {0}")]
     AccountNotFound(String),
     #[error("No password found for account: {0}")]

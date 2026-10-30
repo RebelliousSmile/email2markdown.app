@@ -91,9 +91,9 @@ pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualL
         .as_deref()
         .map(std::path::Path::new)
         .context("notes_dir is not configured")?;
-    let destinations_file = route::destinations_path();
+    let destinations_file = route::destinations_path()?;
     ensure_contextual_destination(notes_dir, target, &destinations_file)?;
-    let destinations = route::load_destinations();
+    let destinations = route::load_destinations()?;
     let configured_names: Vec<String> = cfg
         .accounts
         .iter()
@@ -235,7 +235,7 @@ pub fn run_contextual_search(
         anyhow::bail!("No password found for {}", account.name);
     }
     let organize_by_date = Settings::load(&config::settings_path())
-        .unwrap_or_default()
+        .context("failed to load settings")?
         .organize_by_date;
     let mut exporter = ImapExporter::new(account, false);
     exporter
@@ -295,7 +295,7 @@ pub fn run_contextual_batch(
         .clone();
     let delete_after_export = account.delete_after_export;
     let organize_by_date = Settings::load(&config::settings_path())
-        .unwrap_or_default()
+        .context("failed to load settings")?
         .organize_by_date;
     let mut exporter = ImapExporter::new(account, false);
     exporter
@@ -655,7 +655,7 @@ pub fn action_export(account_name: String, result_sender: Sender<ActionResult>) 
                     if let Err(e) = crate::tray::send_command(
                         crate::tray::AppCommand::OpenRouteReview(decisions),
                     ) {
-                        eprintln!("Failed to open route review window: {:#}", e);
+                        eprintln!("Ouverture de la revue du tri impossible : {:#}", e);
                     }
                 }
             }
@@ -794,9 +794,9 @@ fn scan_staged_decisions(account_name: &str) -> Result<RouteDecisions> {
         return Ok(Vec::new());
     }
 
-    let dests = route::load_destinations();
+    let dests = route::load_destinations()?;
     let organize_by_date = Settings::load(&config::settings_path())
-        .unwrap_or_default()
+        .context("failed to load settings")?
         .organize_by_date;
     let mut decisions = Vec::new();
 
@@ -1067,12 +1067,12 @@ pub fn action_open_documentation() -> Result<()> {
     for path in &readme_paths {
         let readme_path = PathBuf::from(path);
         if readme_path.exists() {
-            open::that(&readme_path).context("Failed to open documentation")?;
+            open::that(&readme_path).context("ouverture du README impossible")?;
             return Ok(());
         }
     }
 
-    Err(anyhow::anyhow!("README.md not found"))
+    Err(anyhow::anyhow!("README.md introuvable"))
 }
 
 /// Open settings.yaml in the default editor (creates a template if absent).

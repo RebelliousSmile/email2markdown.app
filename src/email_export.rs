@@ -446,6 +446,9 @@ pub struct ExportContext<'a> {
     /// Where images dropped by the signature filter are kept. `Some` only when
     /// the message may be deleted from the server afterwards.
     pub quarantine: Option<Quarantine<'a>>,
+    /// Problems met while writing a note that was still written (unreadable
+    /// attachment, failed HTML conversion); the caller counts them as errors.
+    pub errors: Vec<String>,
 }
 
 /// Routing settings read once per account and shared by every folder export.
@@ -492,6 +495,8 @@ struct AttachmentPolicy<'q> {
     debug_mode: bool,
     /// Note-specific quarantine directory and the shared list of written images.
     quarantine: Option<(PathBuf, &'q mut Vec<PathBuf>)>,
+    /// Attachments left out of the note because their payload is unreadable.
+    errors: Vec<String>,
 }
 
 /// Export a single email to Markdown with frontmatter.
@@ -593,7 +598,7 @@ pub fn export_to_markdown(
     }
 
     // Extract body
-    let body = extract_body(&mail);
+    let body = extract_body_reporting(&mail, &mut ctx.errors);
 
     // Apply quote depth limiting
     let body = if account.quote_depth > 0 {
@@ -622,6 +627,7 @@ pub fn export_to_markdown(
             .quarantine
             .as_mut()
             .map(|q| (q.root.join(&note_stem), &mut *q.written)),
+        errors: Vec::new(),
     };
     let extracted = extract_attachments(
         &mail,
@@ -632,12 +638,25 @@ pub fn export_to_markdown(
         &mut inline_images,
         &mut attachments,
     );
+    let attachment_errors = policy.errors;
+    // The server copy is deleted on the strength of the note: a note missing an
+    // attachment must not be produced when that copy is the only one left.
+    let extracted = extracted.and_then(|()| {
+        if attachment_errors.is_empty() || ctx.quarantine.is_none() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "refuse to export a message to be deleted with unreadable attachments: {}",
+            attachment_errors.join("; ")
+        )
+    });
     if let Err(error) = extracted {
         if let Some(q) = ctx.quarantine.as_mut() {
             discard_quarantined(q.written, quarantine_start);
         }
         return Err(error);
     }
+    ctx.errors.extend(attachment_errors);
     let body = if referenced_cids.is_empty() {
         body
     } else {
@@ -815,10 +834,15 @@ fn split_addresses(field: &str) -> Vec<String> {
 }
 
 /// Convert HTML to Markdown using htmd. Returns empty string on failure.
+fn html_to_markdown(html: &str) -> String {
+    try_html_to_markdown(html).unwrap_or_default()
+}
+
+/// Convert HTML to Markdown using htmd.
 ///
 /// Newsletter/transactional HTML is noisy: `<head>`, `<style>` and `<title>`
 /// carry no readable content, and 1x1 tracking pixels would become `![](url)`.
-fn html_to_markdown(html: &str) -> String {
+fn try_html_to_markdown(html: &str) -> Result<String> {
     let converter = htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["head", "style", "script", "noscript", "title"])
         .add_handler(vec!["td", "th"], crate::html_layout::cell_handler)
@@ -855,8 +879,10 @@ fn html_to_markdown(html: &str) -> String {
             },
         )
         .build();
-    let markdown = converter.convert(html).unwrap_or_default();
-    collapse_blank_lines(&markdown)
+    let markdown = converter
+        .convert(html)
+        .context("failed to convert html to markdown")?;
+    Ok(collapse_blank_lines(&markdown))
 }
 
 /// True for an `<img>` that is invisible by construction (tracking pixel):
@@ -1003,31 +1029,50 @@ pub(crate) fn extract_md_body(content: &str) -> &str {
 /// readable `text/plain` part wins, and the `text/html` part is the fallback.
 /// This holds for single-part messages too, and for a part mislabelled
 /// `text/plain` that actually carries an HTML document.
+#[cfg(test)]
 pub(crate) fn extract_body(mail: &ParsedMail) -> String {
+    extract_body_reporting(mail, &mut Vec::new())
+}
+
+/// [`extract_body`] recording each failed HTML conversion in `errors`; the
+/// text is then kept unconverted rather than dropped.
+fn extract_body_reporting(mail: &ParsedMail, errors: &mut Vec<String>) -> String {
     let mut plain: Option<String> = None;
     let mut html: Option<String> = None;
     collect_text_bodies(mail, &mut plain, &mut html);
 
+    let mut convert = |raw: &str| match try_html_to_markdown(raw) {
+        Ok(markdown) => Some(markdown),
+        Err(error) => {
+            errors.push(format!(
+                "Corps HTML non converti, texte brut conservé : {error:#}"
+            ));
+            None
+        }
+    };
     if let Some(text) = plain.take() {
         if !text.trim().is_empty() {
             if let Some(raw) = html.as_deref() {
                 if raw.to_ascii_lowercase().contains("cid:") {
-                    let converted = html_to_markdown(raw);
-                    if !referenced_content_ids(&converted).is_empty() {
-                        return converted;
+                    if let Some(converted) = convert(raw) {
+                        if !referenced_content_ids(&converted).is_empty() {
+                            return converted;
+                        }
                     }
                 }
             }
             if looks_like_html(&text) {
-                let converted = html_to_markdown(&text);
-                if !converted.is_empty() {
-                    return converted;
+                if let Some(converted) = convert(&text) {
+                    if !converted.is_empty() {
+                        return converted;
+                    }
                 }
             }
             return text;
         }
     }
-    html.map(|raw| html_to_markdown(&raw)).unwrap_or_default()
+    html.map(|raw| convert(&raw).unwrap_or(raw))
+        .unwrap_or_default()
 }
 
 /// Walk the MIME tree and keep the first non-attachment `text/plain` and
@@ -1109,7 +1154,15 @@ fn extract_attachments(
                     .get_first_value("Content-Type")
                     .unwrap_or_default();
 
-                let payload = part.get_body_raw().unwrap_or_default();
+                let payload = match part.get_body_raw() {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        policy.errors.push(format!(
+                            "Pièce jointe « {decoded_filename} » illisible, non enregistrée : {error}"
+                        ));
+                        continue;
+                    }
+                };
 
                 // Check if this is a signature image that should be skipped
                 if policy.skip_signature_images
@@ -2457,6 +2510,7 @@ impl ImapExporter {
                                 continue;
                             }
                             let mut ctx = ExportContext {
+                                errors: Vec::new(),
                                 export_directory: &export_directory,
                                 base_export_directory: &base_export_directory,
                                 account: &self.account,
@@ -2476,6 +2530,10 @@ impl ImapExporter {
                                 contacts_collector.as_deref_mut(),
                                 &mut ctx,
                             );
+                            for error in &ctx.errors {
+                                println!("  Message {uid} : {error}");
+                            }
+                            stats.errors += ctx.errors.len();
 
                             match result {
                                 Ok(Some((path, decision))) => {
@@ -2505,11 +2563,12 @@ impl ImapExporter {
                                                 sanitize_filename(&folder.display),
                                                 uid
                                             ));
-                                            let _ = fs::write(&dump_path, body);
-                                            println!(
-                                                "  Raw message dumped to {}",
-                                                dump_path.display()
-                                            );
+                                            if fs::write(&dump_path, body).is_ok() {
+                                                println!(
+                                                    "  Raw message dumped to {}",
+                                                    dump_path.display()
+                                                );
+                                            }
                                         }
                                     }
                                     if is_malformed {
@@ -2660,9 +2719,9 @@ impl ImapExporter {
     ) -> Result<(HashMap<String, ExportStats>, RouteDecisions)> {
         // ── Parse destinations.txt ONCE (before the folder loop) ──────────────
         // Shared with the tray "Reprendre le tri" scan via `route::load_destinations`.
-        let dests: Vec<Destination> = crate::route::load_destinations();
+        let dests: Vec<Destination> = crate::route::load_destinations()?;
         let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
-            .unwrap_or_default()
+            .context("failed to load settings")?
             .organize_by_date;
 
         self.batch_exported = 0;
@@ -3059,6 +3118,7 @@ abc123
         // Built before anything is exported: only `insert` can make it see the file.
         let mut index = ExportedIndex::build(&export_dir);
         let mut ctx = ExportContext {
+            errors: Vec::new(),
             export_directory: &export_dir,
             base_export_directory: temp.path(),
             account: &account,
@@ -3321,6 +3381,7 @@ abc123
             skip_signature_images: true,
             debug_mode: false,
             quarantine,
+            errors: Vec::new(),
         }
     }
 
@@ -3416,6 +3477,7 @@ abc123
         let raw = b"From: Alice Martin <alice@x.com>\r\nTo: bob@y.com\r\nSubject: Re: Plan du projet \xE2\x80\x93 version finale\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nMessage-ID: <n1@x>\r\n\r\nBonjour\r\n";
         let account = make_account(&temp.path().to_string_lossy());
         let mut ctx = ExportContext {
+            errors: Vec::new(),
             export_directory: temp.path(),
             base_export_directory: temp.path(),
             account: &account,
@@ -3546,6 +3608,7 @@ abc123
         );
 
         let mut ctx = ExportContext {
+            errors: Vec::new(),
             export_directory: &export_dir,
             base_export_directory: temp.path(),
             account: &account,
@@ -3601,6 +3664,72 @@ abc123
         );
     }
 
+    /// A message whose PDF attachment is not valid base64.
+    const CORRUPT_ATTACHMENT: &str = "From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Devis\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nCi-joint le devis.\r\n--B\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"devis.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\n@@@@!!!!\r\n--B--\r\n";
+
+    #[test]
+    fn test_export_to_markdown_corrupt_attachment_reports_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let export_dir = temp.path().join("out");
+        let account = make_account(&export_dir.to_string_lossy());
+        let mut ctx = ExportContext {
+            errors: Vec::new(),
+            export_directory: &export_dir,
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+            source_proof: None,
+            organize_by_date: true,
+            exported: None,
+            quarantine: None,
+        };
+
+        let (path, _) = export_to_markdown(CORRUPT_ATTACHMENT.as_bytes(), vec![], None, &mut ctx)
+            .unwrap()
+            .expect("the note is still written");
+
+        assert_eq!(ctx.errors.len(), 1, "{:?}", ctx.errors);
+        assert!(ctx.errors[0].contains("devis.pdf"), "{:?}", ctx.errors);
+        let files: Vec<PathBuf> = fs::read_dir(&export_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(files, vec![path], "no attachment file next to the note");
+    }
+
+    #[test]
+    fn test_export_to_markdown_corrupt_attachment_fails_when_deleting() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let export_dir = temp.path().join("out");
+        let account = make_account(&export_dir.to_string_lossy());
+        let quarantine_root = temp.path().join("_skipped");
+        let mut written = Vec::new();
+        let mut ctx = ExportContext {
+            errors: Vec::new(),
+            export_directory: &export_dir,
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+            source_proof: None,
+            organize_by_date: true,
+            exported: None,
+            quarantine: Some(Quarantine {
+                root: &quarantine_root,
+                written: &mut written,
+            }),
+        };
+
+        let result = export_to_markdown(CORRUPT_ATTACHMENT.as_bytes(), vec![], None, &mut ctx);
+
+        let error = format!(
+            "{:#}",
+            result.expect_err("the server copy must not be deleted")
+        );
+        assert!(error.contains("devis.pdf"), "{error}");
+    }
+
     #[test]
     fn test_export_to_markdown_lists_images_and_links_after_the_block() {
         use tempfile::TempDir;
@@ -3612,6 +3741,7 @@ abc123
         let raw = "From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Devis\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body><p>Voir <a href=\"https://a.test/devis\">le devis</a></p><p><img src=\"https://a.test/plan.png\" alt=\"plan\"></p></body></html>\r\n".as_bytes().to_vec();
 
         let mut ctx = ExportContext {
+            errors: Vec::new(),
             export_directory: &export_dir,
             base_export_directory: temp.path(),
             account: &account,
@@ -3656,6 +3786,7 @@ abc123
         ).into_bytes();
 
         let mut ctx = ExportContext {
+            errors: Vec::new(),
             export_directory: &export_dir,
             base_export_directory: temp.path(),
             account: &account,
@@ -3726,6 +3857,7 @@ abc123
         let mut account = make_account(&export_dir.to_string_lossy());
         account.skip_signature_images = true;
         let mut ctx = ExportContext {
+            errors: Vec::new(),
             export_directory: export_dir,
             base_export_directory: export_dir,
             account: &account,
@@ -3827,6 +3959,7 @@ abc123
         account.skip_signature_images = true;
         let mut written = Vec::new();
         let mut ctx = ExportContext {
+            errors: Vec::new(),
             export_directory: &blocked,
             base_export_directory: temp.path(),
             account: &account,
@@ -4059,6 +4192,7 @@ abc123
 
         // First export — should succeed
         let mut ctx = ExportContext {
+            errors: Vec::new(),
             export_directory: &export_dir,
             base_export_directory: temp.path(),
             account: &account,

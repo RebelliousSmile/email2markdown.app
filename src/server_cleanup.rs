@@ -41,13 +41,13 @@ impl CleanupPaths {
 pub fn cleanup_account(config: &Config, account_name: &str, env: &Path) -> Result<Account> {
     let account = config
         .get_account(account_name)
-        .context(format!("Account '{}' not found", account_name))?;
+        .context(format!("Compte « {account_name} » introuvable"))?;
     if !account.delete_after_export {
         anyhow::bail!("{account_name} ne supprime pas les messages du serveur");
     }
     if account.password.is_none() {
         anyhow::bail!(
-            "No password found for {}. Check {}",
+            "Aucun mot de passe pour {}, vérifier {}",
             account_name,
             env.display()
         );
@@ -134,12 +134,12 @@ pub fn clean_server_in(
 ) -> Result<String> {
     dotenvy::from_path(&paths.env).ok();
     let config = Config::load_with_settings(&paths.accounts, &paths.settings)
-        .context("Failed to load configuration")?;
+        .context("Lecture de la configuration impossible")?;
     let account = cleanup_account(&config, account_name, &paths.env)?;
 
     // Routed notes may still carry the proof the ledger lacks.
     let completed = match Settings::load(&paths.settings)
-        .unwrap_or_default()
+        .context("Lecture des réglages impossible")?
         .notes_dir
     {
         Some(notes_dir) => crate::handled::complete_from_notes_to(
@@ -147,7 +147,7 @@ pub fn clean_server_in(
             Path::new(&notes_dir),
             &account.name,
         )
-        .context("failed to complete the ledger from notes")?,
+        .context("Complément du registre depuis les notes impossible")?,
         None => 0,
     };
 
@@ -157,7 +157,9 @@ pub fn clean_server_in(
         .into_keys()
         .collect();
     let mut exporter = ImapExporter::new(account.clone(), false);
-    exporter.connect().context("failed to connect")?;
+    exporter
+        .connect()
+        .context("Connexion au serveur impossible")?;
     let entries = exporter.audit_server(None, &handled, &proved);
     exporter.disconnect().ok();
     let plan = plan(&entries?);
@@ -172,7 +174,9 @@ pub fn clean_server_in(
 
     // The proofs carry UIDVALIDITY: reconnecting after the dialog is safe.
     let mut exporter = ImapExporter::new(account.clone(), false);
-    exporter.connect().context("failed to connect")?;
+    exporter
+        .connect()
+        .context("Connexion au serveur impossible")?;
     let results = exporter.delete_discarded_messages(&plan.targets);
     exporter.disconnect().ok();
     match results {
@@ -277,7 +281,9 @@ mod tests {
             accounts: vec![account(true, None)],
         };
         let error = cleanup_account(&config, "Perso", Path::new("x.env")).unwrap_err();
-        assert!(error.to_string().starts_with("No password found for Perso"));
+        assert!(error
+            .to_string()
+            .starts_with("Aucun mot de passe pour Perso"));
     }
 
     #[test]

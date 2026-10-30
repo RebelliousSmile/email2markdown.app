@@ -242,7 +242,25 @@ mod config_tests {
 
         let result = Config::load_with_settings(&accounts, &settings);
 
-        assert!(matches!(result, Err(ConfigError::YamlParseError(_))));
+        assert!(matches!(result, Err(ConfigError::SettingsFile { path, .. }) if path == settings));
+    }
+
+    #[test]
+    fn test_settings_load_invalid_names_file() {
+        let temp = TempDir::new().expect("create tempdir");
+        let settings = temp.path().join("settings.yaml");
+        std::fs::write(&settings, "organize_by_date: [unclosed\n").expect("write settings");
+
+        let message = Settings::load(&settings).unwrap_err().to_string();
+
+        assert!(message.contains("settings.yaml"), "{message}");
+    }
+
+    #[test]
+    fn test_settings_load_absent_is_default() {
+        let temp = TempDir::new().expect("create tempdir");
+        let settings = Settings::load(&temp.path().join("settings.yaml")).expect("defaults");
+        assert!(settings.notes_dir.is_none());
     }
 
     #[test]
@@ -1154,14 +1172,48 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 mod route_tests {
     use chrono::DateTime;
     use email_to_markdown::route::{
-        ai_route, apply_decision, delete_email, ensure_year_month, join_safe_segments, move_email,
-        normalize_address, parse_destinations, repair_legacy_attachments,
-        resolve_contextual_destination, route_email, upsert_rule, Destination, EmailMeta,
-        MatchRule,
+        ai_route, apply_decision, delete_email, destinations_path_from, ensure_year_month,
+        join_safe_segments, move_email, normalize_address, parse_destinations,
+        repair_legacy_attachments, resolve_contextual_destination, route_email, upsert_rule,
+        Destination, EmailMeta, MatchRule,
     };
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_destinations_path_from_invalid_settings_names_file() {
+        let temp = TempDir::new().expect("create tempdir");
+        let settings = temp.path().join("settings.yaml");
+        fs::write(
+            &settings,
+            "destinations_file: [unclosed
+",
+        )
+        .expect("write settings");
+
+        let message = format!("{:#}", destinations_path_from(&settings).unwrap_err());
+
+        assert!(message.contains("settings.yaml"), "{message}");
+    }
+
+    #[test]
+    fn test_destinations_path_from_valid_settings() {
+        let temp = TempDir::new().expect("create tempdir");
+        let settings = temp.path().join("settings.yaml");
+        let dest = temp.path().join("dest.yaml");
+        fs::write(
+            &settings,
+            format!(
+                "destinations_file: '{}'
+",
+                dest.display()
+            ),
+        )
+        .expect("write settings");
+
+        assert_eq!(destinations_path_from(&settings).expect("path"), dest);
+    }
 
     #[test]
     fn test_rewrite_attachment_paths_keeps_email_block_intact() {

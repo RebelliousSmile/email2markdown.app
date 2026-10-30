@@ -552,7 +552,8 @@ pub(super) fn build_route_window(
     decisions: RouteDecisions,
 ) -> Result<(Window, WebView, WindowId)> {
     let settings_path = crate::config::settings_path();
-    let settings = crate::config::Settings::load(&settings_path).unwrap_or_default();
+    let settings =
+        crate::config::Settings::load(&settings_path).context("failed to load settings")?;
     let notes_dir: PathBuf = settings
         .notes_dir
         .as_deref()
@@ -560,7 +561,7 @@ pub(super) fn build_route_window(
         .unwrap_or_else(|| PathBuf::from("notes"));
 
     // Collect known paths from destinations.yaml for the datalist autocomplete.
-    let known_paths: Vec<String> = crate::route::load_destinations()
+    let known_paths: Vec<String> = crate::route::load_destinations()?
         .into_iter()
         .map(|d| d.path)
         .collect();
@@ -621,7 +622,7 @@ pub(super) fn build_route_window(
     // page can ask before the same rule is posted for a second destination.
     let mut rule_owners: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
-    for dest in crate::route::load_destinations() {
+    for dest in crate::route::load_destinations()? {
         for rule in &dest.rules {
             let key = match rule {
                 crate::route::MatchRule::Domain(v) => format!("domain:{}", v.to_lowercase()),
@@ -740,11 +741,12 @@ pub(super) fn build_route_window(
             }
 
             // 3. Existing apply flow — payload `{ decisions: [...] }` (no `action` field).
-            let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
-                .unwrap_or_default()
-                .organize_by_date;
             let outcome = super::ipc::parse_route_decisions(&body)
                 .and_then(|rows| {
+                    let organize_by_date =
+                        crate::config::Settings::load(&crate::config::settings_path())
+                            .context("failed to load settings")?
+                            .organize_by_date;
                     super::ipc::apply_route_decisions(
                         &rows,
                         &notes_dir,

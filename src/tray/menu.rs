@@ -195,27 +195,30 @@ pub(super) fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResu
             tray_actions::action_choose_notes_dir(result_sender);
         }
         menu_ids::MANAGE_DESTINATIONS => {
-            let dest_file = crate::route::destinations_path();
-            if let Err(e) = send_command(AppCommand::OpenDestGui { dest_file }) {
-                eprintln!("Failed to open destinations window: {:#}", e);
+            let opened = crate::route::destinations_path()
+                .and_then(|dest_file| send_command(AppCommand::OpenDestGui { dest_file }));
+            if let Err(e) = opened {
+                let _ = result_sender.send(ActionResult::Error(format!(
+                    "Ouverture des destinations impossible : {e:#}"
+                )));
             }
         }
         menu_ids::OPEN_CONFIG => {
             if let Err(e) = send_command(AppCommand::OpenConfig {
                 sender: result_sender.clone(),
             }) {
-                eprintln!("Failed to open config window: {:#}", e);
+                eprintln!("Ouverture des paramètres impossible : {:#}", e);
             }
         }
         menu_ids::UPDATE => {
             if let Err(e) = send_command(AppCommand::OpenUpdate) {
-                eprintln!("Failed to open update window: {:#}", e);
+                eprintln!("Ouverture de la mise à jour impossible : {:#}", e);
             }
         }
         menu_ids::OPEN_DOCUMENTATION => {
             if let Err(e) = tray_actions::action_open_documentation() {
                 let _ = result_sender.send(ActionResult::Error(format!(
-                    "Failed to open documentation: {}",
+                    "Ouverture de la documentation impossible : {:#}",
                     e
                 )));
             }
