@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-30
+
 ### Added
 
 - **Commande `audit-server <compte>`** : état des lieux en lecture seule des messages encore présents sur le serveur. Pour chaque message, elle indique s'il a déjà été traité (avec ou sans preuve exacte), s'il attend son tri sous forme de note, ou s'il n'a jamais été exporté. Elle affiche les totaux par statut et par dossier ; `--folder` restreint l'analyse à un dossier et `--details` liste chaque message. Rien n'est modifié, ni sur le serveur ni en local.
