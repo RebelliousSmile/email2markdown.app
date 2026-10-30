@@ -7,10 +7,12 @@ services:
       - |
         # One mailbox per test: contextual search walks every folder of an
         # account, so tests sharing a user would see each other's deletions.
-        for user in contextual purge clean-accepted clean-refused clean-stale clean-absent clean-missing batch; do
+        for user in contextual purge clean-accepted clean-refused clean-stale clean-absent clean-missing batch export-purge export-batch; do
           mkdir -p /srv/mail/$$user/Maildir/cur /srv/mail/$$user/Maildir/new /srv/mail/$$user/Maildir/tmp
           cp /seed/*.eml /srv/mail/$$user/Maildir/new/
         done
+        # Enough messages to cross a body fetch batch (BODY_FETCH_BATCH = 10).
+        cp /seed/batch/*.eml /srv/mail/export-batch/Maildir/new/
         chmod -R a+rwX /srv/mail
     volumes:
       - mail:/srv/mail

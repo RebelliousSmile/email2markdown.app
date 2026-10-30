@@ -1553,6 +1553,32 @@ fn fetch_headers_by_uid(
     Ok(fetched)
 }
 
+/// `true` once the run exported `account.batch_size` messages; flags the run
+/// as stopped with messages left.
+fn batch_limit_reached(account: &Account, batch_exported: usize, batch_full: &mut bool) -> bool {
+    let reached = account.batch_size > 0 && batch_exported >= account.batch_size;
+    if reached {
+        *batch_full = true;
+    }
+    reached
+}
+
+/// Count a transport failure (read timeout, reset): it leaves the session
+/// unusable, so the caller stops the folder export.
+fn handle_transport_failure(
+    server: &str,
+    folder_display: &str,
+    error: &imap::Error,
+    stats: &mut ExportStats,
+    progress: &mut ProgressIndicator,
+) {
+    stats.errors += 1;
+    progress.inc();
+    eprintln!(
+        "warning: connection to {server} lost in {folder_display}, folder export aborted: {error}"
+    );
+}
+
 /// IMAP client for exporting emails.
 pub struct ImapExporter {
     session: Option<Session<Box<dyn ImapConnection>>>,
@@ -2461,13 +2487,13 @@ impl ImapExporter {
                         stop = true;
                         break;
                     }
+                    if batch_limit_reached(&self.account, self.batch_exported, &mut self.batch_full)
+                    {
+                        stop = true;
+                        break;
+                    }
                     let mut take = BODY_FETCH_BATCH.min(pending.len());
                     if self.account.batch_size > 0 {
-                        if self.batch_exported >= self.account.batch_size {
-                            self.batch_full = true;
-                            stop = true;
-                            break;
-                        }
                         take = take.min(self.account.batch_size - self.batch_exported);
                     }
                     let (chunk, rest) = pending.split_at(take);
@@ -2477,13 +2503,12 @@ impl ImapExporter {
                     let mut bodies = match fetch_bodies(session, chunk, &self.network_config) {
                         Ok(bodies) => Some(bodies),
                         Err(e) if matches!(*e, imap::Error::Io(_)) => {
-                            stats.errors += 1;
-                            progress.inc();
-                            // A transport failure (read timeout, reset) leaves the
-                            // session unusable: stop here.
-                            eprintln!(
-                                "warning: connection to {} lost in {}, folder export aborted: {e}",
-                                self.account.server, folder.display
+                            handle_transport_failure(
+                                &self.account.server,
+                                &folder.display,
+                                &e,
+                                &mut stats,
+                                &mut progress,
                             );
                             stop = true;
                             break;
@@ -2531,10 +2556,11 @@ impl ImapExporter {
                             stop = true;
                             break;
                         }
-                        if self.account.batch_size > 0
-                            && self.batch_exported >= self.account.batch_size
-                        {
-                            self.batch_full = true;
+                        if batch_limit_reached(
+                            &self.account,
+                            self.batch_exported,
+                            &mut self.batch_full,
+                        ) {
                             stop = true;
                             break;
                         }
@@ -2550,18 +2576,19 @@ impl ImapExporter {
                                 if self.debug_mode {
                                     println!("  Failed to fetch message {}: {:#}", uid, e);
                                 }
-                                stats.errors += 1;
-                                progress.inc();
-                                // A transport failure (read timeout, reset) leaves the session
-                                // unusable: stop here instead of timing out on every message.
                                 if matches!(*e, imap::Error::Io(_)) {
-                                    eprintln!(
-                                "warning: connection to {} lost in {}, folder export aborted: {e}",
-                                self.account.server, folder.display
-                            );
+                                    handle_transport_failure(
+                                        &self.account.server,
+                                        &folder.display,
+                                        &e,
+                                        &mut stats,
+                                        &mut progress,
+                                    );
                                     stop = true;
                                     break;
                                 }
+                                stats.errors += 1;
+                                progress.inc();
                                 continue;
                             }
                         };
@@ -2578,107 +2605,103 @@ impl ImapExporter {
 
                         if let Some((message_uid, body)) = fetched {
                             let body = body.as_slice();
-                            {
-                                let source_proof = build_global_source_proof(
-                                    &self.account.name,
-                                    folder,
-                                    mailbox_uid_validity,
-                                    message_uid,
-                                    body,
-                                    provider_id.clone(),
-                                    self.is_gmail,
-                                );
-                                if source_proof.is_none() {
-                                    proofless += 1;
+                            let source_proof = build_global_source_proof(
+                                &self.account.name,
+                                folder,
+                                mailbox_uid_validity,
+                                message_uid,
+                                body,
+                                provider_id.clone(),
+                                self.is_gmail,
+                            );
+                            if source_proof.is_none() {
+                                proofless += 1;
+                            }
+                            let already_handled = source_proof
+                                .as_ref()
+                                .and_then(|proof| proof.identity.message_id.as_ref())
+                                .is_some_and(|id| handled.contains(id));
+                            if already_handled {
+                                if let Some(proof) = &source_proof {
+                                    seen_handled.push(crate::handled::SeenHandled {
+                                        message_id: proof
+                                            .identity
+                                            .message_id
+                                            .clone()
+                                            .unwrap_or_default(),
+                                        uid: proof.location.uid,
+                                        provider_id: proof.identity.provider_id.clone(),
+                                    });
                                 }
-                                let already_handled = source_proof
-                                    .as_ref()
-                                    .and_then(|proof| proof.identity.message_id.as_ref())
-                                    .is_some_and(|id| handled.contains(id));
-                                if already_handled {
-                                    if let Some(proof) = &source_proof {
-                                        seen_handled.push(crate::handled::SeenHandled {
-                                            message_id: proof
-                                                .identity
-                                                .message_id
-                                                .clone()
-                                                .unwrap_or_default(),
-                                            uid: proof.location.uid,
-                                            provider_id: proof.identity.provider_id.clone(),
-                                        });
-                                    }
-                                    stats.skipped += 1;
-                                    continue;
-                                }
-                                let mut ctx = ExportContext {
-                                    errors: Vec::new(),
-                                    export_directory: &export_directory,
-                                    base_export_directory: &base_export_directory,
-                                    account: &self.account,
-                                    debug_mode: self.debug_mode,
-                                    dests: routing.dests,
-                                    source_proof: source_proof.as_ref(),
-                                    organize_by_date: routing.organize_by_date,
-                                    exported: Some(&mut exported),
-                                    quarantine: self.account.delete_after_export.then(|| {
-                                        Quarantine {
-                                            root: &quarantine_root,
-                                            written: &mut quarantined,
-                                        }
-                                    }),
-                                };
-                                let result = export_to_markdown(
-                                    body,
-                                    vec![folder.display.clone()],
-                                    contacts_collector.as_deref_mut(),
-                                    &mut ctx,
-                                );
-                                for error in &ctx.errors {
-                                    println!("  Message {uid} : {error}");
-                                }
-                                stats.errors += ctx.errors.len();
+                                stats.skipped += 1;
+                                continue;
+                            }
+                            let mut ctx = ExportContext {
+                                errors: Vec::new(),
+                                export_directory: &export_directory,
+                                base_export_directory: &base_export_directory,
+                                account: &self.account,
+                                debug_mode: self.debug_mode,
+                                dests: routing.dests,
+                                source_proof: source_proof.as_ref(),
+                                organize_by_date: routing.organize_by_date,
+                                exported: Some(&mut exported),
+                                quarantine: self.account.delete_after_export.then(|| Quarantine {
+                                    root: &quarantine_root,
+                                    written: &mut quarantined,
+                                }),
+                            };
+                            let result = export_to_markdown(
+                                body,
+                                vec![folder.display.clone()],
+                                contacts_collector.as_deref_mut(),
+                                &mut ctx,
+                            );
+                            for error in &ctx.errors {
+                                println!("  Message {uid} : {error}");
+                            }
+                            stats.errors += ctx.errors.len();
 
-                                match result {
-                                    Ok(Some((path, decision))) => {
-                                        stats.exported += 1;
-                                        self.batch_exported += 1;
-                                        folder_decisions.push((path, decision));
-                                    }
-                                    Ok(None) => stats.skipped += 1,
-                                    Err(e) => {
-                                        // Malformed messages (RFC-invalid MIME, broken headers, etc.)
-                                        // are counted as skipped rather than errored: they cannot be
-                                        // exported by design and should not contribute to the error
-                                        // count that signals transient/recoverable failures.
-                                        let is_malformed =
-                                            e.downcast_ref::<mailparse::MailParseError>().is_some();
-                                        if self.debug_mode {
-                                            let label = if is_malformed {
-                                                "Skipping malformed message"
-                                            } else {
-                                                "Error exporting message"
-                                            };
-                                            println!("  {} {}: {:#}", label, uid, e);
-                                            let dump_dir = base_export_directory.join("_failed");
-                                            if fs::create_dir_all(&dump_dir).is_ok() {
-                                                let dump_path = dump_dir.join(format!(
-                                                    "{}_uid_{}.eml",
-                                                    sanitize_filename(&folder.display),
-                                                    uid
-                                                ));
-                                                if fs::write(&dump_path, body).is_ok() {
-                                                    println!(
-                                                        "  Raw message dumped to {}",
-                                                        dump_path.display()
-                                                    );
-                                                }
+                            match result {
+                                Ok(Some((path, decision))) => {
+                                    stats.exported += 1;
+                                    self.batch_exported += 1;
+                                    folder_decisions.push((path, decision));
+                                }
+                                Ok(None) => stats.skipped += 1,
+                                Err(e) => {
+                                    // Malformed messages (RFC-invalid MIME, broken headers, etc.)
+                                    // are counted as skipped rather than errored: they cannot be
+                                    // exported by design and should not contribute to the error
+                                    // count that signals transient/recoverable failures.
+                                    let is_malformed =
+                                        e.downcast_ref::<mailparse::MailParseError>().is_some();
+                                    if self.debug_mode {
+                                        let label = if is_malformed {
+                                            "Skipping malformed message"
+                                        } else {
+                                            "Error exporting message"
+                                        };
+                                        println!("  {} {}: {:#}", label, uid, e);
+                                        let dump_dir = base_export_directory.join("_failed");
+                                        if fs::create_dir_all(&dump_dir).is_ok() {
+                                            let dump_path = dump_dir.join(format!(
+                                                "{}_uid_{}.eml",
+                                                sanitize_filename(&folder.display),
+                                                uid
+                                            ));
+                                            if fs::write(&dump_path, body).is_ok() {
+                                                println!(
+                                                    "  Raw message dumped to {}",
+                                                    dump_path.display()
+                                                );
                                             }
                                         }
-                                        if is_malformed {
-                                            stats.skipped += 1;
-                                        } else {
-                                            stats.errors += 1;
-                                        }
+                                    }
+                                    if is_malformed {
+                                        stats.skipped += 1;
+                                    } else {
+                                        stats.errors += 1;
                                     }
                                 }
                             }

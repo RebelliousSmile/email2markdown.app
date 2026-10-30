@@ -88,7 +88,7 @@ jobs:
       - name: Run every ignored Dovecot test
         env:
           EMAIL_TO_MARKDOWN_IMAP_TEST: "1"
-        run: cargo test --locked --test imap_integration -- --ignored --skip gmail_ --nocapture
+        run: cargo test --locked --test imap_integration -- --ignored --skip gmail_ --test-threads=1 --nocapture
       - name: Destroy fixture
         if: always()
         run: docker compose -f tests/fixtures/imap/compose.yaml down -v

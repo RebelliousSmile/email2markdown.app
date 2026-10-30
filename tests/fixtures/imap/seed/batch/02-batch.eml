@@ -1,0 +1,7 @@
+Message-ID: <fixture-batch-02@example.com>
+Date: Wed, 02 Sep 2026 09:00:00 +0000
+From: Batch Sender 02 <batch02@example.com>
+To: Test <test@example.com>
+Subject: Batch message 02
+
+Body marker BATCHMARK-02-END for message 02.
