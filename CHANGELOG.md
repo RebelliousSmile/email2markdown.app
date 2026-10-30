@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-10-30
+
+### Fixed
+
+- **Identité revérifiée avant toute suppression** : avant de supprimer un message du serveur (purge d'export, rejet en revue, suppression après export contextuel, nettoyage serveur), l'application relit ses en-têtes sur le serveur et les compare à la preuve enregistrée. En cas de divergence, le message est conservé et la suppression est signalée comme refusée.
+- **Import Thunderbird insensible à la casse** : un compte « Gmail » importé sur un `accounts.yaml` qui contient « gmail » n'est plus ajouté une seconde fois.
+- **Pièces jointes des notes anciennes** : un lien de pièce jointe contenant `..` ou un chemin absolu est refusé ; aucun fichier n'est déplacé hors du dossier du compte.
+- **Écriture du `.env`** : une valeur contenant un retour à la ligne est refusée, et le fichier est créé avec les droits 0600 sous Linux et macOS.
+- **Menu sur un `accounts.yaml` invalide** : au lieu d'un menu vide, le tray affiche une entrée « Comptes illisibles — voir Paramètres ».
+
+### Changed
+
+- **Suppression Gmail regroupée** : les messages à supprimer sont traités par dossier d'origine, avec une recherche et un déplacement par lot au lieu de sept allers-retours par message. Un lot en erreur est repris message par message.
+- **Fenêtres plus réactives** : la revue de routage s'ouvre sans lire de note sur la boucle d'événements, et chaque note n'est lue qu'une fois. Le scan des destinations (« Scanner », « Suggérer ») tourne en arrière-plan.
+- **Export contextuel plus sobre en mémoire** : les corps des messages sont téléchargés par lots de dix au lieu de cinq cents.
+
+### Security
+
+- **Audit des dépendances bloquant** : `cargo audit` fait désormais échouer la CI et la publication d'une version. Sous Linux, `rfd` n'utilise plus le portail XDG, ce qui retire `zbus` et `ashpd` des dépendances.
+
 ## [0.23.0] - 2026-10-30
 
 ### Fixed
