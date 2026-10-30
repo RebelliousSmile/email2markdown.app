@@ -108,7 +108,7 @@ pub enum AppCommand {
     /// Open the route review window after an Export.
     /// Carries the list of (staging_path, RouteDecision) produced by export_account.
     OpenRouteReview(RouteDecisions),
-    /// Persist a new routing rule into destinations.txt and re-inject the updated tree.
+    /// Persist a new routing rule into destinations.yaml and re-inject the updated tree.
     /// IO is done in the event loop (not in the webview IPC callback).
     PersistRoutingRule {
         window_id: WindowId,
