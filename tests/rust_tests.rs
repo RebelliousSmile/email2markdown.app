@@ -3155,6 +3155,209 @@ mod contextual_export_tests {
             .to_string_lossy()
             .starts_with(".email-to-markdown-tmp-")));
     }
+
+    mod tally_tests {
+        use super::location;
+        use email_to_markdown::contextual_export::{
+            tally_deletions, DeletionOutcome, DeletionRequest, LocalSourceProof,
+            MessageDeletionResult, SourceIdentity,
+        };
+        use std::path::PathBuf;
+
+        fn request(uid: u32) -> DeletionRequest {
+            DeletionRequest {
+                markdown: PathBuf::from(format!("note_{uid}.md")),
+                proof: LocalSourceProof {
+                    identity: SourceIdentity {
+                        account: "Perso".into(),
+                        message_id: Some(format!("<{uid}@x>")),
+                        header_fingerprint: format!("fp{uid}"),
+                        provider_id: None,
+                    },
+                    location: location("INBOX", uid),
+                },
+            }
+        }
+
+        fn result(uid: u32, outcome: DeletionOutcome) -> MessageDeletionResult {
+            MessageDeletionResult {
+                proof: request(uid).proof,
+                outcome,
+            }
+        }
+
+        #[test]
+        fn test_tally_deletions_matches_results_by_proof_not_order() {
+            let requests = vec![request(1), request(2), request(3)];
+            // Results come back in another order, as when rejections are appended.
+            let results = vec![
+                result(3, DeletionOutcome::RetryRequired("timeout".into())),
+                result(1, DeletionOutcome::Deleted),
+                result(2, DeletionOutcome::AlreadyAbsent),
+            ];
+            let tally = tally_deletions(requests, &results);
+            assert_eq!(tally.deleted, 2);
+            let retried: Vec<u32> = tally.retry.iter().map(|r| r.proof.location.uid).collect();
+            assert_eq!(retried, vec![3]);
+            assert!(!tally.stale_search);
+        }
+
+        #[test]
+        fn test_tally_deletions_with_rejected_is_not_retried() {
+            let requests = vec![request(1), request(2)];
+            let results = vec![
+                result(1, DeletionOutcome::Rejected("note absente".into())),
+                result(
+                    2,
+                    DeletionOutcome::StaleUidValidity {
+                        expected: 77,
+                        actual: Some(78),
+                    },
+                ),
+            ];
+            let tally = tally_deletions(requests, &results);
+            assert_eq!(tally.rejected, 1);
+            assert_eq!(tally.deleted, 0);
+            assert!(tally.stale_search);
+            let retried: Vec<u32> = tally.retry.iter().map(|r| r.proof.location.uid).collect();
+            assert_eq!(retried, vec![2]);
+            assert!(!retried.contains(&1));
+        }
+    }
+}
+
+mod handled_purge_tests {
+    use email_to_markdown::contextual_export::{LocalSourceProof, MessageLocation, SourceIdentity};
+    use email_to_markdown::email_export::{purge_summary, ExportStats};
+    use email_to_markdown::handled::{load_proofs_from, record_to, PurgeMatch, SeenHandled};
+    use tempfile::TempDir;
+
+    fn location(folder: &str, uid_validity: u32, uid: u32) -> MessageLocation {
+        MessageLocation {
+            folder_raw: folder.into(),
+            folder_display: folder.into(),
+            uid_validity,
+            uid,
+        }
+    }
+
+    fn proof(provider_id: Option<&str>) -> LocalSourceProof {
+        LocalSourceProof {
+            identity: SourceIdentity {
+                account: "Perso".into(),
+                message_id: Some("a@x".into()),
+                header_fingerprint: "fp".into(),
+                provider_id: provider_id.map(str::to_string),
+            },
+            location: location("INBOX", 11, 5),
+        }
+    }
+
+    fn ledger_with(stored: LocalSourceProof) -> (TempDir, std::path::PathBuf) {
+        let temp = TempDir::new().unwrap();
+        let ledger = temp.path().join("handled_messages.txt");
+        record_to(&ledger, &[("Perso".into(), "a@x".into(), Some(stored))]).unwrap();
+        (temp, ledger)
+    }
+
+    #[test]
+    fn test_match_seen_from_ledger_generic_same_place_purges() {
+        let (_temp, ledger) = ledger_with(proof(None));
+        let proofs = load_proofs_from(&ledger, "Perso");
+        let seen = SeenHandled {
+            message_id: "a@x".into(),
+            uid: 5,
+            provider_id: None,
+        };
+        assert_eq!(
+            proofs.match_seen(&seen, &location("INBOX", 11, 5), false),
+            PurgeMatch::Purge(proof(None))
+        );
+        // Same Message-ID at another place: another message, kept.
+        assert_eq!(
+            proofs.match_seen(&seen, &location("INBOX", 12, 5), false),
+            PurgeMatch::Stale
+        );
+    }
+
+    #[test]
+    fn test_match_seen_from_ledger_gmail_moved_targets_current_folder() {
+        let (_temp, ledger) = ledger_with(proof(Some("777")));
+        let proofs = load_proofs_from(&ledger, "Perso");
+        let seen = SeenHandled {
+            message_id: "a@x".into(),
+            uid: 40,
+            provider_id: Some("777".into()),
+        };
+        let current = location("Archives", 90, 40);
+        let PurgeMatch::Purge(target) = proofs.match_seen(&seen, &current, true) else {
+            panic!("a moved Gmail message with the same X-GM-MSGID must be purged");
+        };
+        assert_eq!(target.location, current);
+        assert_ne!(target.location, proof(Some("777")).location);
+        assert_eq!(target.identity.provider_id.as_deref(), Some("777"));
+    }
+
+    #[test]
+    fn test_match_seen_from_legacy_ledger_line_is_legacy() {
+        let temp = TempDir::new().unwrap();
+        let ledger = temp.path().join("handled_messages.txt");
+        record_to(&ledger, &[("Perso".into(), "a@x".into(), None)]).unwrap();
+        let proofs = load_proofs_from(&ledger, "Perso");
+        let seen = SeenHandled {
+            message_id: "a@x".into(),
+            uid: 5,
+            provider_id: None,
+        };
+        assert_eq!(
+            proofs.match_seen(&seen, &location("INBOX", 11, 5), false),
+            PurgeMatch::Legacy
+        );
+    }
+
+    #[test]
+    fn test_purge_summary_with_counts() {
+        let stats = [
+            ExportStats {
+                purged: 2,
+                legacy_handled: 1,
+                ..ExportStats::default()
+            },
+            ExportStats {
+                purged: 1,
+                ..ExportStats::default()
+            },
+        ];
+        let summary = purge_summary(&stats);
+        assert!(summary.contains("3 supprimé(s) du serveur (déjà traités)"));
+        assert!(
+            summary.contains("1 message(s) traité(s) sans preuve : utiliser Nettoyer le serveur")
+        );
+        assert!(!summary.contains("périmée"));
+    }
+
+    #[test]
+    fn test_cleanup_proof_turns_legacy_line_into_proved() {
+        let temp = TempDir::new().unwrap();
+        let ledger = temp.path().join("handled_messages.txt");
+        record_to(&ledger, &[("Perso".into(), "a@x".into(), None)]).unwrap();
+        assert!(load_proofs_from(&ledger, "Perso").legacy.contains("a@x"));
+
+        // What the confirmed cleanup records after a deletion.
+        record_to(
+            &ledger,
+            &[("Perso".into(), "a@x".into(), Some(proof(None)))],
+        )
+        .unwrap();
+        let proofs = load_proofs_from(&ledger, "Perso");
+        assert_eq!(proofs.proofs.get("a@x"), Some(&proof(None)));
+        assert!(!proofs.legacy.contains("a@x"));
+    }
+
+    #[test]
+    fn test_purge_summary_empty() {
+        assert_eq!(purge_summary(&[ExportStats::default()]), "");
+    }
 }
 
 mod destinations_tests {

@@ -332,20 +332,31 @@ pub fn email_already_exported(
     )
 }
 
-/// Check if an email should be skipped based on its raw headers alone.
-/// Also returns the email analysis so callers can collect contacts without re-parsing.
-fn should_skip_from_headers(
+/// Why a message is skipped before its body is downloaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    /// Its `Message-ID` is in the handled ledger: sorted or discarded earlier.
+    Handled(String),
+    /// A note of the export folder matches it (fuzzy: date, sender, subject).
+    Exported,
+}
+
+/// Why `raw_headers` would be skipped, or `None` when it must be exported.
+/// The ledger is checked first: it is the only exact evidence.
+pub fn skip_reason_from_headers(
     raw_headers: &[u8],
     exported: &ExportedIndex,
     handled: &HashSet<String>,
-) -> (bool, Option<EmailAnalysis>) {
-    if raw_headers.is_empty() {
-        return (false, None);
-    }
-    let mail = match mailparse::parse_mail(raw_headers) {
-        Ok(m) => m,
-        Err(_) => return (false, None),
-    };
+) -> Option<SkipReason> {
+    let mail = mailparse::parse_mail(raw_headers).ok()?;
+    skip_reason(&mail, exported, handled)
+}
+
+fn skip_reason(
+    mail: &mailparse::ParsedMail<'_>,
+    exported: &ExportedIndex,
+    handled: &HashSet<String>,
+) -> Option<SkipReason> {
     let from_field = mail.headers.get_first_value("From").unwrap_or_default();
     let to_field = mail.headers.get_first_value("To").unwrap_or_default();
     let date_field = mail.headers.get_first_value("Date").unwrap_or_default();
@@ -369,16 +380,37 @@ fn should_skip_from_headers(
             .get_first_value("Message-ID")
             .unwrap_or_default(),
     );
-    let skip = message_id.as_ref().is_some_and(|id| handled.contains(id))
-        || exported.contains_message(
+    if let Some(id) = message_id.as_ref().filter(|id| handled.contains(*id)) {
+        return Some(SkipReason::Handled(id.clone()));
+    }
+    exported
+        .contains_message(
             &date_str,
             &sender_short,
             &recipient_short,
             &subject_hash,
             message_id.as_deref(),
-        );
+        )
+        .then_some(SkipReason::Exported)
+}
+
+/// Check if an email should be skipped based on its raw headers alone.
+/// Also returns the email analysis so callers can collect contacts without re-parsing.
+fn should_skip_from_headers(
+    raw_headers: &[u8],
+    exported: &ExportedIndex,
+    handled: &HashSet<String>,
+) -> (Option<SkipReason>, Option<EmailAnalysis>) {
+    if raw_headers.is_empty() {
+        return (None, None);
+    }
+    let mail = match mailparse::parse_mail(raw_headers) {
+        Ok(m) => m,
+        Err(_) => return (None, None),
+    };
+    let reason = skip_reason(&mail, exported, handled);
     let analysis = analyze_email_type(&mail);
-    (skip, Some(analysis))
+    (reason, Some(analysis))
 }
 
 /// Parse email date string to DateTime.
@@ -1363,6 +1395,38 @@ fn is_gmail_server(host: &str) -> bool {
     lower.contains("gmail.com") || lower.contains("googlemail.com")
 }
 
+/// UID FETCH the selected headers of `uids` in the selected mailbox, by
+/// batches of `HEADER_UID_BATCH`, with Gmail's `X-GM-MSGID` when available.
+fn fetch_headers_by_uid(
+    session: &mut Session<Box<dyn ImapConnection>>,
+    folder_display: &str,
+    uids: &[u32],
+    gmail_extension: bool,
+) -> Result<Vec<crate::contextual_export::FetchedMessage>> {
+    use crate::contextual_export::{
+        parse_uid_fetch_response, HEADER_FETCH_FIELDS, HEADER_UID_BATCH,
+    };
+
+    let attributes = if gmail_extension {
+        format!("(UID X-GM-MSGID {HEADER_FETCH_FIELDS})")
+    } else {
+        format!("(UID {HEADER_FETCH_FIELDS})")
+    };
+    let mut fetched = Vec::new();
+    for chunk in uids.chunks(HEADER_UID_BATCH) {
+        let uid_set = chunk
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let raw = session
+            .run_command_and_read_response(format!("UID FETCH {uid_set} {attributes}"))
+            .with_context(|| format!("UID FETCH headers in {folder_display}"))?;
+        fetched.extend(parse_uid_fetch_response(&raw)?);
+    }
+    Ok(fetched)
+}
+
 /// IMAP client for exporting emails.
 pub struct ImapExporter {
     session: Option<Session<Box<dyn ImapConnection>>>,
@@ -1375,30 +1439,59 @@ pub struct ImapExporter {
     /// Set when the run stopped because `account.batch_size` was reached
     /// while messages remained to process.
     batch_full: bool,
+    /// Handled messages already sent for deletion during the current
+    /// `export_account` run: Gmail shows one message in several labels.
+    purge_targeted: HashSet<String>,
 }
 
-/// Fetch the headers of one window of UIDs and drop the ones already exported
-/// or handled. Returns the UIDs still to download and the number skipped.
+/// What the header pre-filter compares each message with.
+struct PrefilterIndex<'a> {
+    exported: &'a ExportedIndex,
+    handled: &'a HashSet<String>,
+    /// Also read `X-GM-MSGID`, so a handled message can be targeted.
+    gmail: bool,
+}
+
+/// Outcome of the header pre-filter for one window.
+#[derive(Default)]
+struct Prefiltered {
+    /// Sequence numbers still to download.
+    kept: Vec<u32>,
+    skipped: usize,
+    /// Skipped because handled: candidates for the purge.
+    handled: Vec<crate::handled::SeenHandled>,
+}
+
+/// Fetch the headers of one window of sequence numbers and drop the messages
+/// already exported or handled.
 ///
 /// A failed header fetch keeps the whole window: the full fetch decides.
 fn prefilter_window(
     session: &mut Session<Box<dyn ImapConnection>>,
     window: &[u32],
-    exported: &ExportedIndex,
-    handled: &HashSet<String>,
+    index: &PrefilterIndex<'_>,
     mut contacts_collector: Option<&mut ContactsCollector>,
     cancel_token: Option<&AtomicBool>,
     debug_mode: bool,
-) -> (Vec<u32>, usize) {
+) -> Prefiltered {
     if window.is_empty() {
-        return (Vec::new(), 0);
+        return Prefiltered::default();
     }
     let seq_set = window
         .iter()
         .map(|u| u.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let headers = match session.fetch(&seq_set, "RFC822.HEADER") {
+    let attributes = if index.gmail {
+        "(UID X-GM-MSGID RFC822.HEADER)"
+    } else {
+        "(UID RFC822.HEADER)"
+    };
+    let headers = session
+        .run_command_and_read_response(format!("FETCH {seq_set} {attributes}"))
+        .map_err(anyhow::Error::from)
+        .and_then(|raw| crate::contextual_export::parse_fetch_response(&raw));
+    let headers = match headers {
         Ok(headers) => headers,
         Err(e) => {
             if debug_mode {
@@ -1407,32 +1500,44 @@ fn prefilter_window(
                     e
                 );
             }
-            return (window.to_vec(), 0);
+            return Prefiltered {
+                kept: window.to_vec(),
+                ..Prefiltered::default()
+            };
         }
     };
+    let mut result = Prefiltered::default();
     let mut skip_set = HashSet::new();
-    for message in headers.iter() {
+    for (seq, (uid, provider_id, header)) in headers {
         if cancel_token.is_some_and(|t| t.load(Ordering::Relaxed)) {
             break;
         }
-        let (skip, analysis) =
-            should_skip_from_headers(message.header().unwrap_or(&[]), exported, handled);
-        if skip {
-            skip_set.insert(message.message);
-            // Collect contacts from skipped emails too
-            if let (Some(collector), Some(a)) = (contacts_collector.as_deref_mut(), analysis) {
-                for contact in a.contacts {
-                    collector.add(&a.email_type, contact);
-                }
+        let (reason, analysis) = should_skip_from_headers(&header, index.exported, index.handled);
+        let Some(reason) = reason else {
+            continue;
+        };
+        skip_set.insert(seq);
+        if let SkipReason::Handled(message_id) = reason {
+            result.handled.push(crate::handled::SeenHandled {
+                message_id,
+                uid,
+                provider_id,
+            });
+        }
+        // Collect contacts from skipped emails too
+        if let (Some(collector), Some(a)) = (contacts_collector.as_deref_mut(), analysis) {
+            for contact in a.contacts {
+                collector.add(&a.email_type, contact);
             }
         }
     }
-    let kept = window
+    result.kept = window
         .iter()
         .filter(|u| !skip_set.contains(u))
         .copied()
         .collect();
-    (kept, skip_set.len())
+    result.skipped = skip_set.len();
+    result
 }
 
 fn progress_counts(
@@ -1457,6 +1562,7 @@ impl ImapExporter {
             network_config: NetworkConfig::default(), // [4][5]
             is_gmail: false,
             batch_exported: 0,
+            purge_targeted: HashSet::new(),
             batch_full: false,
         }
     }
@@ -1613,8 +1719,7 @@ impl ImapExporter {
     ) -> Result<Vec<crate::contextual_export::ContextualCandidate>> {
         use crate::contextual_export::{
             build_search_batches, candidate_matches_rules, merge_candidates,
-            parse_header_candidate, parse_uid_fetch_response, MessageLocation, HEADER_FETCH_FIELDS,
-            HEADER_UID_BATCH,
+            parse_header_candidate, MessageLocation,
         };
         use std::collections::BTreeSet;
 
@@ -1656,38 +1761,104 @@ impl ImapExporter {
             }
 
             let uid_values: Vec<u32> = uids.into_iter().collect();
-            for chunk in uid_values.chunks(HEADER_UID_BATCH) {
-                let uid_set = chunk
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let attributes = if gmail_extension {
-                    format!("(UID X-GM-MSGID {HEADER_FETCH_FIELDS})")
-                } else {
-                    format!("(UID {HEADER_FETCH_FIELDS})")
+            let fetched =
+                fetch_headers_by_uid(session, &folder.display, &uid_values, gmail_extension)?;
+            for (uid, provider_id, header) in fetched {
+                let location = MessageLocation {
+                    folder_raw: folder.raw.clone(),
+                    folder_display: folder.display.clone(),
+                    uid_validity,
+                    uid,
                 };
-                let raw = session
-                    .run_command_and_read_response(format!("UID FETCH {uid_set} {attributes}"))
-                    .with_context(|| format!("UID FETCH headers in {}", folder.display))?;
-                for (uid, provider_id, header) in parse_uid_fetch_response(&raw)? {
-                    let location = MessageLocation {
-                        folder_raw: folder.raw.clone(),
-                        folder_display: folder.display.clone(),
-                        uid_validity,
-                        uid,
-                    };
-                    let candidate =
-                        parse_header_candidate(&account_name, location, &header, provider_id)?;
-                    // SEARCH is substring-based and therefore only a prefilter.
-                    if candidate_matches_rules(&candidate, rules) {
-                        candidates.push(candidate);
-                    }
+                let candidate =
+                    parse_header_candidate(&account_name, location, &header, provider_id)?;
+                // SEARCH is substring-based and therefore only a prefilter.
+                if candidate_matches_rules(&candidate, rules) {
+                    candidates.push(candidate);
                 }
             }
         }
 
         Ok(merge_candidates(candidates))
+    }
+
+    /// Read-only census: status of every message of the eligible folders
+    /// (or of `only_folder`). `EXAMINE` and `BODY.PEEK` only; nothing stored.
+    /// On Gmail, a message seen in several labels is counted once.
+    pub fn audit_server(
+        &mut self,
+        only_folder: Option<&str>,
+        handled: &HashSet<String>,
+        proved: &HashSet<String>,
+    ) -> Result<Vec<crate::server_audit::AuditEntry>> {
+        use crate::server_audit::{classify, AuditEntry};
+
+        let gmail_extension = self
+            .session
+            .as_mut()
+            .context("Not connected")?
+            .capabilities()
+            .context("read IMAP capabilities")?
+            .has_str("X-GM-EXT-1");
+        let folders = self.list_folders()?;
+        let base_export_directory = PathBuf::from(&self.account.export_directory);
+        let ignored_folders = self.account.ignored_folders.clone();
+        let mut seen_provider_ids = HashSet::new();
+        let mut entries = Vec::new();
+
+        for folder in folders {
+            let selected = match only_folder {
+                Some(name) => folder.display == name || folder.raw == name,
+                None => !ignored_folders
+                    .iter()
+                    .any(|ignored| ignored == &folder.display),
+            };
+            if !selected {
+                continue;
+            }
+            let exported =
+                ExportedIndex::build(&base_export_directory.join(folder.display.replace('.', "/")));
+            let session = self.session.as_mut().context("Not connected")?;
+            let uid_validity = session
+                .examine(&folder.raw)
+                .with_context(|| format!("examine {}", folder.display))?
+                .uid_validity;
+            let mut uids: Vec<u32> = session
+                .uid_search("ALL")
+                .with_context(|| format!("UID SEARCH in {}", folder.display))?
+                .into_iter()
+                .collect();
+            uids.sort_unstable();
+
+            for (uid, provider_id, header) in
+                fetch_headers_by_uid(session, &folder.display, &uids, gmail_extension)?
+            {
+                if let Some(id) = &provider_id {
+                    if !seen_provider_ids.insert(id.clone()) {
+                        continue;
+                    }
+                }
+                let status = classify(&header, &exported, handled, proved);
+                let mut entry = AuditEntry::from_headers(
+                    &folder.display,
+                    uid,
+                    provider_id.clone(),
+                    &header,
+                    status,
+                );
+                entry.proof = build_global_source_proof(
+                    &self.account.name,
+                    &folder,
+                    uid_validity,
+                    Some(uid),
+                    &header,
+                    provider_id,
+                    self.is_gmail,
+                );
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
     }
 
     /// Check whether this account can honor its configured deletion policy
@@ -1886,16 +2057,30 @@ impl ImapExporter {
         }
 
         let mut valid = Vec::new();
+        let mut rejected = Vec::new();
         for request in requests {
-            if !request.markdown.is_file()
-                || read_source_proof(&request.markdown)?.as_ref() != Some(&request.proof)
-            {
-                continue;
+            let reason = if !request.markdown.is_file() {
+                Some("note absente")
+            } else if read_source_proof(&request.markdown)?.as_ref() != Some(&request.proof) {
+                Some("la note porte une autre preuve")
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => rejected.push(crate::contextual_export::MessageDeletionResult {
+                    proof: request.proof.clone(),
+                    outcome: crate::contextual_export::DeletionOutcome::Rejected(format!(
+                        "{reason} : {}",
+                        request.markdown.display()
+                    )),
+                }),
+                None => valid.push(request.clone()),
             }
-            valid.push(request.clone());
         }
 
-        self.delete_validated(preflight.provider, valid)
+        let mut results = self.delete_validated(preflight.provider, valid)?;
+        results.extend(rejected);
+        Ok(results)
     }
 
     /// Delete from the server messages the user explicitly discarded in the
@@ -2079,6 +2264,15 @@ impl ImapExporter {
         } else {
             HashSet::new()
         };
+        // Handled messages still on a server asked to delete: purged when the
+        // ledger proves them, counted otherwise.
+        let purge_enabled = self.account.delete_after_export && self.account.skip_existing;
+        let ledger_proofs = if purge_enabled {
+            crate::handled::load_proofs(&self.account.name)
+        } else {
+            crate::handled::LedgerProofs::default()
+        };
+        let mut seen_handled: Vec<crate::handled::SeenHandled> = Vec::new();
 
         // Keep the session borrow scoped to the folder traversal.
         let stats_and_decisions = {
@@ -2131,15 +2325,20 @@ impl ImapExporter {
                 }
                 // Pre-filter: fetch headers, skip already-exported without downloading body
                 let (filtered_uids, pre_skipped) = if self.account.skip_existing {
-                    prefilter_window(
+                    let prefiltered = prefilter_window(
                         session,
                         window,
-                        &exported,
-                        &handled,
+                        &PrefilterIndex {
+                            exported: &exported,
+                            handled: &handled,
+                            gmail: self.is_gmail,
+                        },
                         contacts_collector.as_deref_mut(),
                         cancel_token,
                         self.debug_mode,
-                    )
+                    );
+                    seen_handled.extend(prefiltered.handled);
+                    (prefiltered.kept, prefiltered.skipped)
                 } else {
                     (window.to_vec(), 0)
                 };
@@ -2244,6 +2443,17 @@ impl ImapExporter {
                                 .and_then(|proof| proof.identity.message_id.as_ref())
                                 .is_some_and(|id| handled.contains(id));
                             if already_handled {
+                                if let Some(proof) = &source_proof {
+                                    seen_handled.push(crate::handled::SeenHandled {
+                                        message_id: proof
+                                            .identity
+                                            .message_id
+                                            .clone()
+                                            .unwrap_or_default(),
+                                        uid: proof.location.uid,
+                                        provider_id: proof.identity.provider_id.clone(),
+                                    });
+                                }
                                 stats.skipped += 1;
                                 continue;
                             }
@@ -2348,13 +2558,88 @@ impl ImapExporter {
                 stats.exported, stats.skipped, stats.errors
             ));
 
-            (stats, folder_decisions)
+            let mut purge = Vec::new();
+            if purge_enabled {
+                for seen in &seen_handled {
+                    // Without UIDVALIDITY no proof can target the message.
+                    let Some(uid_validity) = mailbox_uid_validity else {
+                        stats.stale_proof += 1;
+                        continue;
+                    };
+                    let current = crate::contextual_export::MessageLocation {
+                        folder_raw: folder.raw.clone(),
+                        folder_display: folder.display.clone(),
+                        uid_validity,
+                        uid: seen.uid,
+                    };
+                    match ledger_proofs.match_seen(seen, &current, self.is_gmail) {
+                        crate::handled::PurgeMatch::Purge(proof) => purge.push(proof),
+                        crate::handled::PurgeMatch::Legacy => stats.legacy_handled += 1,
+                        crate::handled::PurgeMatch::Stale => stats.stale_proof += 1,
+                    }
+                }
+            }
+
+            (stats, folder_decisions, purge)
             // session borrow ends here
         };
 
-        let (stats, folder_decisions) = stats_and_decisions;
+        let (mut stats, folder_decisions, purge) = stats_and_decisions;
+        let cancelled = cancel_token.is_some_and(|t| t.load(Ordering::Relaxed));
+        if !cancelled {
+            stats.purged = self.purge_handled(purge, &folder.display, on_status);
+        }
 
         Ok((stats, folder_decisions))
+    }
+
+    /// Delete handled messages whose ledger proof targets them, once each per
+    /// run. Returns the number gone from the server. A failure is logged and
+    /// reported, never fatal to the export.
+    fn purge_handled(
+        &mut self,
+        proofs: Vec<crate::contextual_export::LocalSourceProof>,
+        folder_display: &str,
+        on_status: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> usize {
+        use crate::contextual_export::DeletionOutcome;
+
+        let proofs: Vec<_> = proofs
+            .into_iter()
+            .filter(|proof| {
+                self.purge_targeted
+                    .insert(crate::contextual_export::proof_target_key(proof))
+            })
+            .collect();
+        if proofs.is_empty() {
+            return 0;
+        }
+        if let Some(s) = on_status {
+            s(&format!(
+                "{folder_display} \u{2014} suppression de {} message(s) déjà traité(s)\u{2026}",
+                proofs.len()
+            ));
+        }
+        match self.delete_discarded_messages(&proofs) {
+            Ok(results) => {
+                crate::deletion_log::record_results(&results);
+                results
+                    .iter()
+                    .filter(|r| {
+                        matches!(
+                            r.outcome,
+                            DeletionOutcome::Deleted | DeletionOutcome::AlreadyAbsent
+                        )
+                    })
+                    .count()
+            }
+            Err(e) => {
+                let error = format!("purge of handled messages in {folder_display}: {e:#}");
+                crate::deletion_log::record_error(&self.account.name, &error);
+                eprintln!("warning: {error}");
+                0
+            }
+        }
     }
 
     /// Export all folders for the account.
@@ -2383,6 +2668,7 @@ impl ImapExporter {
 
         self.batch_exported = 0;
         self.batch_full = false;
+        self.purge_targeted.clear();
 
         // Run the existing body in an IIFE so cleanup can run on every exit path.
         let run_result: Result<(HashMap<String, ExportStats>, RouteDecisions)> = (|| {
@@ -2502,6 +2788,37 @@ pub struct ExportStats {
     pub exported: usize,
     pub skipped: usize,
     pub errors: usize,
+    /// Handled messages deleted from the server (or found already gone).
+    pub purged: usize,
+    /// Handled messages kept because the ledger holds no proof for them.
+    pub legacy_handled: usize,
+    /// Handled messages kept because their proof targets another message.
+    pub stale_proof: usize,
+}
+
+/// French summary of the purge of handled messages, empty when nothing to say.
+pub fn purge_summary<'a>(stats: impl IntoIterator<Item = &'a ExportStats>) -> String {
+    let (mut purged, mut legacy, mut stale) = (0, 0, 0);
+    for s in stats {
+        purged += s.purged;
+        legacy += s.legacy_handled;
+        stale += s.stale_proof;
+    }
+    let mut parts = Vec::new();
+    if purged > 0 {
+        parts.push(format!("{purged} supprimé(s) du serveur (déjà traités)"));
+    }
+    if legacy > 0 {
+        parts.push(format!(
+            "{legacy} message(s) traité(s) sans preuve : utiliser Nettoyer le serveur"
+        ));
+    }
+    if stale > 0 {
+        parts.push(format!(
+            "{stale} message(s) traité(s) à la preuve périmée, laissés sur le serveur"
+        ));
+    }
+    parts.join(" — ")
 }
 
 /// A mailbox name as returned by the IMAP `LIST` response.

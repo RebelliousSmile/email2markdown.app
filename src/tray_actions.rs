@@ -17,8 +17,8 @@ use crate::progress::ProgressUpdate;
 
 use crate::config::{self, Config, Settings};
 use crate::contextual_export::{
-    build_deletion_batch, find_existing_proof, ContextualCandidate, DeletionOutcome,
-    DeletionPreflight, DeletionRequest,
+    build_deletion_batch, find_existing_proof, tally_deletions, ContextualCandidate,
+    DeletionOutcome, DeletionPreflight, DeletionRequest, DeletionTally,
 };
 use crate::email_export::{self, ImapExporter};
 use crate::network::ProgressCallback;
@@ -334,24 +334,20 @@ pub fn run_contextual_batch(
         .filter(|result| result.status.is_none())
         .map(|result| result.candidate_key.clone())
         .collect();
-    let mut deleted = 0;
-    let mut stale_search = false;
-    let mut retry_deletion = Vec::new();
+    let mut tally = DeletionTally::default();
     if delete_after_export {
         let batch = build_deletion_batch(&conversions);
         let deletion_results = exporter.delete_proved_messages(&batch)?;
-        for (request, result) in batch.into_iter().zip(deletion_results) {
-            match result.outcome {
-                DeletionOutcome::Deleted | DeletionOutcome::AlreadyAbsent => deleted += 1,
-                DeletionOutcome::StaleUidValidity { .. } => {
-                    stale_search = true;
-                    retry_deletion.push(request);
-                }
-                DeletionOutcome::RetryRequired(_) => retry_deletion.push(request),
-            }
-        }
+        crate::deletion_log::record_results(&deletion_results);
+        tally = tally_deletions(batch, &deletion_results);
     }
     exporter.disconnect().ok();
+    let DeletionTally {
+        deleted,
+        stale_search,
+        retry: retry_deletion,
+        ..
+    } = tally;
     let retry_deletion_count = retry_deletion.len();
     Ok(ContextualBatchSummary {
         converted,
@@ -404,7 +400,10 @@ fn spawn_immediate_server_deletions(entries: Vec<ImmediateServerDeletion>) {
         let cfg = match Config::load(&config::accounts_yaml_path()) {
             Ok(config) => config,
             Err(error) => {
-                eprintln!("warning: server deletion configuration failed: {error:#}");
+                crate::deletion_log::record_error(
+                    "-",
+                    &format!("server deletion configuration failed: {error:#}"),
+                );
                 return;
             }
         };
@@ -418,7 +417,7 @@ fn spawn_immediate_server_deletions(entries: Vec<ImmediateServerDeletion>) {
 
         for (account_name, entries) in grouped {
             let Some(account) = cfg.get_account(&account_name).cloned() else {
-                eprintln!("warning: server deletion account not found: {account_name}");
+                crate::deletion_log::record_error(&account_name, "account not found");
                 continue;
             };
             if !account.delete_after_export {
@@ -435,37 +434,30 @@ fn spawn_immediate_server_deletions(entries: Vec<ImmediateServerDeletion>) {
 
             let mut exporter = ImapExporter::new(account, false);
             if let Err(error) = exporter.connect() {
-                eprintln!("warning: server deletion for {account_name} failed: {error:#}");
+                crate::deletion_log::record_error(
+                    &account_name,
+                    &format!("server deletion failed: {error:#}"),
+                );
                 continue;
             }
             let result = (|| -> Result<()> {
-                let mut failures = 0usize;
+                let mut results = Vec::new();
                 if !sorted.is_empty() {
-                    failures += exporter
-                        .delete_proved_messages(&sorted)?
-                        .into_iter()
-                        .filter(|result| {
-                            matches!(
-                                result.outcome,
-                                DeletionOutcome::RetryRequired(_)
-                                    | DeletionOutcome::StaleUidValidity { .. }
-                            )
-                        })
-                        .count();
+                    results.extend(exporter.delete_proved_messages(&sorted)?);
                 }
                 if !discarded.is_empty() {
-                    failures += exporter
-                        .delete_discarded_messages(&discarded)?
-                        .into_iter()
-                        .filter(|result| {
-                            matches!(
-                                result.outcome,
-                                DeletionOutcome::RetryRequired(_)
-                                    | DeletionOutcome::StaleUidValidity { .. }
-                            )
-                        })
-                        .count();
+                    results.extend(exporter.delete_discarded_messages(&discarded)?);
                 }
+                crate::deletion_log::record_results(&results);
+                let failures = results
+                    .iter()
+                    .filter(|result| {
+                        !matches!(
+                            result.outcome,
+                            DeletionOutcome::Deleted | DeletionOutcome::AlreadyAbsent
+                        )
+                    })
+                    .count();
                 if failures > 0 {
                     anyhow::bail!("{failures} suppression(s) IMAP ont échoué");
                 }
@@ -473,7 +465,10 @@ fn spawn_immediate_server_deletions(entries: Vec<ImmediateServerDeletion>) {
             })();
             exporter.disconnect().ok();
             if let Err(error) = result {
-                eprintln!("warning: server deletion for {account_name} failed: {error:#}");
+                crate::deletion_log::record_error(
+                    &account_name,
+                    &format!("server deletion failed: {error:#}"),
+                );
             }
         }
     });
@@ -515,19 +510,13 @@ pub fn retry_contextual_deletions(
         .connect()
         .context("Failed to connect to IMAP server")?;
     let outcomes = exporter.delete_proved_messages(requests)?;
-    let mut deleted = 0;
-    let mut stale_search = false;
-    let mut retry_deletion = Vec::new();
-    for (request, result) in requests.iter().cloned().zip(outcomes) {
-        match result.outcome {
-            DeletionOutcome::Deleted | DeletionOutcome::AlreadyAbsent => deleted += 1,
-            DeletionOutcome::StaleUidValidity { .. } => {
-                stale_search = true;
-                retry_deletion.push(request);
-            }
-            DeletionOutcome::RetryRequired(_) => retry_deletion.push(request),
-        }
-    }
+    crate::deletion_log::record_results(&outcomes);
+    let DeletionTally {
+        deleted,
+        stale_search,
+        retry: retry_deletion,
+        ..
+    } = tally_deletions(requests.to_vec(), &outcomes);
     exporter.disconnect().ok();
     let retry_deletion_count = retry_deletion.len();
     Ok(ContextualBatchSummary {
@@ -737,6 +726,11 @@ fn run_export(
         "{} — {} exportés, {} déjà connus localement, {} erreurs",
         prefix, total_exported, total_skipped, total_errors
     );
+    let purge = email_export::purge_summary(results.values());
+    if !purge.is_empty() {
+        summary.push_str(" — ");
+        summary.push_str(&purge);
+    }
     let has_next_batch = batch_full && !cancelled;
     if has_next_batch {
         summary.push_str(" — triez ce lot puis relancez l'export pour le lot suivant");
@@ -1190,6 +1184,203 @@ fn run_fix_html(account_name: &str, on_progress: Option<&ProgressCallback>) -> R
 }
 
 /// Get the list of configured accounts.
+/// Accounts that delete from the server: the targets of « Nettoyer le serveur ».
+pub fn get_cleanup_account_names() -> Result<Vec<String>> {
+    dotenvy::from_path(config::env_file_path()).ok();
+    let config_path = config::accounts_yaml_path();
+    if !config_path.exists() {
+        return Ok(Vec::new());
+    }
+    let config = Config::load(&config_path)?;
+    Ok(config
+        .accounts
+        .iter()
+        .filter(|account| account.delete_after_export)
+        .map(|account| account.name.clone())
+        .collect())
+}
+
+/// Set while a server cleanup runs: two concurrent runs would record the
+/// same proofs twice.
+static CLEANING_SERVER: AtomicBool = AtomicBool::new(false);
+
+/// Clean the server: delete the handled messages the ledger records without
+/// proof, after an explicit confirmation. Runs in a background thread.
+pub fn action_clean_server(account_name: String, result_sender: Sender<ActionResult>) {
+    if CLEANING_SERVER.swap(true, Ordering::SeqCst) {
+        let _ = result_sender.send(ActionResult::Error(
+            "Nettoyer le serveur : un nettoyage est déjà en cours".to_string(),
+        ));
+        return;
+    }
+    thread::spawn(move || {
+        let confirm = |account: &str, count: usize| {
+            confirm_yes_no(
+                "Nettoyer le serveur",
+                &format!(
+                    "{count} message(s) de {account} sont déjà triés ou écartés mais restent sur le serveur.\n\n\
+                     Le registre ne les connaît que par leur Message-ID : l'appariement repose sur cet identifiant seul.\n\n\
+                     Les supprimer du serveur ?"
+                ),
+            )
+        };
+        let result = match clean_server(&account_name, confirm) {
+            Ok(message) => ActionResult::Success("Nettoyer le serveur".to_string(), message),
+            Err(e) => ActionResult::Error(format!("Nettoyer le serveur : {:#}", e)),
+        };
+        CLEANING_SERVER.store(false, Ordering::SeqCst);
+        let _ = result_sender.send(result);
+    });
+}
+
+/// Yes/No question that stays above the other windows, default answer No.
+/// The cleanup asks only after its census, once the tray menu click no longer
+/// grants the right to take the foreground: a plain dialog opens behind.
+#[cfg(windows)]
+fn confirm_yes_no(title: &str, text: &str) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
+    };
+    let wide = |s: &str| {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let (title, text) = (wide(title), wide(text));
+    // SAFETY: both buffers are NUL-terminated and outlive the call.
+    let answer = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST | MB_SETFOREGROUND,
+        )
+    };
+    answer == IDYES
+}
+
+#[cfg(not(windows))]
+fn confirm_yes_no(title: &str, text: &str) -> bool {
+    rfd::MessageDialog::new()
+        .set_title(title)
+        .set_description(text)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
+}
+
+/// Complete the ledger from the routed notes, list the legacy handled
+/// messages still on the server, and delete them once `confirm` agrees.
+/// Successful deletions are recorded in the ledger with their proof.
+fn clean_server(account_name: &str, confirm: impl Fn(&str, usize) -> bool) -> Result<String> {
+    use crate::contextual_export::DeletionOutcome;
+
+    dotenvy::from_path(config::env_file_path()).ok();
+    let config =
+        Config::load(&config::accounts_yaml_path()).context("Failed to load configuration")?;
+    let account = config
+        .get_account(account_name)
+        .context(format!("Account '{}' not found", account_name))?
+        .clone();
+    if !account.delete_after_export {
+        anyhow::bail!("{account_name} ne supprime pas les messages du serveur");
+    }
+    if account.password.is_none() {
+        anyhow::bail!(
+            "No password found for {}. Check {}",
+            account_name,
+            config::env_file_path().display()
+        );
+    }
+
+    // Routed notes may still carry the proof the ledger lacks.
+    let completed = match Settings::load(&config::settings_path())
+        .unwrap_or_default()
+        .notes_dir
+    {
+        Some(notes_dir) => {
+            crate::handled::complete_from_notes(std::path::Path::new(&notes_dir), &account.name)
+                .context("failed to complete the ledger from notes")?
+        }
+        None => 0,
+    };
+
+    let handled = crate::handled::load(&account.name);
+    let proved = crate::handled::load_proofs(&account.name)
+        .proofs
+        .into_keys()
+        .collect();
+    let mut exporter = ImapExporter::new(account.clone(), false);
+    exporter.connect().context("failed to connect")?;
+    let entries = exporter.audit_server(None, &handled, &proved);
+    exporter.disconnect().ok();
+    let entries = entries?;
+    let targets = crate::server_audit::legacy_proofs(&entries);
+    // A Gmail message seen under several labels is one target, not several.
+    let untargetable = entries
+        .iter()
+        .filter(|e| e.status == crate::server_audit::ServerStatus::HandledLegacy)
+        .filter(|e| e.proof.is_none())
+        .count();
+
+    let mut notes = Vec::new();
+    if completed > 0 {
+        notes.push(format!(
+            "{completed} preuve(s) retrouvée(s) dans les notes, purgées au prochain export"
+        ));
+    }
+    if untargetable > 0 {
+        notes.push(format!(
+            "{untargetable} message(s) impossibles à cibler exactement, laissés sur le serveur"
+        ));
+    }
+    let notes = notes
+        .iter()
+        .map(|note| format!(" — {note}"))
+        .collect::<String>();
+
+    if targets.is_empty() {
+        return Ok(format!("Rien à nettoyer pour {account_name}{notes}"));
+    }
+    if !confirm(account_name, targets.len()) {
+        return Ok(format!("Nettoyage annulé, rien n'a été supprimé{notes}"));
+    }
+
+    // The proofs carry UIDVALIDITY: reconnecting after the dialog is safe.
+    let mut exporter = ImapExporter::new(account.clone(), false);
+    exporter.connect().context("failed to connect")?;
+    let results = exporter.delete_discarded_messages(&targets);
+    exporter.disconnect().ok();
+    let results = match results {
+        Ok(results) => results,
+        Err(e) => {
+            crate::deletion_log::record_error(&account.name, &format!("{e:#}"));
+            return Err(e);
+        }
+    };
+    crate::deletion_log::record_results(&results);
+    let gone: Vec<_> = results
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.outcome,
+                DeletionOutcome::Deleted | DeletionOutcome::AlreadyAbsent
+            )
+        })
+        .map(|r| &r.proof)
+        .collect();
+    crate::handled::record_proofs(gone.iter().copied());
+    let deleted = results
+        .iter()
+        .filter(|r| r.outcome == DeletionOutcome::Deleted)
+        .count();
+    let failed = results.len() - gone.len();
+    Ok(format!(
+        "{deleted} supprimé(s), {} déjà absent(s), {failed} échec(s){notes}",
+        gone.len() - deleted
+    ))
+}
+
 pub fn get_account_names() -> Result<Vec<String>> {
     dotenvy::from_path(config::env_file_path()).ok();
 

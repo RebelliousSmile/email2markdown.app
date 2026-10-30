@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Commande `audit-server <compte>`** : état des lieux en lecture seule des messages encore présents sur le serveur. Pour chaque message, elle indique s'il a déjà été traité (avec ou sans preuve exacte), s'il attend son tri sous forme de note, ou s'il n'a jamais été exporté. Elle affiche les totaux par statut et par dossier ; `--folder` restreint l'analyse à un dossier et `--details` liste chaque message. Rien n'est modifié, ni sur le serveur ni en local.
+- **Action « Nettoyer le serveur »** (menu de la barre des tâches, comptes avec `delete_after_export`) : complète d'abord le registre à partir des notes triées, recense le serveur, puis propose de supprimer les messages déjà traités que le registre ne connaît que par leur Message-ID. Rien n'est supprimé sans confirmation explicite ; chaque suppression est consignée dans `deletions.log` et inscrite au registre avec sa preuve, si bien qu'un nouveau recensement ne la compte plus parmi les messages sans preuve.
+- **Purge des messages déjà traités pendant l'export** : quand `delete_after_export` et `skip_existing` sont actifs, un message déjà trié ou écarté mais resté sur le serveur est supprimé en fin de dossier, à condition que le registre conserve une preuve qui le désigne exactement (même dossier, UIDVALIDITY et UID, ou même identifiant Gmail, y compris s'il a changé de libellé). Une note encore en attente de tri ne déclenche jamais de suppression. Les messages inscrits sans preuve et ceux dont la preuve ne correspond plus sont conservés et comptés : le résumé de fin d'export indique le nombre de messages supprimés, puis, le cas échéant, celui des messages à confier à « Nettoyer le serveur ». Chaque suppression est consignée dans `deletions.log`, et un échec n'interrompt pas l'export.
+- **Journal des suppressions** : chaque suppression sur le serveur, réussie ou non, est consignée dans `deletions.log`, dans le dossier de configuration (date, compte, dossier, UID, Message-ID, résultat). Les erreurs des suppressions lancées en arrière-plan, auparavant invisibles en mode tray, y apparaissent aussi.
+
+### Fixed
+
+- **Suppressions refusées silencieusement** : une demande de suppression dont la note a disparu ou porte une autre preuve est désormais signalée comme refusée, au lieu d'être ignorée sans trace. Elle n'est plus proposée à un nouvel essai.
+- **Résultats de suppression mal attribués** : les résultats sont associés à leur demande par la preuve du message, et non plus par leur ordre, qui diffère quand les suppressions sont regroupées par dossier.
+
 ## [0.21.0] - 2026-10-20
 
 ### Added
