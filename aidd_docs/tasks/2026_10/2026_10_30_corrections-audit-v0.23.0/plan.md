@@ -48,3 +48,20 @@ Les phases 5, 6 et 7 ne dépendent logiquement ni entre elles ni des phases 1 à
 | `CleanupPaths` devient `config::AppPaths` et sert aussi à l'export. `export_account` prend des chemins injectés ; un wrapper garde l'appel actuel pour `main.rs` et `tray_actions.rs`. | L'export et le nettoyage lisent les mêmes fichiers (registre, `settings.yaml`, `deletions.log`). Un second type de chemins dupliquerait celui-ci, et `run_contextual_batch` (tests 🟡 `src/tray_actions.rs:284`) en serait le troisième consommateur (`.claude/rules/07-quality/dry-refactor.md`). |
 | La revérification serveur se fait dans `delete_validated`, pour tous les appelants : purge d'export, rejet en revue, suppression après conversion contextuelle, nettoyage serveur. Elle compare `Message-ID` et `header_fingerprint`, recalculés par `parse_header_candidate` sur un `UID FETCH` des mêmes en-têtes. Une divergence rend le variant existant `DeletionOutcome::Rejected`. | Revérifier seulement sur le chemin « rejet en revue » laisserait les autres appelants dépendre d'une preuve lue sur disque. Un seul point de contrôle couvre aussi les appelants futurs. Le coût est un `UID FETCH` d'en-têtes par lot de 500, déjà fait par la recherche contextuelle. |
 | Les tests Dovecot passent par `--test-threads=1` en CI au lieu de retirer chaque `set_var`. | `require_fixture` pose `EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST`, lu par le code de connexion : le retirer demanderait un paramètre TLS dans `Account` pour les seuls tests. Sérialiser le binaire d'intégration supprime la course à coût nul (moins de dix tests). Le `set_var` du mot de passe (`cleanup_dir`) reste : le déplacer dans le `.env` du `TempDir` ne changerait rien, car `dotenvy::from_path` pose lui aussi la variable dans le processus, et tous les comptes de test partagent le nom « Dovecot fixture », donc la même variable. |
+
+## Vérifications en attente
+
+Le code des huit phases est livré en v0.23.1 (tag `v0.23.1`, CI verte sur Windows, macOS et Ubuntu). Le statut `implemented` porte sur le code : quatre critères d'acceptation reposent sur des vérifications manuelles qui n'ont pas encore été faites.
+
+| Phase | Critère | État au 2026-10-31 |
+| ----- | ------- | ------------------ |
+| 4, tâche 3 | La suppression Gmail regroupée par dossier fonctionne sur un vrai compte. | Jamais passée. Le job `gmail-destructive` échoue à la connexion : le secret `EMAIL_TO_MARKDOWN_GMAIL_PASSWORD` contient le mot de passe du compte, alors que Gmail exige un mot de passe d'application. Aucune opération n'a eu lieu sur la boîte. |
+| 5, tâche 4 | Avec un `accounts.yaml` invalide, le menu affiche « Comptes illisibles — voir Paramètres ». | Non vérifiée. |
+| 6 | Les dialogues `rfd` s'ouvrent sous Linux sans portail XDG. | Compilation et tests validés par la CI Ubuntu ; l'affichage des dialogues reste à vérifier. |
+| 7, tâche 2 | Le menu du tray et les fenêtres répondent pendant un scan de destinations. | Non vérifiée. |
+
+Le risque principal est la première ligne : le chemin réseau de la suppression Gmail (`uid_mv`, recherche des `X-GM-MSGID`, reprise message par message) n'a tourné que contre la planification pure, jamais contre Gmail. Pour relancer le job une fois le secret corrigé :
+
+```bash
+gh workflow run ci.yml --ref main -f run_gmail_destructive=true
+```
