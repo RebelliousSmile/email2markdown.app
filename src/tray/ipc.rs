@@ -923,6 +923,70 @@ fn delete_account(
     remove_env_passwords(env_path, account_name)
 }
 
+/// Move `account_name` one place `"up"` or `"down"` in `accounts.yaml`.
+///
+/// The order drives the account list, the tray menu and the CLI export order.
+/// Already at the edge: nothing is written.
+fn move_account(account_name: &str, direction: &str, accounts_path: &Path) -> anyhow::Result<()> {
+    let up = match direction {
+        "up" => true,
+        "down" => false,
+        other => anyhow::bail!("direction inconnue : {other}"),
+    };
+    let mut accounts = config::load_raw_accounts(accounts_path)
+        .with_context(|| format!("failed to load accounts from {}", accounts_path.display()))?;
+    let idx = accounts
+        .iter()
+        .position(|a| a.name.eq_ignore_ascii_case(account_name))
+        .ok_or_else(|| anyhow::anyhow!("Compte introuvable : {account_name}"))?;
+    let neighbour = if up {
+        idx.checked_sub(1)
+    } else {
+        Some(idx + 1).filter(|&n| n < accounts.len())
+    };
+    let Some(neighbour) = neighbour else {
+        return Ok(());
+    };
+    accounts.swap(idx, neighbour);
+    config::save_accounts(&accounts, accounts_path)
+        .with_context(|| format!("failed to save accounts to {}", accounts_path.display()))?;
+    Ok(())
+}
+
+/// Answer to a `move_account` request: the account list re-read from disk, or the cause.
+fn move_outcome(
+    account_name: Option<&str>,
+    direction: Option<&str>,
+    accounts_path: &Path,
+) -> ConfigIpcOutcome {
+    let moved = (|| -> anyhow::Result<Vec<RawAccount>> {
+        let name =
+            account_name.ok_or_else(|| anyhow::anyhow!("nom du compte absent de la demande"))?;
+        let direction =
+            direction.ok_or_else(|| anyhow::anyhow!("direction absente de la demande"))?;
+        move_account(name, direction, accounts_path)?;
+        config::load_raw_accounts(accounts_path)
+            .with_context(|| format!("failed to load {}", accounts_path.display()))
+    })();
+    let reply = match moved {
+        Ok(accounts) => serde_json::json!({
+            "action": "move_account",
+            "ok": true,
+            "accounts": accounts,
+        }),
+        Err(e) => serde_json::json!({
+            "action": "move_account",
+            "ok": false,
+            "message": format!("D\u{00e9}placement impossible : {:#}", e),
+        }),
+    };
+    ConfigIpcOutcome {
+        result: None,
+        should_close: false,
+        reply: Some(reply.to_string()),
+    }
+}
+
 /// Write one account: connection info to `accounts_path`, behaviour to `settings_path`.
 ///
 /// Both files are loaded before the first write, so an unreadable `settings.yaml`
@@ -1170,6 +1234,19 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
             &config::accounts_yaml_path(),
             None,
         ),
+        "move_account" => {
+            let field = |key: &str| {
+                msg.data
+                    .as_ref()
+                    .and_then(|d| d.get(key))
+                    .and_then(|v| v.as_str())
+            };
+            move_outcome(
+                field("account_name"),
+                field("direction"),
+                &config::accounts_yaml_path(),
+            )
+        }
         "delete_account" => {
             let name = msg
                 .data
@@ -1229,7 +1306,7 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 mod tests {
     use super::{
         apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails,
-        frontmatter_list, relative_destination, reload_outcome, remove_env_passwords, save_account,
+        frontmatter_list, move_account, move_outcome, relative_destination, reload_outcome, remove_env_passwords, save_account,
         save_outcome, save_settings, scan_destinations, set_env_password,
         validate_new_account_name, AccountData, DestGuiIpcResult, RouteApplyReport,
         RouteDecisionRow, SettingsData,
@@ -1674,6 +1751,103 @@ hi
         assert!(load_raw_accounts(&accounts).unwrap().is_empty());
         assert!(Settings::load(&settings).unwrap().accounts.is_empty());
         assert_eq!(fs::read_to_string(&env).unwrap(), "OTHER_PASSWORD='c'\n");
+    }
+
+    const THREE_ACCOUNTS: &str = "accounts:\n  - name: A\n    server: a.example.org\n    port: 993\n    username: a\n  - name: B\n    server: b.example.org\n    port: 993\n    username: b\n  - name: C\n    server: c.example.org\n    port: 993\n    username: c\n";
+
+    fn account_names(accounts: &std::path::Path) -> Vec<String> {
+        load_raw_accounts(accounts)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.name)
+            .collect()
+    }
+
+    #[test]
+    fn test_move_account_up_swaps_with_previous() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, _, _) = account_files(&temp);
+        fs::write(&accounts, THREE_ACCOUNTS).unwrap();
+
+        move_account("B", "up", &accounts).unwrap();
+
+        assert_eq!(account_names(&accounts), ["B", "A", "C"]);
+    }
+
+    #[test]
+    fn test_move_account_down_case_insensitive_swaps_with_next() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, _, _) = account_files(&temp);
+        fs::write(&accounts, THREE_ACCOUNTS).unwrap();
+
+        move_account("b", "down", &accounts).unwrap();
+
+        assert_eq!(account_names(&accounts), ["A", "C", "B"]);
+    }
+
+    #[test]
+    fn test_move_account_at_edge_writes_nothing() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, _, _) = account_files(&temp);
+        fs::write(&accounts, THREE_ACCOUNTS).unwrap();
+
+        move_account("A", "up", &accounts).unwrap();
+        move_account("C", "down", &accounts).unwrap();
+
+        assert_eq!(fs::read_to_string(&accounts).unwrap(), THREE_ACCOUNTS);
+    }
+
+    #[test]
+    fn test_move_account_unknown_name_invalid() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, _, _) = account_files(&temp);
+        fs::write(&accounts, THREE_ACCOUNTS).unwrap();
+
+        assert!(move_account("Z", "up", &accounts).is_err());
+        assert_eq!(fs::read_to_string(&accounts).unwrap(), THREE_ACCOUNTS);
+    }
+
+    #[test]
+    fn test_move_account_bad_direction_invalid() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, _, _) = account_files(&temp);
+        fs::write(&accounts, THREE_ACCOUNTS).unwrap();
+
+        assert!(move_account("B", "sideways", &accounts).is_err());
+        assert_eq!(fs::read_to_string(&accounts).unwrap(), THREE_ACCOUNTS);
+    }
+
+    #[test]
+    fn test_move_outcome_valid_returns_new_order() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, _, _) = account_files(&temp);
+        fs::write(&accounts, THREE_ACCOUNTS).unwrap();
+
+        let outcome = move_outcome(Some("C"), Some("up"), &accounts);
+
+        let reply: serde_json::Value = serde_json::from_str(&outcome.reply.unwrap()).unwrap();
+        assert_eq!(reply["action"], "move_account");
+        assert_eq!(reply["ok"], true);
+        let names: Vec<&str> = reply["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["A", "C", "B"]);
+    }
+
+    #[test]
+    fn test_move_outcome_missing_direction_reports_error() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, _, _) = account_files(&temp);
+        fs::write(&accounts, THREE_ACCOUNTS).unwrap();
+
+        let outcome = move_outcome(Some("B"), None, &accounts);
+
+        let reply: serde_json::Value = serde_json::from_str(&outcome.reply.unwrap()).unwrap();
+        assert_eq!(reply["ok"], false);
+        assert!(reply["message"].as_str().unwrap().starts_with("D\u{00e9}placement impossible"));
     }
 
     #[test]

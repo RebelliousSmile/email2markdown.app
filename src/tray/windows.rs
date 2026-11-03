@@ -249,7 +249,7 @@ fn reply_changed_accounts(reply: &str) -> bool {
     };
     let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     let action = value.get("action").and_then(|v| v.as_str()).unwrap_or("");
-    ok && matches!(action, "save" | "save_account" | "reload")
+    ok && matches!(action, "save" | "save_account" | "reload" | "move_account")
 }
 
 // ── Update window ─────────────────────────────────────────────────────────────
@@ -845,7 +845,21 @@ fn apply_review(
 
 #[cfg(test)]
 mod tests {
-    use super::{allow_navigation, escape_json_for_script};
+    use super::{allow_navigation, escape_json_for_script, reply_changed_accounts};
+
+    #[test]
+    fn test_reply_changed_accounts_with_move_account_ok() {
+        assert!(reply_changed_accounts(
+            r#"{"action":"move_account","ok":true,"accounts":[]}"#
+        ));
+    }
+
+    #[test]
+    fn test_reply_changed_accounts_with_move_account_failed() {
+        assert!(!reply_changed_accounts(
+            r#"{"action":"move_account","ok":false,"message":"x"}"#
+        ));
+    }
     use std::sync::atomic::AtomicBool;
     use std::time::Instant;
 
