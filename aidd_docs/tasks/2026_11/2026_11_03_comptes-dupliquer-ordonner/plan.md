@@ -1,6 +1,6 @@
 ---
 objective: "Dans l'onglet Comptes des paramètres, on peut réordonner les comptes par flèches, dupliquer un compte (serveur, port, dossiers ignorés) et renommer un dossier ignoré sur place."
-status: in-progress
+status: implemented
 ---
 
 # Plan: Comptes — dupliquer, réordonner, corriger un dossier ignoré
