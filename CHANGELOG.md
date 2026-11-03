@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-03
+
+### Added
+
+- **Ordre des comptes** : dans l'onglet Comptes des paramètres, des flèches ↑/↓ déplacent un compte d'un cran. L'ordre est enregistré aussitôt dans `accounts.yaml` et s'applique à la liste, au menu de la barre des tâches et à l'export en ligne de commande. Les saisies non enregistrées de l'onglet Général sont conservées.
+- **Dupliquer un compte** : le bouton « Dupliquer » ouvre « Ajouter un compte » prérempli avec le serveur, le port et les dossiers ignorés du compte choisi. Le nom, l'identifiant, le mot de passe et les réglages de comportement restent à saisir.
+- **Renommer un dossier ignoré** : un clic sur l'étiquette d'un dossier ignoré permet de corriger son nom sur place. Entrée ou un clic ailleurs valide, Échap annule ; un nom déjà présent fusionne les deux étiquettes.
+
 ## [0.23.1] - 2026-10-30
 
 ### Fixed
