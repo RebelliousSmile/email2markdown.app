@@ -27,6 +27,12 @@
   **Why:** fails on Windows and Unix alike, no permission setup needed
 - IPC handlers keep their signature; their testable logic lives in functions that take the file paths as parameters
   **Why:** the handlers read `config::settings_path()` / `config::accounts_yaml_path()`, global paths — testing them directly would write into the user's real configuration
+- `assets/config_window.html` behaviour: check in Playwright, no Rust needed
+  - Copy to scratchpad; `sed` replaces `__SETTINGS_JSON__`, `__ACCOUNTS_JSON__` with sample JSON
+  - Inject `window.ipc = { postMessage }` stub recording sent messages
+  - Serve over `python -m http.server`: Playwright blocks `file:`
+  - Simulate replies with `window.config_result({...})` — takes an object, not a JSON string
+  - Playwright MCP writes only under the project root (`.playwright-mcp/`): delete it afterwards
 - Python tools: always run `python -m pytest tools/tests`, never bare `pytest` from the repository root
   **Why:** root collection walks `target/` (tens of GB) and `archive/`, takes minutes and ends in collection errors
 
