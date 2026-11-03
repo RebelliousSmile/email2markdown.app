@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Instruction: Dupliquer un compte et renommer un dossier ignoré

@@ -315,6 +315,13 @@
     padding: 0;
   }
   .chip-remove:hover { color: #d32f2f; }
+  .chip-label { cursor: text; }
+  .chip-label:hover { text-decoration: underline; }
+  .chip-edit {
+    font-size: 12px; color: #1565c0; border: none; outline: none;
+    background: transparent; padding: 0; width: 140px;
+  }
+  .acct-row-actions { display: flex; gap: 6px; }
   .folder-add-row {
     display: flex;
     gap: 8px;
@@ -771,10 +778,20 @@
       html += '<span class="acct-row-name">' + escapeHtml(accounts[i].name) + '</span>';
       html += '<button type="button" class="acct-delete-link" data-idx="' + i + '">Supprimer la configuration</button>';
       html += '</span>';
+      html += '<span class="acct-row-actions">';
+      html += '<button type="button" class="btn-secondary acct-dup-btn" data-idx="' + i + '">Dupliquer</button>';
       html += '<button class="btn-secondary acct-edit-btn" data-idx="' + i + '">Modifier</button>';
+      html += '</span>';
       html += '</div>';
     }
     listView.innerHTML = html;
+    var dupBtns = listView.querySelectorAll('.acct-dup-btn');
+    for (var u = 0; u < dupBtns.length; u++) {
+      dupBtns[u].addEventListener('click', function () {
+        var source = accounts[parseInt(this.getAttribute('data-idx'), 10)];
+        if (source) showNewAccount(source);
+      });
+    }
     var editBtns = listView.querySelectorAll('.acct-edit-btn');
     for (var k = 0; k < editBtns.length; k++) {
       editBtns[k].addEventListener('click', function () {
@@ -851,15 +868,17 @@
     document.getElementById('acct-password').value = '';
   }
 
-  function showNewAccount() {
+  // `source` (optional): account to duplicate. Only server, port and ignored
+  // folders are copied; name, credentials and behaviour stay empty.
+  function showNewAccount(source) {
     currentAccountIdx = -1;
     setDetailMode(true);
     document.getElementById('acct-name').value = '';
     document.getElementById('acct-newname').value = '';
-    document.getElementById('acct-server').value = '';
-    document.getElementById('acct-port').value = 993;
+    document.getElementById('acct-server').value = (source && source.server) || '';
+    document.getElementById('acct-port').value = (source && source.port) || 993;
     document.getElementById('acct-username').value = '';
-    currentFolders = [];
+    currentFolders = (source && source.ignored_folders) ? source.ignored_folders.slice() : [];
     renderChips();
     for (var bi = 0; bi < ACCT_BOOL_FIELDS.length; bi++) {
       document.getElementById(ACCT_BOOL_FIELDS[bi][0]).value = '';
@@ -909,11 +928,18 @@
     var html = '';
     for (var i = 0; i < currentFolders.length; i++) {
       html += '<span class="chip" data-folder-idx="' + i + '">';
-      html += escapeHtml(currentFolders[i]);
+      html += '<span class="chip-label" data-folder-idx="' + i + '" title="Cliquer pour modifier">' +
+        escapeHtml(currentFolders[i]) + '</span>';
       html += ' <button class="chip-remove" data-folder-idx="' + i + '" type="button">&#xD7;</button>';
       html += '</span>';
     }
     zone.innerHTML = html;
+    var labels = zone.querySelectorAll('.chip-label');
+    for (var l = 0; l < labels.length; l++) {
+      labels[l].addEventListener('click', function () {
+        editChip(this, parseInt(this.getAttribute('data-folder-idx'), 10));
+      });
+    }
     var removeBtns = zone.querySelectorAll('.chip-remove');
     for (var k = 0; k < removeBtns.length; k++) {
       removeBtns[k].addEventListener('click', function () {
@@ -922,6 +948,42 @@
         renderChips();
       });
     }
+  }
+
+  // Rename an ignored folder in place. `finish` runs once: removing the input
+  // from the DOM after Enter/Escape fires a blur that must be ignored.
+  function editChip(label, idx) {
+    var original = currentFolders[idx];
+    if (original === undefined) return;
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'chip-edit';
+    input.value = original;
+    label.parentNode.replaceChild(input, label);
+    input.focus();
+    input.select();
+    var done = false;
+    function finish(apply) {
+      if (done) return;
+      done = true;
+      if (apply) {
+        var val = input.value.replace(/^\s+|\s+$/g, '');
+        if (val.length > 0 && val !== original) {
+          var dup = false;
+          for (var j = 0; j < currentFolders.length; j++) {
+            if (j !== idx && currentFolders[j] === val) { dup = true; break; }
+          }
+          if (dup) currentFolders.splice(idx, 1);
+          else currentFolders[idx] = val;
+        }
+      }
+      renderChips();
+    }
+    input.addEventListener('keydown', function (e) {
+      if (e.keyCode === 13) { e.preventDefault(); finish(true); }
+      else if (e.keyCode === 27) { e.preventDefault(); e.stopPropagation(); finish(false); }
+    });
+    input.addEventListener('blur', function () { finish(true); });
   }
 
   function addFolder() {
