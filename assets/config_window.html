@@ -181,7 +181,15 @@
     font-weight: 500;
     color: #222;
   }
-  .acct-row-main { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+  .acct-row-main { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex: 1; }
+  .acct-move { display: flex; flex-direction: column; gap: 2px; margin-right: 12px; }
+  .acct-move-btn {
+    background: #fff; border: 1px solid #ccc; border-radius: 3px;
+    width: 24px; height: 18px; padding: 0; line-height: 1; font-size: 12px;
+    color: #555; cursor: pointer;
+  }
+  .acct-move-btn:hover:not(:disabled) { background: #f0f0f0; color: #222; }
+  .acct-move-btn:disabled { opacity: .35; cursor: default; }
   .acct-delete-link {
     background: none; border: none; padding: 0; cursor: pointer;
     color: #c62828; font-size: 12px; text-decoration: underline;
@@ -753,6 +761,12 @@
     var html = '';
     for (var i = 0; i < accounts.length; i++) {
       html += '<div class="acct-row" data-idx="' + i + '">';
+      html += '<span class="acct-move">';
+      html += '<button type="button" class="acct-move-btn" data-idx="' + i + '" data-dir="up" title="Monter"' +
+        (i === 0 ? ' disabled' : '') + '>&#x2191;</button>';
+      html += '<button type="button" class="acct-move-btn" data-idx="' + i + '" data-dir="down" title="Descendre"' +
+        (i === accounts.length - 1 ? ' disabled' : '') + '>&#x2193;</button>';
+      html += '</span>';
       html += '<span class="acct-row-main">';
       html += '<span class="acct-row-name">' + escapeHtml(accounts[i].name) + '</span>';
       html += '<button type="button" class="acct-delete-link" data-idx="' + i + '">Supprimer la configuration</button>';
@@ -765,6 +779,18 @@
     for (var k = 0; k < editBtns.length; k++) {
       editBtns[k].addEventListener('click', function () {
         showAccountDetail(parseInt(this.getAttribute('data-idx'), 10));
+      });
+    }
+    var moveBtns = listView.querySelectorAll('.acct-move-btn');
+    for (var m = 0; m < moveBtns.length; m++) {
+      moveBtns[m].addEventListener('click', function () {
+        var acct = accounts[parseInt(this.getAttribute('data-idx'), 10)];
+        if (!acct) return;
+        document.getElementById('reload-msg').style.display = 'none';
+        postIpc({
+          action: 'move_account',
+          data: { account_name: acct.name, direction: this.getAttribute('data-dir') }
+        });
       });
     }
     var delLinks = listView.querySelectorAll('.acct-delete-link');
@@ -1065,6 +1091,13 @@
   // Called by Rust via evaluate_script("config_result(<json>)") after each save request.
   window.config_result = function (result) {
     var message = result.message || 'Erreur de sauvegarde';
+    if (result.action === 'move_account') {
+      // Only the list changes: the General tab keeps any unsaved edit.
+      if (!result.ok) { showReloadMsg(message, false); return; }
+      accounts = result.accounts || [];
+      renderAccountList();
+      return;
+    }
     if (result.action === 'reload') {
       if (!result.ok) { showReloadMsg(message, false); return; }
       window.__SETTINGS_DATA__ = result.settings || {};
