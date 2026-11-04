@@ -597,13 +597,10 @@ fn main() -> Result<()> {
                 .cloned()
                 .with_context(|| format!("account not found: {account}"))?;
             let handled = email_to_markdown::handled::load(&account.name);
-            let proved = email_to_markdown::handled::load_proofs(&account.name)
-                .proofs
-                .into_keys()
-                .collect();
+            let ledger = email_to_markdown::handled::load_proofs(&account.name);
             let mut exporter = ImapExporter::new(account.clone(), false);
             exporter.connect().context("failed to connect")?;
-            let entries = exporter.audit_server(folder.as_deref(), &handled, &proved);
+            let entries = exporter.audit_server(folder.as_deref(), &handled, &ledger);
             exporter.disconnect().ok();
             print!(
                 "{}",

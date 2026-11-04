@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, HashSet};
 pub enum ServerStatus {
     /// In the ledger, with a proof that targets it exactly.
     HandledWithProof,
-    /// In the ledger by `Message-ID` only.
+    /// In the ledger by `Message-ID` only, or with a proof targeting another
+    /// message (stale proof).
     HandledLegacy,
     /// A note of the export folder matches it: not routed yet.
     Staged,
@@ -46,6 +47,33 @@ pub fn classify(
         Some(SkipReason::Handled(_)) => ServerStatus::HandledLegacy,
         Some(SkipReason::Exported) => ServerStatus::Staged,
         None => ServerStatus::Unknown,
+    }
+}
+
+/// Keep `HandledWithProof` only when the ledger proof targets this exact
+/// message (`current`), by the export purge's own rule. A proof recorded at
+/// another place leaves the message handled by `Message-ID` only: the export
+/// purge would never delete it, so the server cleanup must.
+pub fn confirm_proof(
+    status: ServerStatus,
+    current: Option<&LocalSourceProof>,
+    ledger: &crate::handled::LedgerProofs,
+    gmail: bool,
+) -> ServerStatus {
+    if status != ServerStatus::HandledWithProof {
+        return status;
+    }
+    let Some(current) = current else {
+        return ServerStatus::HandledLegacy;
+    };
+    let seen = crate::handled::SeenHandled {
+        message_id: current.identity.message_id.clone().unwrap_or_default(),
+        uid: current.location.uid,
+        provider_id: current.identity.provider_id.clone(),
+    };
+    match ledger.match_seen(&seen, &current.location, gmail) {
+        crate::handled::PurgeMatch::Purge(_) => ServerStatus::HandledWithProof,
+        _ => ServerStatus::HandledLegacy,
     }
 }
 
@@ -162,6 +190,81 @@ mod tests {
             "Message-ID: <{id}>\r\nDate: Thu, 29 Oct 2026 10:00:00 +0100\r\nFrom: Alice Martin <alice@x.org>\r\nTo: Bob <bob@y.org>\r\nSubject: {subject}\r\n\r\n"
         )
         .into_bytes()
+    }
+
+    fn located_proof(uid: u32) -> LocalSourceProof {
+        use crate::contextual_export::{MessageLocation, SourceIdentity};
+        LocalSourceProof {
+            identity: SourceIdentity {
+                account: "Perso".into(),
+                message_id: Some("a@x".into()),
+                header_fingerprint: "fp".into(),
+                provider_id: None,
+            },
+            location: MessageLocation {
+                folder_raw: "INBOX".into(),
+                folder_display: "INBOX".into(),
+                uid_validity: 9,
+                uid,
+            },
+        }
+    }
+
+    fn ledger_with(stored: LocalSourceProof) -> crate::handled::LedgerProofs {
+        let mut ledger = crate::handled::LedgerProofs::default();
+        ledger.proofs.insert("a@x".into(), stored);
+        ledger
+    }
+
+    #[test]
+    fn test_confirm_proof_with_matching_location_keeps_proof() {
+        let ledger = ledger_with(located_proof(7));
+        assert_eq!(
+            confirm_proof(
+                ServerStatus::HandledWithProof,
+                Some(&located_proof(7)),
+                &ledger,
+                false
+            ),
+            ServerStatus::HandledWithProof
+        );
+    }
+
+    #[test]
+    fn test_confirm_proof_with_stale_location_is_legacy() {
+        let ledger = ledger_with(located_proof(7));
+        assert_eq!(
+            confirm_proof(
+                ServerStatus::HandledWithProof,
+                Some(&located_proof(8)),
+                &ledger,
+                false
+            ),
+            ServerStatus::HandledLegacy
+        );
+    }
+
+    #[test]
+    fn test_confirm_proof_without_current_proof_is_legacy() {
+        let ledger = ledger_with(located_proof(7));
+        assert_eq!(
+            confirm_proof(ServerStatus::HandledWithProof, None, &ledger, false),
+            ServerStatus::HandledLegacy
+        );
+    }
+
+    #[test]
+    fn test_confirm_proof_with_other_status_is_unchanged() {
+        let ledger = ledger_with(located_proof(7));
+        assert_eq!(
+            confirm_proof(
+                ServerStatus::Staged,
+                Some(&located_proof(8)),
+                &ledger,
+                false
+            ),
+            ServerStatus::Staged
+        );
     }
 
     #[test]

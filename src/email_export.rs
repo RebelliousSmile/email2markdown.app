@@ -2146,10 +2146,11 @@ impl ImapExporter {
         &mut self,
         only_folder: Option<&str>,
         handled: &HashSet<String>,
-        proved: &HashSet<String>,
+        ledger: &crate::handled::LedgerProofs,
     ) -> Result<Vec<crate::server_audit::AuditEntry>> {
-        use crate::server_audit::{classify, AuditEntry};
+        use crate::server_audit::{classify, confirm_proof, AuditEntry};
 
+        let proved: HashSet<String> = ledger.proofs.keys().cloned().collect();
         let gmail_extension = self
             .session
             .as_mut()
@@ -2198,23 +2199,24 @@ impl ImapExporter {
                         continue;
                     }
                 }
-                let status = classify(&header, &exported, handled, proved);
-                let mut entry = AuditEntry::from_headers(
-                    &folder.display,
-                    uid,
-                    provider_id.clone(),
-                    &header,
-                    status,
-                );
-                entry.proof = build_global_source_proof(
+                let proof = build_global_source_proof(
                     &self.account.name,
                     &folder,
                     uid_validity,
                     Some(uid),
                     &header,
-                    provider_id,
+                    provider_id.clone(),
                     self.is_gmail,
                 );
+                let status = confirm_proof(
+                    classify(&header, &exported, handled, &proved),
+                    proof.as_ref(),
+                    ledger,
+                    self.is_gmail,
+                );
+                let mut entry =
+                    AuditEntry::from_headers(&folder.display, uid, provider_id, &header, status);
+                entry.proof = proof;
                 entries.push(entry);
             }
         }
