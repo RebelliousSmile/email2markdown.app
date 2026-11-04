@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-04
+
+### Added
+
+- **Graphe par année** : le panneau de droite de la fenêtre des destinations affiche un histogramme du nombre d'emails rangés chaque année dans la destination sélectionnée, avec le total et le nombre d'emails hors dossier d'année. La liste indique pour chaque destination son nombre de règles et d'emails.
+- **Règles sur le correspondant et le sujet** : « + règle » propose, en plus du domaine et de l'expéditeur, un correspondant (De, À ou Cc) et un mot-clé du sujet. Les règles saisies sont validées, avec des messages d'erreur en français.
+
+### Changed
+
+- **Scanner** : il ne propose que les dossiers `<Branche>/<Catégorie>/<Sous-catégorie>` contenant au moins un email, avec leur nombre d'emails.
+- **Suggérer** est retiré de la fenêtre des destinations (la commande `dest suggest` reste disponible en ligne de commande).
+- Le champ sujet n'est prérempli que si la note porte un vrai sujet ; « objet » devient « sujet » dans tous les libellés.
+
+### Fixed
+
+- **Revue du routage figée** : l'application des décisions pouvait rester plusieurs minutes sur « Application en cours… » quand le dossier des notes est un grand arbre (tout `Documents/`). Les liens vers les messages cités ne sont plus cherchés que dans les branches des destinations.
+- **Audit du nettoyage** : une preuve du registre qui vise un autre message du serveur n'est plus considérée comme une preuve de traitement.
+
 ## [0.24.0] - 2026-11-03
 
 ### Added
