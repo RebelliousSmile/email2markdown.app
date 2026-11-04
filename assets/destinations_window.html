@@ -256,33 +256,6 @@
   #scan-sel-actions, #scan-sel-actions-orphans { display: flex; gap: 8px; }
   #scan-sel-actions button, #scan-sel-actions-orphans button { font-size: 11px; padding: 2px 8px; }
 
-  /* ── Suggest overlay ── */
-  #suggest-overlay {
-    display: none;
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.4);
-    z-index: 100;
-    align-items: center;
-    justify-content: center;
-  }
-  #suggest-overlay.active { display: flex; }
-  #suggest-dialog {
-    background: #fff;
-    border-radius: 6px;
-    padding: 20px 24px;
-    width: 520px;
-    max-height: 80vh;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
-  }
-  #suggest-dialog h2 { font-size: 14px; font-weight: 600; }
-  #suggest-table { font-size: 12px; width: 100%; border-collapse: collapse; overflow-y: auto; max-height: 300px; display: block; }
-  #suggest-table th, #suggest-table td { padding: 5px 8px; text-align: left; border-bottom: 1px solid #eee; }
-  #suggest-table th { font-weight: 600; background: #f5f5f5; position: sticky; top: 0; }
-  #suggest-table input, #suggest-table select { width: 100%; border: 1px solid #ddd; border-radius: 3px; padding: 3px 6px; font-size: 12px; }
-  #suggest-status { font-size: 12px; color: #666; font-style: italic; }
   .spinner {
     display: inline-block; width: 14px; height: 14px;
     border: 2px solid #ccc; border-top-color: #1e88e5;
@@ -300,7 +273,6 @@
   <button class="btn" id="btn-select-mode">Sélectionner</button>
   <button class="btn" id="btn-sort-alpha">A→Z</button>
   <button class="btn" id="btn-scan-folders">Scanner</button>
-  <button class="btn" id="btn-suggest">Suggérer</button>
 </header>
 
 <div id="missing-alert" role="alert" style="display:none">
@@ -412,22 +384,6 @@
   </div>
 </div>
 
-<!-- Suggest overlay -->
-<div id="suggest-overlay">
-  <div id="suggest-dialog">
-    <h2>Domaines non couverts</h2>
-    <p id="suggest-status"><span class="spinner"></span> Analyse en cours…</p>
-    <table id="suggest-table" style="display:none">
-      <thead><tr><th>Domaine</th><th>Emails</th><th>Destination</th></tr></thead>
-      <tbody id="suggest-tbody"></tbody>
-    </table>
-    <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn" id="btn-suggest-cancel">Annuler</button>
-      <button class="btn btn-primary" id="btn-suggest-confirm" style="display:none">Confirmer</button>
-    </div>
-  </div>
-</div>
-
 <script>
 (function () {
   // ── State ──────────────────────────────────────────────────────────────────
@@ -458,10 +414,6 @@
       render();
       return;
     }
-    if (data.type === 'suggestions') {
-      renderSuggestions(data.items || []);
-      return;
-    }
     if (data.type === 'folder_suggestions') {
       renderFolderScan(data.paths || []);
       renderOrphanScan(data.orphans || []);
@@ -477,8 +429,6 @@
       // A scan in progress shows its failure where its result was expected.
       if (document.getElementById('scan-overlay').classList.contains('active')) {
         document.getElementById('scan-status').textContent = message;
-      } else if (document.getElementById('suggest-overlay').classList.contains('active')) {
-        document.getElementById('suggest-status').textContent = message;
       } else {
         alert(message);
       }
@@ -824,31 +774,6 @@
   document.getElementById('btn-save').addEventListener('click', function () { send('save'); });
   document.getElementById('btn-cancel').addEventListener('click', function () { send('cancel'); });
 
-  // ── Suggest flow ───────────────────────────────────────────────────────────
-  document.getElementById('btn-suggest').addEventListener('click', function () {
-    document.getElementById('suggest-status').innerHTML = '<span class="spinner"></span> Analyse en cours…';
-    document.getElementById('suggest-table').style.display = 'none';
-    document.getElementById('btn-suggest-confirm').style.display = 'none';
-    document.getElementById('suggest-overlay').classList.add('active');
-    send('scan_suggest');
-  });
-
-  document.getElementById('btn-suggest-cancel').addEventListener('click', function () {
-    document.getElementById('suggest-overlay').classList.remove('active');
-  });
-
-  document.getElementById('btn-suggest-confirm').addEventListener('click', function () {
-    var rows = document.querySelectorAll('#suggest-tbody tr');
-    var pairs = [];
-    rows.forEach(function (row) {
-      var domain = row.dataset.domain;
-      var path = row.querySelector('select').value.trim();
-      if (path) pairs.push({ domain: domain, path: path });
-    });
-    if (pairs.length > 0) send('suggest_confirm', pairs);
-    document.getElementById('suggest-overlay').classList.remove('active');
-  });
-
   function renderFolderScan(paths) {
     var list = document.getElementById('scan-list');
     var status = document.getElementById('scan-status');
@@ -856,7 +781,7 @@
     var confirm = document.getElementById('btn-scan-confirm');
     list.innerHTML = '';
     if (paths.length === 0) {
-      status.textContent = 'Aucun répertoire non couvert détecté.';
+      status.textContent = 'Aucun répertoire contenant des emails à ajouter.';
       list.style.display = 'none';
       selActions.style.display = 'none';
       confirm.style.display = 'none';
@@ -920,44 +845,6 @@
     var btn = document.getElementById('btn-scan-remove-orphans');
     btn.style.display = checked > 0 ? '' : 'none';
     btn.textContent = checked > 1 ? 'Supprimer (' + checked + ')' : 'Supprimer';
-  }
-
-  function renderSuggestions(items) {
-    var tbody = document.getElementById('suggest-tbody');
-    tbody.innerHTML = '';
-    if (items.length === 0) {
-      document.getElementById('suggest-status').textContent = 'Aucun nouveau domaine détecté.';
-      document.getElementById('suggest-table').style.display = 'none';
-      return;
-    }
-    document.getElementById('suggest-status').textContent = items.length + ' domaine(s) non couverts :';
-    items.forEach(function (item) {
-      var tr = document.createElement('tr');
-      tr.dataset.domain = item.domain;
-      var tdDomain = document.createElement('td');
-      tdDomain.textContent = item.domain;
-      var tdCount = document.createElement('td');
-      tdCount.textContent = item.count;
-      var select = document.createElement('select');
-      var ignore = document.createElement('option');
-      ignore.value = '';
-      ignore.textContent = '— ignorer —';
-      select.appendChild(ignore);
-      state.destinations.forEach(function (e) {
-        var opt = document.createElement('option');
-        opt.value = e.path;
-        opt.textContent = e.path;
-        select.appendChild(opt);
-      });
-      var tdSelect = document.createElement('td');
-      tdSelect.appendChild(select);
-      tr.appendChild(tdDomain);
-      tr.appendChild(tdCount);
-      tr.appendChild(tdSelect);
-      tbody.appendChild(tr);
-    });
-    document.getElementById('suggest-table').style.display = '';
-    document.getElementById('btn-suggest-confirm').style.display = '';
   }
 
   // ── Bootstrap: request initial state from Rust ─────────────────────────────

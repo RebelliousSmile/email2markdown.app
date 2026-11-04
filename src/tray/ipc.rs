@@ -23,14 +23,13 @@ struct DestGuiIpcMessage {
 pub(super) enum DestGuiIpcResult {
     StateChanged,
     Error(String),
-    Suggestions(Vec<(String, usize)>),
     FolderSuggestions {
         new_folders: Vec<String>,
         orphans: Vec<String>,
     },
-    /// The window asked for a notes scan (`scan_suggest` / `scan_folders`); it
-    /// walks `notes_dir`, so it runs in a worker thread through [`handle_scan`].
-    Scan(String),
+    /// The window asked for a notes scan (`scan_folders`); it walks `notes_dir`,
+    /// so it runs in a worker thread through [`handle_scan`].
+    Scan,
     /// The window asked for a folder picker; the dialog runs in the event loop.
     BrowseFolder,
     Saved,
@@ -80,8 +79,7 @@ pub(super) fn handle_dest_gui_ipc(
         "reorder" => handle_reorder(cfg, msg.data),
         "remove_entries" => handle_remove_entries(cfg, msg.data),
         "add_entries" => handle_add_entries(cfg, msg.data),
-        "scan_suggest" | "scan_folders" => DestGuiIpcResult::Scan(msg.action),
-        "suggest_confirm" => handle_suggest_confirm(cfg, msg.data),
+        "scan_folders" => DestGuiIpcResult::Scan,
         "browse_folder" => DestGuiIpcResult::BrowseFolder,
         _ => DestGuiIpcResult::Noop,
     }
@@ -295,29 +293,28 @@ fn handle_add_entries(
     DestGuiIpcResult::StateChanged
 }
 
-pub(super) fn handle_scan(
-    cfg: &crate::destinations::DestinationsConfig,
-    action: &str,
-) -> DestGuiIpcResult {
+pub(super) fn handle_scan(cfg: &crate::destinations::DestinationsConfig) -> DestGuiIpcResult {
     let scanned = Settings::load(&config::settings_path())
         .context("failed to load settings")
-        .and_then(|settings| {
-            scan_destinations(settings.notes_dir.as_deref().map(Path::new), cfg, action)
-        });
+        .and_then(|settings| scan_destinations(settings.notes_dir.as_deref().map(Path::new), cfg));
     match scanned {
         Ok(result) => result,
         Err(e) => DestGuiIpcResult::Error(format!("Analyse impossible : {:#}", e)),
     }
 }
 
-/// Scan `notes_dir` for the destinations window (`scan_suggest` or `scan_folders`).
+/// Scan `notes_dir` for the destinations window (`scan_folders`): folders holding
+/// emails but missing from the list, and listed destinations whose folder is gone.
+///
+/// Only the branches already used by the destination list are walked
+/// (`dest_cmd::destination_branches`): `notes_dir` may hold unrelated trees.
 ///
 /// Fails when the notes directory is not configured, does not exist or cannot be
-/// read: an empty list would be indistinguishable from "nothing to suggest".
+/// read, or when no destination defines a branch: an empty list would be
+/// indistinguishable from "nothing to suggest".
 fn scan_destinations(
     notes_dir: Option<&Path>,
     cfg: &crate::destinations::DestinationsConfig,
-    action: &str,
 ) -> anyhow::Result<DestGuiIpcResult> {
     let notes_dir = notes_dir
         .ok_or_else(|| anyhow::anyhow!("le dossier de notes n'est pas configur\u{00e9}"))?;
@@ -327,27 +324,25 @@ fn scan_destinations(
             notes_dir.display()
         );
     }
-    let scan = crate::dest_cmd::scan_notes(notes_dir).context("failed to scan notes directory")?;
-    Ok(if action == "scan_suggest" {
-        let candidates = crate::dest_cmd::uncovered_domains(scan.domains, cfg);
-        DestGuiIpcResult::Suggestions(candidates)
-    } else {
-        let existing: std::collections::HashSet<String> = cfg
-            .destinations
-            .iter()
-            .map(|e| e.path.to_lowercase())
-            .collect();
-        let new_folders = scan
-            .folders
-            .into_iter()
-            .filter(|f| f.chars().filter(|&c| c == '/').count() < 3)
-            .filter(|f| !existing.contains(&f.to_lowercase()))
-            .collect();
-        let orphans = crate::dest_cmd::orphaned_entries(notes_dir, cfg);
-        DestGuiIpcResult::FolderSuggestions {
-            new_folders,
-            orphans,
-        }
+    let branches = crate::dest_cmd::destination_branches(cfg);
+    if branches.is_empty() {
+        anyhow::bail!(
+            "aucune destination : ajoutez-en une pour indiquer les branches \u{00e0} analyser"
+        );
+    }
+    let new_folders = crate::dest_cmd::scan_folders(notes_dir, &branches)
+        .context("failed to scan notes directory")?
+        .into_iter()
+        .filter(|f| {
+            !cfg.destinations
+                .iter()
+                .any(|e| e.path.eq_ignore_ascii_case(f))
+        })
+        .collect();
+    let orphans = crate::dest_cmd::orphaned_entries(notes_dir, cfg);
+    Ok(DestGuiIpcResult::FolderSuggestions {
+        new_folders,
+        orphans,
     })
 }
 
@@ -414,41 +409,6 @@ fn relative_destination(notes_dir: &Path, picked: &Path) -> anyhow::Result<Strin
     crate::route::join_safe_segments(Path::new(""), &path)
         .context("le nom du dossier contient des caractères non pris en charge")?;
     Ok(path)
-}
-
-fn handle_suggest_confirm(
-    cfg: &mut crate::destinations::DestinationsConfig,
-    data: Option<Value>,
-) -> DestGuiIpcResult {
-    use crate::destinations::DestinationRule;
-
-    let Some(pairs_arr) = data.as_ref().and_then(|v| v.as_array()) else {
-        return DestGuiIpcResult::Noop;
-    };
-    for pair in pairs_arr {
-        let Some(domain) = field_str(pair, "domain") else {
-            continue;
-        };
-        let Some(dest_path) = field_str(pair, "path") else {
-            continue;
-        };
-        if dest_path.trim().is_empty() {
-            continue;
-        }
-        if crate::route::join_safe_segments(Path::new(""), dest_path).is_err() {
-            eprintln!(
-                "dest-gui: suggest_confirm: rejected invalid path {:?}",
-                dest_path
-            );
-            continue;
-        }
-        crate::destinations::upsert_entry(
-            cfg,
-            dest_path,
-            &[DestinationRule::Domain(domain.to_lowercase())],
-        );
-    }
-    DestGuiIpcResult::StateChanged
 }
 
 /// One row of the route review "apply" payload.
@@ -1306,13 +1266,13 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 mod tests {
     use super::{
         apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails,
-        frontmatter_list, move_account, move_outcome, relative_destination, reload_outcome, remove_env_passwords, save_account,
-        save_outcome, save_settings, scan_destinations, set_env_password,
-        validate_new_account_name, AccountData, DestGuiIpcResult, RouteApplyReport,
-        RouteDecisionRow, SettingsData,
+        frontmatter_list, move_account, move_outcome, relative_destination, reload_outcome,
+        remove_env_passwords, save_account, save_outcome, save_settings, scan_destinations,
+        set_env_password, validate_new_account_name, AccountData, DestGuiIpcResult,
+        RouteApplyReport, RouteDecisionRow, SettingsData,
     };
     use crate::config::{load_raw_accounts, RawAccount, Settings};
-    use crate::destinations::DestinationsConfig;
+    use crate::destinations::{DestinationEntry, DestinationsConfig};
     use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1355,7 +1315,7 @@ mod tests {
 
     #[test]
     fn test_scan_destinations_with_unconfigured_notes_dir() {
-        let result = scan_destinations(None, &DestinationsConfig::default(), "scan_folders");
+        let result = scan_destinations(None, &DestinationsConfig::default());
         assert!(result.is_err());
     }
 
@@ -1363,27 +1323,66 @@ mod tests {
     fn test_scan_destinations_with_missing_notes_dir() {
         let temp = TempDir::new().unwrap();
         let missing = temp.path().join("absent");
-        let result = scan_destinations(
-            Some(&missing),
-            &DestinationsConfig::default(),
-            "scan_folders",
-        );
+        let result = scan_destinations(Some(&missing), &DestinationsConfig::default());
         assert!(result.is_err());
+    }
+
+    /// Destination list with a single entry under `path`.
+    fn cfg_with(path: &str) -> DestinationsConfig {
+        DestinationsConfig {
+            destinations: vec![DestinationEntry {
+                path: path.into(),
+                ..Default::default()
+            }],
+        }
+    }
+
+    /// Write an email note (frontmatter with `from`) under `root/dir`.
+    fn write_email(root: &Path, dir: &str) {
+        let dir = root.join(dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("n.md"),
+            "---
+from: a@x.com
+---
+Body
+",
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_scan_destinations_with_empty_notes_dir() {
         let temp = TempDir::new().unwrap();
-        let result = scan_destinations(
-            Some(temp.path()),
-            &DestinationsConfig::default(),
-            "scan_folders",
-        );
+        fs::create_dir_all(temp.path().join("Perso/Banque")).unwrap();
+        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque"));
         assert!(matches!(
             result,
             Ok(DestGuiIpcResult::FolderSuggestions { new_folders, orphans })
                 if new_folders.is_empty() && orphans.is_empty()
         ));
+    }
+
+    #[test]
+    fn test_scan_destinations_without_destinations() {
+        let temp = TempDir::new().unwrap();
+        let result = scan_destinations(Some(temp.path()), &DestinationsConfig::default());
+        assert!(result.is_err());
+    }
+
+    /// Only folders holding emails, inside the destination branches, are proposed.
+    #[test]
+    fn test_scan_destinations_with_unrelated_top_level_dirs() {
+        let temp = TempDir::new().unwrap();
+        write_email(temp.path(), "Perso/Banque/2025/06");
+        write_email(temp.path(), "Perso/Sante/2025/06");
+        write_email(temp.path(), "Code/Projet");
+        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque"));
+        let Ok(DestGuiIpcResult::FolderSuggestions { new_folders, .. }) = result else {
+            panic!("expected folder suggestions");
+        };
+        assert_eq!(new_folders, vec!["Perso/Sante".to_string()]);
     }
 
     #[test]
@@ -1847,7 +1846,10 @@ hi
 
         let reply: serde_json::Value = serde_json::from_str(&outcome.reply.unwrap()).unwrap();
         assert_eq!(reply["ok"], false);
-        assert!(reply["message"].as_str().unwrap().starts_with("D\u{00e9}placement impossible"));
+        assert!(reply["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("D\u{00e9}placement impossible"));
     }
 
     #[test]

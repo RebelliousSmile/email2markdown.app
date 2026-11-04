@@ -681,6 +681,31 @@ pub enum MatchRule {
     Account(String),
 }
 
+impl MatchRule {
+    /// Build a rule from a window's `kind` (`domain`, `from`, `correspondent`,
+    /// `subject`, `account`) and raw `value`: trimmed, addresses validated and
+    /// normalized, domains lowercased.
+    pub fn parse(kind: &str, value: &str) -> Result<MatchRule> {
+        let value = value.trim();
+        if value.is_empty() {
+            anyhow::bail!("valeur vide pour une règle {kind}");
+        }
+        Ok(match kind {
+            "domain" => MatchRule::Domain(value.to_lowercase()),
+            "from" => MatchRule::From(parse_rule_address(value)?),
+            "correspondent" => MatchRule::Correspondent(parse_rule_address(value)?),
+            "subject" => MatchRule::Subject(value.to_string()),
+            "account" => MatchRule::Account(value.to_string()),
+            _ => anyhow::bail!("type de règle inconnu : {kind}"),
+        })
+    }
+}
+
+/// [`normalize_address`] with a French error, for messages shown in the windows.
+fn parse_rule_address(value: &str) -> Result<String> {
+    normalize_address(value).map_err(|_| anyhow::anyhow!("adresse invalide : {value}"))
+}
+
 /// A single entry from `destinations.txt`.
 #[derive(Debug, Clone)]
 pub struct Destination {
@@ -1039,6 +1064,20 @@ pub fn normalize_address(value: &str) -> Result<String> {
         local.to_lowercase(),
         domain.to_lowercase()
     ))
+}
+
+/// Valid addresses among `addresses`, normalized by [`normalize_address`],
+/// deduplicated in arrival order; invalid entries are skipped.
+pub fn unique_addresses<S: AsRef<str>>(addresses: impl IntoIterator<Item = S>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for address in addresses {
+        if let Ok(address) = normalize_address(address.as_ref()) {
+            if !out.contains(&address) {
+                out.push(address);
+            }
+        }
+    }
+    out
 }
 
 /// Exact, case-insensitive correspondent match across all available address headers.

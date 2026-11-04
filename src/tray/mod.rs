@@ -645,18 +645,21 @@ pub fn run_contextual(target_path: PathBuf) -> Result<()> {
                 if current.window.id() != window_id {
                     return;
                 }
-                let rule = match attr_kind.as_str() {
-                    "domain" => Some(crate::route::MatchRule::Domain(attr_value.clone())),
-                    "from" => Some(crate::route::MatchRule::From(attr_value.clone())),
-                    _ => None,
-                };
-                let Some(rule) = rule else {
+                // The contextual search is address-based: only address rules.
+                if !matches!(attr_kind.as_str(), "domain" | "from" | "correspondent") {
                     contextual_eval_error(
                         &current.webview,
                         "rule",
                         &format!("type de règle non pris en charge : {attr_kind}"),
                     );
                     return;
+                }
+                let rule = match crate::route::MatchRule::parse(&attr_kind, &attr_value) {
+                    Ok(rule) => rule,
+                    Err(e) => {
+                        contextual_eval_error(&current.webview, "rule", &format!("{e:#}"));
+                        return;
+                    }
                 };
                 let upserted = crate::route::destinations_path().and_then(|dest_file| {
                     crate::route::upsert_rule(&dest_file, &current.launch.relative_path, rule)

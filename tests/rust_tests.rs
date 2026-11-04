@@ -1191,11 +1191,69 @@ mod route_tests {
         ai_route, apply_decision, delete_email, destinations_path_from, ensure_year_month,
         join_safe_segments, load_destinations_from, move_email, normalize_address,
         parse_destinations, repair_legacy_attachments, resolve_contextual_destination, route_email,
-        upsert_rule, Destination, EmailMeta, MatchRule,
+        unique_addresses, upsert_rule, Destination, EmailMeta, MatchRule,
     };
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_match_rule_parse_valid() {
+        assert_eq!(
+            MatchRule::parse("domain", " Example.COM ").unwrap(),
+            MatchRule::Domain("example.com".into())
+        );
+        assert_eq!(
+            MatchRule::parse("correspondent", "Bob@X.fr").unwrap(),
+            MatchRule::Correspondent("bob@x.fr".into())
+        );
+        assert_eq!(
+            MatchRule::parse("subject", "  Facture Mars ").unwrap(),
+            MatchRule::Subject("Facture Mars".into())
+        );
+    }
+
+    #[test]
+    fn test_match_rule_parse_invalid() {
+        assert!(MatchRule::parse("subject", "   ").is_err());
+        assert!(MatchRule::parse("from", "not-an-address").is_err());
+        assert!(MatchRule::parse("correspondent", "a@x.fr, b@x.fr").is_err());
+        assert!(MatchRule::parse("bogus", "x").is_err());
+    }
+
+    #[test]
+    fn test_match_rule_parse_invalid_french_messages() {
+        let message =
+            |kind: &str, value: &str| MatchRule::parse(kind, value).unwrap_err().to_string();
+        assert_eq!(
+            message("subject", "  "),
+            "valeur vide pour une règle subject"
+        );
+        assert_eq!(message("bogus", "x"), "type de règle inconnu : bogus");
+        assert_eq!(message("from", "nope"), "adresse invalide : nope");
+    }
+
+    #[test]
+    fn test_unique_addresses_with_duplicates_and_case() {
+        let addresses = unique_addresses(["Bob@X.fr", "alice@y.fr", "bob@x.fr", " ALICE@Y.FR "]);
+        assert_eq!(addresses, vec!["bob@x.fr", "alice@y.fr"]);
+    }
+
+    #[test]
+    fn test_unique_addresses_invalid() {
+        let addresses = unique_addresses(vec![
+            "Carol <c@x.fr>".to_string(),
+            "a@x.fr, b@x.fr".to_string(),
+            String::new(),
+            "d@x.fr".to_string(),
+        ]);
+        assert_eq!(addresses, vec!["d@x.fr"]);
+    }
+
+    #[test]
+    fn test_unique_addresses_empty() {
+        assert!(unique_addresses(Vec::<&str>::new()).is_empty());
+    }
 
     #[test]
     fn test_destinations_path_from_invalid_settings_names_file() {
@@ -4248,7 +4306,8 @@ mod dest_cmd_tests {
 
 mod suggest_tests {
     use email_to_markdown::dest_cmd::{
-        extract_domain, scan_domains, strip_trailing_year_month, uncovered_domains,
+        destination_branches, extract_domain, scan_domains, scan_folders,
+        strip_trailing_year_month, uncovered_domains,
     };
     use email_to_markdown::destinations::{DestinationEntry, DestinationRule, DestinationsConfig};
     use std::fs;
@@ -4379,6 +4438,90 @@ mod suggest_tests {
         );
         // No suffix → unchanged.
         assert_eq!(strip_trailing_year_month("Perso/Banque"), "Perso/Banque");
+    }
+
+    /// A folder holding an email is proposed without its `YYYY/MM` suffix.
+    #[test]
+    fn test_scan_folders_with_deep_tree() {
+        let temp = TempDir::new().unwrap();
+        write_md(
+            &temp.path().join("Pro/Banque/UBS/2025/06"),
+            "a.md",
+            "a@ubs.ch",
+        );
+
+        let folders = scan_folders(temp.path(), &["Pro".to_string()]).unwrap();
+        assert_eq!(folders, vec!["Pro/Banque/UBS"]);
+    }
+
+    /// A bucket below `YYYY/MM` folds into its destination.
+    #[test]
+    fn test_scan_folders_with_bucket() {
+        let temp = TempDir::new().unwrap();
+        write_md(
+            &temp.path().join("Perso/Voyage/Japon/2025/06/billets"),
+            "a.md",
+            "a@jal.co.jp",
+        );
+
+        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        assert_eq!(folders, vec!["Perso/Voyage/Japon"]);
+    }
+
+    /// A folder holding only non-email notes is not proposed.
+    #[test]
+    fn test_scan_folders_without_email() {
+        let temp = TempDir::new().unwrap();
+        let notes = temp.path().join("Perso/Recettes");
+        fs::create_dir_all(&notes).unwrap();
+        fs::write(
+            notes.join("tarte.md"),
+            "# Tarte
+",
+        )
+        .unwrap();
+        write_md(&temp.path().join("Perso/Banque"), "a.md", "a@bnp.fr");
+
+        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        assert_eq!(folders, vec!["Perso/Banque"]);
+    }
+
+    /// Folder scan skips `.` and `_` directories inside a branch.
+    #[test]
+    fn test_scan_folders_excludes_dot_and_underscore_dirs() {
+        let temp = TempDir::new().unwrap();
+        write_md(&temp.path().join("Perso/.obsidian"), "a.md", "a@x.com");
+        write_md(&temp.path().join("Perso/_work"), "a.md", "a@x.com");
+        write_md(&temp.path().join("Perso/Banque"), "a.md", "a@x.com");
+
+        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        assert_eq!(folders, vec!["Perso/Banque"]);
+    }
+
+    /// Folder scan enters only the listed branches, case-insensitively.
+    #[test]
+    fn test_scan_folders_with_branches() {
+        let temp = TempDir::new().unwrap();
+        write_md(&temp.path().join("Perso/Banque"), "a.md", "a@x.com");
+        write_md(&temp.path().join("Code/Projet"), "a.md", "a@x.com");
+
+        let folders = scan_folders(temp.path(), &["perso".to_string()]).unwrap();
+        assert_eq!(folders, vec!["Perso/Banque"]);
+    }
+
+    /// Branches are the first path segments, deduplicated case-insensitively.
+    #[test]
+    fn test_destination_branches_with_duplicates() {
+        let cfg = DestinationsConfig {
+            destinations: ["Perso/Bank", "perso/Health", "Pro", "Pro/Dev"]
+                .into_iter()
+                .map(|p| DestinationEntry {
+                    path: p.into(),
+                    ..Default::default()
+                })
+                .collect(),
+        };
+        assert_eq!(destination_branches(&cfg), vec!["Perso", "Pro"]);
     }
 
     /// An empty / file-less directory yields no groups and no crash.
