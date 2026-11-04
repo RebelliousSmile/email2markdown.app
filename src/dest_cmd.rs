@@ -491,26 +491,40 @@ pub fn resolve_scan_root(settings: &config::Settings, cfg: &DestinationsConfig) 
     Ok(notes_dir.join(default_sub))
 }
 
-/// Result of a single notes-directory walk.
-pub struct ScanResult {
-    /// Sender domain → email count, extracted from `.md` frontmatter.
-    pub domains: HashMap<String, usize>,
-    /// Subdirectory paths relative to the scan root (forward slashes).
-    pub folders: Vec<String>,
+/// Walk depth of the notes scans: notes live under `<Branch>/<Cat>/<Sub>/<YYYY>/<MM>/<bucket?>`.
+const NOTES_SCAN_DEPTH: usize = 6;
+
+/// Top-level directories used by the destination list (first path segment of each
+/// entry), deduplicated case-insensitively, in list order.
+///
+/// Bounds the GUI scans: `notes_dir` may hold unrelated trees (code, games, backups).
+pub fn destination_branches(cfg: &DestinationsConfig) -> Vec<String> {
+    let mut branches: Vec<String> = Vec::new();
+    for entry in &cfg.destinations {
+        let Some(first) = entry.path.split(['/', '\\']).find(|s| !s.trim().is_empty()) else {
+            continue;
+        };
+        let first = first.trim();
+        if !branches.iter().any(|b| b.eq_ignore_ascii_case(first)) {
+            branches.push(first.to_string());
+        }
+    }
+    branches
 }
 
-/// Walk `root` once, collecting sender domains from `.md` files and all
-/// subdirectory paths up to `max_depth` levels deep.
+/// Sender domain → email count, from the `.md` notes under `root`.
 ///
 /// Excludes entries starting with `.` or `_`, never follows symlinks
 /// (rule 02-rust-filesystem-safety).
-pub fn scan_notes(root: &Path) -> Result<ScanResult> {
+pub fn scan_domains(root: &Path) -> Result<HashMap<String, usize>> {
     let mut files: Vec<PathBuf> = Vec::new();
-    let mut folders: Vec<String> = Vec::new();
     if root.exists() {
-        walk_notes(root, root, 0, 6, &mut files, &mut folders)?;
+        let walk = Walk {
+            max_depth: NOTES_SCAN_DEPTH,
+            branches: None,
+        };
+        walk.run(root, 0, &mut files)?;
     }
-    folders.sort();
 
     let mut domains: HashMap<String, usize> = HashMap::new();
     for file in files {
@@ -523,53 +537,114 @@ pub fn scan_notes(root: &Path) -> Result<ScanResult> {
             }
         }
     }
-    Ok(ScanResult { domains, folders })
+    Ok(domains)
 }
 
-/// Thin wrapper kept for callers that only need domain counts.
-pub fn scan_domains(root: &Path) -> Result<HashMap<String, usize>> {
-    Ok(scan_notes(root)?.domains)
+/// Destination folders under `root` holding at least one email note, sorted
+/// (relative, forward slashes), restricted to the top-level `branches`
+/// (case-insensitive).
+///
+/// A note's destination is its directory minus a trailing `<YYYY>/<MM>` or
+/// `<YYYY>/<MM>/<bucket>`. A note is an email when it carries a `from` header.
+/// Notes are read only until one email is found per destination.
+/// Same exclusion and symlink rules as [`scan_domains`].
+pub fn scan_folders(root: &Path, branches: &[String]) -> Result<Vec<String>> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    if root.exists() {
+        let walk = Walk {
+            max_depth: NOTES_SCAN_DEPTH,
+            branches: Some(branches),
+        };
+        walk.run(root, 0, &mut files)?;
+    }
+
+    let mut by_destination: std::collections::BTreeMap<String, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
+    for file in files {
+        let Some(rel_dir) = file.parent().and_then(|p| p.strip_prefix(root).ok()) else {
+            continue;
+        };
+        let destination = destination_of(&rel_dir.to_string_lossy().replace('\\', "/"));
+        if !destination.is_empty() {
+            by_destination.entry(destination).or_default().push(file);
+        }
+    }
+    Ok(by_destination
+        .into_iter()
+        .filter(|(_, notes)| notes.iter().any(|note| is_email_note(note)))
+        .map(|(destination, _)| destination)
+        .collect())
 }
 
-/// Recursively collect `.md` files and subdirectory paths, honoring exclusion
-/// and symlink rules.
-fn walk_notes(
-    base: &Path,
-    dir: &Path,
-    depth: usize,
+/// Destination of a note directory: `rel_dir` minus a trailing `<YYYY>/<MM>`
+/// or `<YYYY>/<MM>/<bucket>` (forward slashes).
+fn destination_of(rel_dir: &str) -> String {
+    let segs: Vec<&str> = rel_dir.split('/').filter(|s| !s.is_empty()).collect();
+    let keep = if route::ends_with_year_month(&segs.join("/")) {
+        segs.len() - 2
+    } else if segs.len() >= 3 && route::ends_with_year_month(&segs[..segs.len() - 1].join("/")) {
+        segs.len() - 3
+    } else {
+        segs.len()
+    };
+    segs[..keep].join("/")
+}
+
+/// Whether the note at `path` is an exported email (has a `from` header).
+fn is_email_note(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|content| parse_from(&content).is_some())
+}
+
+/// Fixed parameters of one notes-directory walk.
+struct Walk<'a> {
+    /// Deepest directory level read (root = 0).
     max_depth: usize,
-    files: &mut Vec<PathBuf>,
-    folders: &mut Vec<String>,
-) -> Result<()> {
-    if depth > max_depth {
-        return Ok(());
-    }
-    let entries =
-        std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?;
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        // Skip internal/technical dirs and dotfiles.
-        if name.starts_with('.') || name.starts_with('_') {
-            continue;
+    /// Allowed top-level directory names; `None` walks everything.
+    branches: Option<&'a [String]>,
+}
+
+impl Walk<'_> {
+    /// Recursively collect the `.md` files under `dir`, honoring exclusion,
+    /// branch and symlink rules.
+    fn run(&self, dir: &Path, depth: usize, files: &mut Vec<PathBuf>) -> Result<()> {
+        if depth > self.max_depth {
+            return Ok(());
         }
-        let file_type = entry.file_type()?;
-        // Never follow symlinks (check before is_dir/is_file).
-        if file_type.is_symlink() {
-            continue;
-        }
-        let path = entry.path();
-        if file_type.is_dir() {
-            if let Ok(rel) = path.strip_prefix(base) {
-                folders.push(rel.to_string_lossy().replace('\\', "/"));
+        let entries =
+            std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?;
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // Skip internal/technical dirs and dotfiles.
+            if name.starts_with('.') || name.starts_with('_') {
+                continue;
             }
-            walk_notes(base, &path, depth + 1, max_depth, files, folders)?;
-        } else if file_type.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
-            files.push(path);
+            let file_type = entry.file_type()?;
+            // Never follow symlinks (check before is_dir/is_file).
+            if file_type.is_symlink() {
+                continue;
+            }
+            // At the root, only the allowed branches are entered.
+            if depth == 0 {
+                if let Some(branches) = self.branches {
+                    let allowed = file_type.is_dir()
+                        && branches.iter().any(|b| b.eq_ignore_ascii_case(&name));
+                    if !allowed {
+                        continue;
+                    }
+                }
+            }
+            let path = entry.path();
+            if file_type.is_dir() {
+                self.run(&path, depth + 1, files)?;
+            } else if file_type.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md")
+            {
+                files.push(path);
+            }
         }
+        Ok(())
     }
-    Ok(())
 }
 
 /// Sender of a note, from its frontmatter or its ```email block.

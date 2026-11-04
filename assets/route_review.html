@@ -286,6 +286,13 @@
     cursor: pointer;
     max-width: 260px;
   }
+  .rule-form .rule-subject-input {
+    font-size: 12px;
+    padding: 2px 4px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    width: 200px;
+  }
   .rule-form .rule-dest-label {
     font-size: 11px;
     color: #555;
@@ -352,8 +359,9 @@
 <script>
 (function () {
   // ── data ──────────────────────────────────────────────────────────────────
-  // __DECISIONS_DATA__ is an array of {file, subject, sender, sender_email,
-  // sender_domain, date, dest_path, is_default}.
+  // __DECISIONS_DATA__ is an array of {file, subject, subject_from_header, sender,
+  // sender_email, sender_domain, correspondents, date, dest_path, is_default}.
+  // subject_from_header is false when subject falls back to the file name.
   var rawDecisions = Array.isArray(window.__DECISIONS_DATA__) ? window.__DECISIONS_DATA__ : [];
   var knownPaths   = Array.isArray(window.__KNOWN_PATHS__)    ? window.__KNOWN_PATHS__    : [];
 
@@ -492,6 +500,8 @@
       attachments:   Array.isArray(d.attachments) ? d.attachments : [],
       sender_email:  d.sender_email  || '',
       sender_domain: d.sender_domain || '',
+      correspondents: Array.isArray(d.correspondents) ? d.correspondents : [],
+      subject_from_header: d.subject_from_header === true,
       date:          d.date          || '',
       dest_path:     stripYearMonth(full),
       full_path:     full,                    // exact router proposal, sent back if untouched
@@ -690,16 +700,24 @@
 
   // ── mini-form "créer une règle" ────────────────────────────────────────────
   function mountRuleForm(td, i, row) {
-    var hasDomain = row.sender_domain.length > 0;
-    var hasEmail  = row.sender_email.length  > 0;
-    var canCreate = hasDomain || hasEmail;
+    // One option per rule the email can feed: kind + value (subject value is typed).
+    var choices = [];
+    if (row.sender_domain) {
+      choices.push({ kind: 'domain', value: row.sender_domain, label: 'domaine : ' + row.sender_domain });
+    }
+    if (row.sender_email) {
+      choices.push({ kind: 'from', value: row.sender_email, label: 'expéditeur : ' + row.sender_email });
+    }
+    row.correspondents.forEach(function (addr) {
+      choices.push({ kind: 'correspondent', value: addr, label: 'correspondant : ' + addr });
+    });
+    choices.push({ kind: 'subject', value: '', label: 'objet contient…' });
 
     // Button
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn-create-rule';
     btn.textContent = '+ règle';
-    btn.disabled = !canCreate;
     td.appendChild(btn);
 
     // Mini-form container
@@ -710,18 +728,25 @@
     var attrSel = document.createElement('select');
     attrSel.className = 'rule-attr-select';
 
-    if (hasDomain) {
-      var optDomain = document.createElement('option');
-      optDomain.value = 'domain';
-      optDomain.textContent = 'domaine : ' + row.sender_domain;
-      attrSel.appendChild(optDomain);
-    }
-    if (hasEmail) {
-      var optFrom = document.createElement('option');
-      optFrom.value = 'from';
-      optFrom.textContent = 'adresse : ' + row.sender_email;
-      attrSel.appendChild(optFrom);
-    }
+    choices.forEach(function (c, k) {
+      var opt = document.createElement('option');
+      opt.value = String(k);
+      opt.textContent = c.label;
+      attrSel.appendChild(opt);
+    });
+
+    // Subject keyword, prefilled with the subject: shorten it to the stable part.
+    var subjectInput = document.createElement('input');
+    subjectInput.type = 'text';
+    subjectInput.className = 'rule-subject-input';
+    subjectInput.value = row.subject_from_header ? row.subject : '';
+    subjectInput.placeholder = "mot-clé de l'objet";
+    subjectInput.style.display = 'none';
+    attrSel.addEventListener('change', function () {
+      var isSubject = choices[parseInt(attrSel.value, 10)].kind === 'subject';
+      subjectInput.style.display = isSubject ? '' : 'none';
+      if (isSubject) { subjectInput.focus(); subjectInput.select(); }
+    });
 
     // Destination label (shows current dest_path at submit time — reads live from rows[i])
     var destLabel = document.createElement('span');
@@ -749,6 +774,7 @@
     cancelBtn.textContent = '×';
 
     form.appendChild(attrSel);
+    form.appendChild(subjectInput);
     form.appendChild(destLabel);
     form.appendChild(submitBtn);
     form.appendChild(cancelBtn);
@@ -768,8 +794,9 @@
     });
 
     submitBtn.addEventListener('click', function () {
-      var attrKind  = attrSel.value;
-      var attrValue = attrKind === 'domain' ? rows[i].sender_domain : rows[i].sender_email;
+      var choice    = choices[parseInt(attrSel.value, 10)];
+      var attrKind  = choice.kind;
+      var attrValue = attrKind === 'subject' ? subjectInput.value.trim() : choice.value;
       var destPath  = rows[i].dest_path.trim();
 
       if (!destPath) {
@@ -825,6 +852,30 @@
     }
   }
 
+  // Human label of a rule, used in the conflict modal.
+  function ruleLabel(kind, value) {
+    var prefix = {
+      domain: 'Le domaine ',
+      from: "L'expéditeur ",
+      correspondent: 'Le correspondant ',
+      subject: "L'objet contenant "
+    }[kind] || '';
+    return prefix + value;
+  }
+
+  // True when `row` matches the rule, mirroring route::rule_matches.
+  function rowMatchesRule(row, kind, value) {
+    var v = value.toLowerCase();
+    if (kind === 'domain') {
+      var d = row.sender_domain.toLowerCase();
+      return d === v || d.slice(-(v.length + 1)) === '.' + v;
+    }
+    if (kind === 'from') { return row.sender_email.toLowerCase() === v; }
+    if (kind === 'correspondent') { return row.correspondents.indexOf(v) !== -1; }
+    if (kind === 'subject') { return row.subject.toLowerCase().indexOf(v) !== -1; }
+    return false;
+  }
+
   // Modal: move the rule to the new destination, keep both, or cancel.
   function askRuleConflict(attrKind, attrValue, destPath, others, done) {
     var overlay = document.createElement('div');
@@ -833,7 +884,7 @@
     var box = document.createElement('div');
     box.style.cssText = 'background:Canvas;color:CanvasText;border:1px solid GrayText;' +
       'border-radius:8px;padding:16px 20px;max-width:520px;font:inherit';
-    var label = (attrKind === 'domain' ? 'Le domaine ' : "L'adresse ") + attrValue;
+    var label = ruleLabel(attrKind, attrValue);
     box.innerHTML =
       '<p style="margin:0 0 8px"><strong>⚠ Règle déjà utilisée</strong></p>' +
       '<p style="margin:0 0 8px">' + esc(label) + ' est déjà associé à : ' +
@@ -1084,13 +1135,7 @@
       var rule = pendingRule;
       pendingRule = null;
       rows.forEach(function (row) {
-        var matches = false;
-        if (rule.attr_kind === 'domain') {
-          matches = row.sender_domain.toLowerCase() === rule.attr_value.toLowerCase();
-        } else if (rule.attr_kind === 'from') {
-          matches = row.sender_email.toLowerCase() === rule.attr_value.toLowerCase();
-        }
-        if (matches) {
+        if (rowMatchesRule(row, rule.attr_kind, rule.attr_value)) {
           if (row.source === 'manual') {
             ruleOverrideCount += 1;
           }

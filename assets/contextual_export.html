@@ -193,8 +193,9 @@
     const btn = document.createElement('button'); btn.type='button'; btn.className='btn-create-rule'; btn.textContent='+ règle';
     const form = document.createElement('div'); form.className='rule-form';
     const sel = document.createElement('select');
-    const optFrom = document.createElement('option'); optFrom.value='from'; optFrom.textContent='adresse : '+row.sender_email; sel.appendChild(optFrom);
+    const optFrom = document.createElement('option'); optFrom.value='from'; optFrom.textContent='expéditeur : '+row.sender_email; sel.appendChild(optFrom);
     if (domain) { const optDomain = document.createElement('option'); optDomain.value='domain'; optDomain.textContent='domaine : '+domain; sel.appendChild(optDomain); }
+    (row.correspondents || []).forEach(addr => { const opt = document.createElement('option'); opt.value='correspondent'; opt.dataset.value=addr; opt.textContent='correspondant : '+addr; sel.appendChild(opt); });
     const submitBtn = document.createElement('button'); submitBtn.type='button'; submitBtn.className='btn-rule-submit'; submitBtn.textContent='Créer';
     const cancelBtn = document.createElement('button'); cancelBtn.type='button'; cancelBtn.className='btn-rule-cancel'; cancelBtn.textContent='×';
     form.append(sel, submitBtn, cancelBtn);
@@ -203,9 +204,9 @@
     cancelBtn.addEventListener('click', () => form.classList.remove('open'));
     submitBtn.addEventListener('click', () => {
       const kind = sel.value;
-      const value = kind === 'domain' ? domain : row.sender_email;
+      const value = kind === 'domain' ? domain : kind === 'correspondent' ? sel.selectedOptions[0].dataset.value : row.sender_email;
       if (!value) return;
-      const label = kind === 'domain' ? `le domaine ${value}` : `l'expéditeur ${value}`;
+      const label = kind === 'domain' ? `le domaine ${value}` : kind === 'correspondent' ? `le correspondant ${value}` : `l'expéditeur ${value}`;
       if (!confirm(`Ajouter une règle de tri sur ${label} pour ce dossier ?`)) return;
       form.classList.remove('open');
       ipc({action:'create_rule', attr_kind:kind, attr_value:value});

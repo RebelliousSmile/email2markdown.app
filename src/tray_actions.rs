@@ -48,6 +48,8 @@ pub struct ContextualCandidateRow {
     pub date: Option<chrono::DateTime<chrono::FixedOffset>>,
     pub correspondent: String,
     pub sender_email: String,
+    /// Valid From/To/Cc addresses, lowercased, deduplicated: `correspondent` rule values.
+    pub correspondents: Vec<String>,
     pub subject: String,
     pub folder: String,
     pub already_present: bool,
@@ -253,6 +255,13 @@ pub fn run_contextual_search(
                 .or_else(|| candidate.to.first())
                 .cloned()
                 .unwrap_or_default();
+            let correspondents = crate::route::unique_addresses(
+                candidate
+                    .from
+                    .iter()
+                    .chain(&candidate.to)
+                    .chain(&candidate.cc),
+            );
             let effective_target = crate::contextual_export::candidate_target(
                 &launch.target,
                 candidate,
@@ -263,6 +272,7 @@ pub fn run_contextual_search(
                 date: candidate.date,
                 correspondent,
                 sender_email,
+                correspondents,
                 subject: candidate.subject.clone(),
                 folder: candidate
                     .locations
@@ -849,6 +859,7 @@ fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
         |name: &str| crate::email_block::note_header_field(content, name).unwrap_or_default();
     let from_raw = field("from");
     let to_raw = field("to");
+    let cc_raw = field("cc");
     let subject = field("subject");
     let date_raw = field("date");
 
@@ -866,7 +877,7 @@ fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
     EmailMeta {
         from: sender_addr,
         to: crate::utils::extract_emails(Some(&to_raw)),
-        cc: Vec::new(),
+        cc: crate::utils::extract_emails(Some(&cc_raw)),
         bcc: Vec::new(),
         domain,
         subject,
@@ -1338,13 +1349,41 @@ pub fn get_account_names() -> Result<Vec<String>> {
 mod tests {
     use super::{
         clean_confirmation_text, contextual_summary_message, is_excluded_staging_dir,
-        set_export_dir_in, set_notes_dir_in,
+        meta_from_frontmatter, set_export_dir_in, set_notes_dir_in,
     };
     use crate::config::Settings;
+    use crate::route::{route_email, Destination, MatchRule};
     use std::fs;
     use tempfile::TempDir;
 
     const INVALID_YAML: &str = "export_base_dir: [unclosed\naccounts: : :\n";
+
+    const CC_NOTE: &str = "---\nfrom: Alice <alice@a.fr>\nto: bob@b.fr\ncc: Carol <carol@x.fr>\nsubject: Réunion\ndate: 2026-11-04T10:00:00+01:00\n---\n\nCorps\n";
+
+    #[test]
+    fn test_meta_from_frontmatter_with_cc() {
+        let meta = meta_from_frontmatter(CC_NOTE, "Perso");
+        assert_eq!(meta.cc, vec!["carol@x.fr".to_string()]);
+    }
+
+    #[test]
+    fn test_meta_from_frontmatter_cc_routes_by_correspondent_rule() {
+        let meta = meta_from_frontmatter(CC_NOTE, "Perso");
+        let dests = vec![
+            Destination {
+                path: "Perso/Admin/Divers".into(),
+                rules: vec![MatchRule::Domain("other.fr".into())],
+                is_default: true,
+            },
+            Destination {
+                path: "Perso/Equipe/Carol".into(),
+                rules: vec![MatchRule::Correspondent("carol@x.fr".into())],
+                is_default: false,
+            },
+        ];
+        let decision = route_email(&meta, &dests, false);
+        assert_eq!(decision.rel_path, "Perso/Equipe/Carol");
+    }
 
     #[test]
     fn test_clean_confirmation_text_says_irreversible() {

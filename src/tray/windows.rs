@@ -417,20 +417,19 @@ pub(super) fn build_dest_gui_window(
                     drop(cfg_guard);
                     let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
                 }
-                super::ipc::DestGuiIpcResult::Scan(action) => {
+                super::ipc::DestGuiIpcResult::Scan => {
                     // Walking notes_dir can take seconds: keep the event loop free.
                     let cfg = cfg_guard.clone();
                     drop(cfg_guard);
                     let proxy = proxy_ipc.clone();
                     std::thread::spawn(move || {
-                        let result = super::ipc::handle_scan(&cfg, &action);
+                        let result = super::ipc::handle_scan(&cfg);
                         if let Some(json) = dest_reply_json(&result) {
                             let _ = proxy.send_event(AppCommand::PushDestState { window_id, json });
                         }
                     });
                 }
                 reply @ (super::ipc::DestGuiIpcResult::Error(_)
-                | super::ipc::DestGuiIpcResult::Suggestions(_)
                 | super::ipc::DestGuiIpcResult::FolderSuggestions { .. }) => {
                     drop(cfg_guard);
                     if let Some(json) = dest_reply_json(&reply) {
@@ -479,6 +478,16 @@ struct RuleCreatePayload {
     /// `true` = remove the same rule from the other destinations (user chose "move").
     #[serde(default)]
     move_rule: bool,
+}
+
+/// Valid addresses of `From`, `To` and `Cc`, lowercased, deduplicated, sender first:
+/// the values a `correspondent` rule can be created on.
+fn correspondent_addresses(from_raw: &str, to: Option<&str>, cc: Option<&str>) -> Vec<String> {
+    crate::route::unique_addresses(
+        [Some(from_raw), to, cc]
+            .into_iter()
+            .flat_map(crate::utils::extract_emails),
+    )
 }
 
 fn extract_addr_and_domain(from_raw: &str) -> (String, String) {
@@ -536,12 +545,6 @@ fn dest_reply_json(result: &super::ipc::DestGuiIpcResult) -> Option<String> {
         DestGuiIpcResult::Error(message) => {
             serde_json::json!({"type": "error", "message": message})
         }
-        DestGuiIpcResult::Suggestions(items) => serde_json::json!({
-            "type": "suggestions",
-            "items": items.iter()
-                .map(|(d, c)| serde_json::json!({"domain": d, "count": c}))
-                .collect::<Vec<_>>()
-        }),
         DestGuiIpcResult::FolderSuggestions {
             new_folders,
             orphans,
@@ -563,8 +566,11 @@ pub(super) fn route_rows(decisions: &RouteDecisions) -> Vec<serde_json::Value> {
         .iter()
         .map(|(staging_path, decision)| {
             let content = std::fs::read_to_string(staging_path).unwrap_or_default();
-            let [subject, from_raw, to, date] =
-                crate::email_block::note_header_fields(&content, ["subject", "from", "to", "date"]);
+            let [subject, from_raw, to, cc, date] = crate::email_block::note_header_fields(
+                &content,
+                ["subject", "from", "to", "cc", "date"],
+            );
+            let subject_from_header = subject.is_some();
             let subject = subject.unwrap_or_else(|| {
                 staging_path
                     .file_stem()
@@ -574,12 +580,15 @@ pub(super) fn route_rows(decisions: &RouteDecisions) -> Vec<serde_json::Value> {
             let from_raw = from_raw.unwrap_or_default();
             let attachments = super::ipc::frontmatter_list(&content, "attachments");
             let (sender_email, sender_domain) = extract_addr_and_domain(&from_raw);
+            let correspondents = correspondent_addresses(&from_raw, to.as_deref(), cc.as_deref());
             serde_json::json!({
                 "matched_rule":  decision.matched_rule.clone().unwrap_or_default(),
                 "file":          staging_path.to_string_lossy(),
                 "subject":       subject,
+                "subject_from_header": subject_from_header,
                 "sender":        from_raw,
                 "recipient":     to.unwrap_or_default(),
+                "correspondents": correspondents,
                 "attachments":   attachments,
                 "date":          date.unwrap_or_default(),
                 "dest_path":     decision.rel_path,
@@ -646,7 +655,11 @@ pub(super) fn build_route_window(
             let key = match rule {
                 crate::route::MatchRule::Domain(v) => format!("domain:{}", v.to_lowercase()),
                 crate::route::MatchRule::From(v) => format!("from:{}", v.to_lowercase()),
-                _ => continue,
+                crate::route::MatchRule::Correspondent(v) => {
+                    format!("correspondent:{}", v.to_lowercase())
+                }
+                crate::route::MatchRule::Subject(v) => format!("subject:{}", v.to_lowercase()),
+                crate::route::MatchRule::Account(_) => continue,
             };
             let owners = rule_owners.entry(key).or_default();
             if !owners.contains(&dest.path) {
@@ -1033,7 +1046,7 @@ Corps
             subject: "Devis".to_string(),
             from: "bob@example.net".to_string(),
             to: vec!["a@x.fr".to_string(), "b@x.fr".to_string()],
-            cc: Vec::new(),
+            cc: vec!["Carol <c@x.fr>".to_string(), "a@x.fr".to_string()],
             date: "2026-07-02T10:18:19+00:00".to_string(),
         };
         std::fs::write(
@@ -1077,8 +1090,10 @@ tags: []
                     "matched_rule": "domain:example.com",
                     "file": legacy.to_string_lossy(),
                     "subject": "Facture",
+                    "subject_from_header": true,
                     "sender": "Alice <alice@Example.com>",
                     "recipient": "moi@example.org",
+                    "correspondents": ["alice@example.com", "moi@example.org"],
                     "attachments": ["a.pdf"],
                     "date": "2026-06-01",
                     "dest_path": "Perso/Factures",
@@ -1091,8 +1106,10 @@ tags: []
                     "matched_rule": "",
                     "file": block.to_string_lossy(),
                     "subject": "Devis",
+                    "subject_from_header": true,
                     "sender": "bob@example.net",
                     "recipient": "a@x.fr, b@x.fr",
+                    "correspondents": ["bob@example.net", "a@x.fr", "b@x.fr", "c@x.fr"],
                     "attachments": [],
                     "date": "2026-07-02T10:18:19+00:00",
                     "dest_path": "Pro",
@@ -1105,8 +1122,10 @@ tags: []
                     "matched_rule": "",
                     "file": bare.to_string_lossy(),
                     "subject": "sans-entete",
+                    "subject_from_header": false,
                     "sender": "",
                     "recipient": "",
+                    "correspondents": [],
                     "attachments": [],
                     "date": "",
                     "dest_path": "Inbox",

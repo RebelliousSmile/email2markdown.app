@@ -127,15 +127,12 @@ pub fn clean_server_in(
     };
 
     let handled = crate::handled::load_from(&paths.ledger, &account.name);
-    let proved = crate::handled::load_proofs_from(&paths.ledger, &account.name)
-        .proofs
-        .into_keys()
-        .collect();
+    let ledger = crate::handled::load_proofs_from(&paths.ledger, &account.name);
     let mut exporter = ImapExporter::new(account.clone(), false);
     exporter
         .connect()
         .context("Connexion au serveur impossible")?;
-    let entries = exporter.audit_server(None, &handled, &proved);
+    let entries = exporter.audit_server(None, &handled, &ledger);
     exporter.disconnect().ok();
     let plan = plan(&entries?);
     let notes = notes_suffix(completed, plan.untargetable);

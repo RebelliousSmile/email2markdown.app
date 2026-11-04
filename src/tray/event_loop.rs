@@ -397,19 +397,20 @@ fn handle_persist_routing_rule(
         }
     };
 
-    // Reject subject/account; only domain/from are surfaced in the UI.
-    let rule_opt = match attr_kind.as_str() {
-        "domain" => Some(crate::route::MatchRule::Domain(attr_value.clone())),
-        "from" => Some(crate::route::MatchRule::From(attr_value.clone())),
-        _ => None,
-    };
-
-    let Some(rule) = rule_opt else {
-        eval_error(&format!(
-            "unsupported attr_kind {:?} — only domain/from allowed",
-            attr_kind
-        ));
+    // Account rules are not surfaced in the review window.
+    if !matches!(
+        attr_kind.as_str(),
+        "domain" | "from" | "correspondent" | "subject"
+    ) {
+        eval_error(&format!("type de règle non pris en charge : {attr_kind}"));
         return;
+    }
+    let rule = match crate::route::MatchRule::parse(&attr_kind, &attr_value) {
+        Ok(rule) => rule,
+        Err(e) => {
+            eval_error(&format!("{e:#}"));
+            return;
+        }
     };
 
     match crate::route::upsert_rule_exclusive(&dest_file, &dest_path, rule, move_rule) {
