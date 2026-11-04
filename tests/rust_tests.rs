@@ -4306,8 +4306,8 @@ mod dest_cmd_tests {
 
 mod suggest_tests {
     use email_to_markdown::dest_cmd::{
-        destination_branches, extract_domain, scan_domains, scan_folders,
-        strip_trailing_year_month, uncovered_domains,
+        destination_branches, email_stats, extract_domain, scan_domains, scan_folders,
+        strip_trailing_year_month, uncovered_domains, EmailStats,
     };
     use email_to_markdown::destinations::{DestinationEntry, DestinationRule, DestinationsConfig};
     use std::fs;
@@ -4451,7 +4451,7 @@ mod suggest_tests {
         );
 
         let folders = scan_folders(temp.path(), &["Pro".to_string()]).unwrap();
-        assert_eq!(folders, vec!["Pro/Banque/UBS"]);
+        assert_eq!(folders, vec![("Pro/Banque/UBS".to_string(), 1)]);
     }
 
     /// A bucket below `YYYY/MM` folds into its destination.
@@ -4465,14 +4465,14 @@ mod suggest_tests {
         );
 
         let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
-        assert_eq!(folders, vec!["Perso/Voyage/Japon"]);
+        assert_eq!(folders, vec![("Perso/Voyage/Japon".to_string(), 1)]);
     }
 
     /// A folder holding only non-email notes is not proposed.
     #[test]
     fn test_scan_folders_without_email() {
         let temp = TempDir::new().unwrap();
-        let notes = temp.path().join("Perso/Recettes");
+        let notes = temp.path().join("Perso/Cuisine/Recettes");
         fs::create_dir_all(&notes).unwrap();
         fs::write(
             notes.join("tarte.md"),
@@ -4480,33 +4480,111 @@ mod suggest_tests {
 ",
         )
         .unwrap();
-        write_md(&temp.path().join("Perso/Banque"), "a.md", "a@bnp.fr");
+        write_md(&temp.path().join("Perso/Banque/BNP"), "a.md", "a@bnp.fr");
 
         let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
-        assert_eq!(folders, vec!["Perso/Banque"]);
+        assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 1)]);
     }
 
     /// Folder scan skips `.` and `_` directories inside a branch.
     #[test]
     fn test_scan_folders_excludes_dot_and_underscore_dirs() {
         let temp = TempDir::new().unwrap();
-        write_md(&temp.path().join("Perso/.obsidian"), "a.md", "a@x.com");
-        write_md(&temp.path().join("Perso/_work"), "a.md", "a@x.com");
-        write_md(&temp.path().join("Perso/Banque"), "a.md", "a@x.com");
+        write_md(
+            &temp.path().join("Perso/.obsidian/Cache"),
+            "a.md",
+            "a@x.com",
+        );
+        write_md(
+            &temp.path().join("Perso/_work/Brouillons"),
+            "a.md",
+            "a@x.com",
+        );
+        write_md(&temp.path().join("Perso/Banque/BNP"), "a.md", "a@x.com");
 
         let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
-        assert_eq!(folders, vec!["Perso/Banque"]);
+        assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 1)]);
     }
 
     /// Folder scan enters only the listed branches, case-insensitively.
     #[test]
     fn test_scan_folders_with_branches() {
         let temp = TempDir::new().unwrap();
-        write_md(&temp.path().join("Perso/Banque"), "a.md", "a@x.com");
-        write_md(&temp.path().join("Code/Projet"), "a.md", "a@x.com");
+        write_md(&temp.path().join("Perso/Banque/BNP"), "a.md", "a@x.com");
+        write_md(&temp.path().join("Code/Projet/App"), "a.md", "a@x.com");
 
         let folders = scan_folders(temp.path(), &["perso".to_string()]).unwrap();
-        assert_eq!(folders, vec!["Perso/Banque"]);
+        assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 1)]);
+    }
+
+    /// Only `<Branch>/<Category>/<Subcategory>` destinations are proposed.
+    #[test]
+    fn test_scan_folders_with_shallow_and_deep_destinations() {
+        let temp = TempDir::new().unwrap();
+        write_md(&temp.path().join("Perso"), "a.md", "a@x.com");
+        write_md(&temp.path().join("Perso/Bank"), "a.md", "a@x.com");
+        write_md(
+            &temp.path().join("Perso/Bank/BNP/Newsletters"),
+            "a.md",
+            "a@x.com",
+        );
+        write_md(
+            &temp.path().join("Perso/Bank/BNP/2025/06"),
+            "a.md",
+            "a@x.com",
+        );
+
+        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        assert_eq!(folders, vec![("Perso/Bank/BNP".to_string(), 1)]);
+    }
+
+    /// Every email note of a destination is counted, across months and buckets.
+    #[test]
+    fn test_scan_folders_counts_emails() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("Perso/Bank/BNP");
+        write_md(&base.join("2025/06"), "a.md", "a@bnp.fr");
+        write_md(&base.join("2025/06"), "b.md", "b@bnp.fr");
+        write_md(&base.join("2025/07/releves"), "c.md", "c@bnp.fr");
+        fs::write(base.join("2025/06/note.md"), "# Note\n").unwrap();
+
+        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        assert_eq!(folders, vec![("Perso/Bank/BNP".to_string(), 3)]);
+    }
+
+    /// Emails are counted per year folder, across months and buckets; plain
+    /// notes and deeper destinations are ignored.
+    #[test]
+    fn test_email_stats_by_year() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("Perso/Boardgames/Mails");
+        write_md(&base.join("2018/03"), "a.md", "a@x.com");
+        write_md(&base.join("2024/01"), "b.md", "b@x.com");
+        write_md(&base.join("2024/11/salon"), "c.md", "c@x.com");
+        write_md(&base, "d.md", "d@x.com");
+        write_md(&base.join("Newsletters/2024/01"), "e.md", "e@x.com");
+        fs::write(
+            base.join("2024/01/note.md"),
+            "# Note
+",
+        )
+        .unwrap();
+
+        let stats = email_stats(&base).unwrap();
+        assert_eq!(
+            stats.by_year.into_iter().collect::<Vec<_>>(),
+            vec![(2018, 1), (2024, 2)]
+        );
+        assert_eq!(stats.undated, 1);
+    }
+
+    #[test]
+    fn test_email_stats_missing_folder() {
+        let temp = TempDir::new().unwrap();
+        assert_eq!(
+            email_stats(&temp.path().join("absent")).unwrap(),
+            EmailStats::default()
+        );
     }
 
     /// Branches are the first path segments, deduplicated case-insensitively.

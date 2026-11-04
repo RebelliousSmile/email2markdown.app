@@ -93,7 +93,17 @@
     gap: 2px;
     flex-shrink: 0;
   }
-  #dest-list li .rule-count { color: #888; font-size: 11px; }
+  #dest-list li .rule-count { color: #888; font-size: 11px; white-space: nowrap; }
+  /* ── Per-year email chart ── */
+  #year-summary { color: #555; margin-bottom: 6px; }
+  #year-chart svg { display: block; width: 100%; height: 130px; overflow: visible; }
+  #year-chart .bar { fill: #1e88e5; }
+  #year-chart .col:hover .bar { fill: #1565c0; }
+  #year-chart .col:hover .hit { fill: #e3f2fd; }
+  #year-chart .hit { fill: transparent; }
+  #year-chart .axis { stroke: #ccc; stroke-width: 1; }
+  #year-chart text { font-size: 10px; fill: #666; font-family: inherit; }
+  #year-chart text.value { fill: #333; }
   #dest-list li .move-btn {
     border: 1px solid #ccc;
     background: #fff;
@@ -252,6 +262,7 @@
   #scan-list, #scan-orphans-list { overflow-y: auto; max-height: 200px; border: 1px solid #eee; border-radius: 3px; padding: 4px 0; }
   #scan-list label, #scan-orphans-list label { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
   #scan-list label:hover, #scan-orphans-list label:hover { background: #f5f5f5; }
+  #scan-list .scan-count { margin-left: auto; color: #888; font-size: 11px; white-space: nowrap; }
   #scan-status { font-size: 12px; color: #666; font-style: italic; }
   #scan-sel-actions, #scan-sel-actions-orphans { display: flex; gap: 8px; }
   #scan-sel-actions button, #scan-sel-actions-orphans button { font-size: 11px; padding: 2px 8px; }
@@ -332,6 +343,12 @@
       </div>
 
       <div class="detail-section">
+        <h3>Emails par année</h3>
+        <div id="year-summary"></div>
+        <div id="year-chart"></div>
+      </div>
+
+      <div class="detail-section">
         <h3>Règles de routage</h3>
         <p id="first-rule-prompt">Cette destination vient d’être ajoutée. Créez sa première règle pour indiquer quels emails rechercher.</p>
         <ul id="rules-list"></ul>
@@ -387,7 +404,9 @@
 <script>
 (function () {
   // ── State ──────────────────────────────────────────────────────────────────
-  var state = { destinations: [] };
+  // stats: path -> {by_year: {YYYY: n}, undated: n}, filled by a `dest_stats` reply.
+  var state = { destinations: [], stats: null };
+  var statsPending = false;
   var selectedPath = __INITIAL_PATH_JSON__;
   var contextualSetup = __CONTEXTUAL_SETUP_JSON__;
   var firstRuleFocused = false;
@@ -412,10 +431,17 @@
       state.missing = data.missing || [];
       renderMissingAlert();
       render();
+      requestStatsIfNeeded();
+      return;
+    }
+    if (data.type === 'dest_stats') {
+      statsPending = false;
+      state.stats = data.stats || {};
+      render();
       return;
     }
     if (data.type === 'folder_suggestions') {
-      renderFolderScan(data.paths || []);
+      renderFolderScan(data.folders || []);
       renderOrphanScan(data.orphans || []);
       return;
     }
@@ -490,7 +516,11 @@
       pathSpan.textContent = entry.path + ' ';
       var count = document.createElement('span');
       count.className = 'rule-count';
-      count.textContent = '(' + (entry.rules || []).length + ')';
+      var nRules = (entry.rules || []).length;
+      var countText = nRules + (nRules > 1 ? ' règles' : ' règle');
+      var stats = state.stats && state.stats[entry.path];
+      if (stats) countText += ' · ' + plural(emailTotal(stats), 'email', 'emails');
+      count.textContent = '(' + countText + ')';
       pathSpan.appendChild(count);
       if ((state.missing || []).indexOf(entry.path) >= 0) {
         li.classList.add('missing');
@@ -570,6 +600,8 @@
       firstRuleFocused = true;
       setTimeout(function () { document.getElementById('rule-value').focus(); }, 0);
     }
+    renderYearChart(entry.path);
+
     rules.forEach(function (rule) {
       var li = document.createElement('li');
       var label = document.createElement('span');
@@ -585,6 +617,92 @@
       li.appendChild(btn);
       ul.appendChild(li);
     });
+  }
+
+  // ── Email stats ────────────────────────────────────────────────────────────
+  // Ask Rust once for the per-year counts; again only when a new path appears.
+  function requestStatsIfNeeded() {
+    if (statsPending) return;
+    var known = state.stats || {};
+    var missing = state.destinations.some(function (e) { return !(e.path in known); });
+    if (!missing) return;
+    statsPending = true;
+    send('dest_stats');
+  }
+
+  function plural(n, one, many) { return n + ' ' + (n > 1 ? many : one); }
+
+  function emailTotal(stats) {
+    var total = stats.undated || 0;
+    Object.keys(stats.by_year || {}).forEach(function (y) { total += stats.by_year[y]; });
+    return total;
+  }
+
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  function svgEl(name, attrs, text) {
+    var el = document.createElementNS(SVG_NS, name);
+    Object.keys(attrs).forEach(function (k) { el.setAttribute(k, attrs[k]); });
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+
+  // Vertical bars, one per year from the first to the last year holding emails
+  // (empty years kept so gaps read as gaps). Single series: no legend.
+  function renderYearChart(path) {
+    var summary = document.getElementById('year-summary');
+    var chart = document.getElementById('year-chart');
+    chart.innerHTML = '';
+    var stats = state.stats && state.stats[path];
+    if (!stats) { summary.textContent = state.stats ? 'Aucune donnée.' : 'Calcul en cours…'; return; }
+
+    var total = emailTotal(stats);
+    var years = Object.keys(stats.by_year || {}).map(Number).sort(function (a, b) { return a - b; });
+    var text = total === 0 ? 'Aucun email dans ce répertoire.' : plural(total, 'email', 'emails') + ' au total';
+    if (stats.undated) text += ' (dont ' + stats.undated + ' hors dossier d’année)';
+    summary.textContent = text;
+    if (years.length === 0) return;
+
+    var first = years[0], last = years[years.length - 1];
+    var rows = [];
+    for (var y = first; y <= last; y++) rows.push({ year: y, n: stats.by_year[y] || 0 });
+    var max = Math.max.apply(null, rows.map(function (r) { return r.n; }));
+
+    var W = Math.max(chart.clientWidth, 200), H = 130, top = 14, bottom = 18;
+    var plotH = H - top - bottom;
+    var slot = W / rows.length;
+    var barW = Math.max(2, Math.min(36, slot - 2));
+    var labelEvery = Math.ceil(28 / slot);
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img',
+      'aria-label': 'Emails par année, ' + first + ' à ' + last });
+    svg.appendChild(svgEl('line', { class: 'axis', x1: 0, x2: W, y1: top + plotH + 0.5, y2: top + plotH + 0.5 }));
+
+    rows.forEach(function (row, i) {
+      var g = svgEl('g', { class: 'col' });
+      var x0 = i * slot;
+      var cx = x0 + slot / 2;
+      g.appendChild(svgEl('rect', { class: 'hit', x: x0, y: 0, width: slot, height: top + plotH }));
+      if (row.n > 0) {
+        var h = Math.max(2, row.n / max * plotH);
+        var x = cx - barW / 2, yTop = top + plotH - h, rad = Math.min(4, barW / 2, h);
+        g.appendChild(svgEl('path', { class: 'bar', d:
+          'M' + x + ',' + (top + plotH) + 'V' + (yTop + rad) +
+          'Q' + x + ',' + yTop + ' ' + (x + rad) + ',' + yTop +
+          'H' + (x + barW - rad) +
+          'Q' + (x + barW) + ',' + yTop + ' ' + (x + barW) + ',' + (yTop + rad) +
+          'V' + (top + plotH) + 'Z' }));
+        // Selective direct labels: the peak and the latest year only.
+        if (row.n === max || i === rows.length - 1) {
+          g.appendChild(svgEl('text', { class: 'value', x: cx, y: yTop - 3, 'text-anchor': 'middle' }, String(row.n)));
+        }
+      }
+      // Count back from the latest year so it is always labelled.
+      if ((rows.length - 1 - i) % labelEvery === 0) {
+        g.appendChild(svgEl('text', { x: cx, y: H - 4, 'text-anchor': 'middle' }, String(row.year)));
+      }
+      g.appendChild(svgEl('title', {}, row.year + ' : ' + plural(row.n, 'email', 'emails')));
+      svg.appendChild(g);
+    });
+    chart.appendChild(svg);
   }
 
   function ruleLabel(rule) {
@@ -774,29 +892,34 @@
   document.getElementById('btn-save').addEventListener('click', function () { send('save'); });
   document.getElementById('btn-cancel').addEventListener('click', function () { send('cancel'); });
 
-  function renderFolderScan(paths) {
+  // folders: [{path, emails}] — uncovered <Branch>/<Category>/<Subcategory> with their email count.
+  function renderFolderScan(folders) {
     var list = document.getElementById('scan-list');
     var status = document.getElementById('scan-status');
     var selActions = document.getElementById('scan-sel-actions');
     var confirm = document.getElementById('btn-scan-confirm');
     list.innerHTML = '';
-    if (paths.length === 0) {
+    if (folders.length === 0) {
       status.textContent = 'Aucun répertoire contenant des emails à ajouter.';
       list.style.display = 'none';
       selActions.style.display = 'none';
       confirm.style.display = 'none';
       return;
     }
-    status.textContent = paths.length + ' répertoire(s) non couvert(s) :';
-    paths.forEach(function (p, i) {
+    status.textContent = folders.length + ' répertoire(s) non couvert(s) :';
+    folders.forEach(function (f, i) {
       var lbl = document.createElement('label');
       var cb = document.createElement('input');
       cb.type = 'checkbox';
-      cb.value = p;
+      cb.value = f.path;
       cb.id = 'scan-cb-' + i;
       cb.addEventListener('change', updateScanConfirm);
       lbl.appendChild(cb);
-      lbl.appendChild(document.createTextNode(p));
+      lbl.appendChild(document.createTextNode(f.path));
+      var count = document.createElement('span');
+      count.className = 'scan-count';
+      count.textContent = f.emails + (f.emails > 1 ? ' emails' : ' email');
+      lbl.appendChild(count);
       list.appendChild(lbl);
     });
     list.style.display = 'block';

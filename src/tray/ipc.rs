@@ -24,12 +24,18 @@ pub(super) enum DestGuiIpcResult {
     StateChanged,
     Error(String),
     FolderSuggestions {
-        new_folders: Vec<String>,
+        /// Uncovered destination folders with their email count.
+        new_folders: Vec<(String, usize)>,
         orphans: Vec<String>,
     },
     /// The window asked for a notes scan (`scan_folders`); it walks `notes_dir`,
     /// so it runs in a worker thread through [`handle_scan`].
     Scan,
+    /// The window asked for per-year email counts (`dest_stats`); it reads every
+    /// note, so it runs in a worker thread through [`handle_dest_stats`].
+    Stats,
+    /// Per-year email counts of each listed destination, keyed by path.
+    DestStats(Vec<(String, crate::dest_cmd::EmailStats)>),
     /// The window asked for a folder picker; the dialog runs in the event loop.
     BrowseFolder,
     Saved,
@@ -80,6 +86,7 @@ pub(super) fn handle_dest_gui_ipc(
         "remove_entries" => handle_remove_entries(cfg, msg.data),
         "add_entries" => handle_add_entries(cfg, msg.data),
         "scan_folders" => DestGuiIpcResult::Scan,
+        "dest_stats" => DestGuiIpcResult::Stats,
         "browse_folder" => DestGuiIpcResult::BrowseFolder,
         _ => DestGuiIpcResult::Noop,
     }
@@ -293,6 +300,36 @@ fn handle_add_entries(
     DestGuiIpcResult::StateChanged
 }
 
+/// Per-year email counts of every listed destination under `notes_dir`.
+///
+/// Fails when the notes directory is not configured or does not exist.
+pub(super) fn handle_dest_stats(cfg: &crate::destinations::DestinationsConfig) -> DestGuiIpcResult {
+    let notes_dir = Settings::load(&config::settings_path())
+        .ok()
+        .and_then(|s| s.notes_dir)
+        .map(std::path::PathBuf::from)
+        .filter(|dir| dir.is_dir());
+    let Some(notes_dir) = notes_dir else {
+        return DestGuiIpcResult::DestStats(Vec::new());
+    };
+    DestGuiIpcResult::DestStats(dest_stats(&notes_dir, cfg))
+}
+
+/// [`crate::dest_cmd::email_stats`] of each listed destination; an unreadable
+/// folder yields empty stats rather than failing the whole list.
+fn dest_stats(
+    notes_dir: &Path,
+    cfg: &crate::destinations::DestinationsConfig,
+) -> Vec<(String, crate::dest_cmd::EmailStats)> {
+    cfg.destinations
+        .iter()
+        .map(|e| {
+            let stats = crate::dest_cmd::email_stats(&notes_dir.join(&e.path)).unwrap_or_default();
+            (e.path.clone(), stats)
+        })
+        .collect()
+}
+
 pub(super) fn handle_scan(cfg: &crate::destinations::DestinationsConfig) -> DestGuiIpcResult {
     let scanned = Settings::load(&config::settings_path())
         .context("failed to load settings")
@@ -333,7 +370,7 @@ fn scan_destinations(
     let new_folders = crate::dest_cmd::scan_folders(notes_dir, &branches)
         .context("failed to scan notes directory")?
         .into_iter()
-        .filter(|f| {
+        .filter(|(f, _)| {
             !cfg.destinations
                 .iter()
                 .any(|e| e.path.eq_ignore_ascii_case(f))
@@ -1375,14 +1412,14 @@ Body
     #[test]
     fn test_scan_destinations_with_unrelated_top_level_dirs() {
         let temp = TempDir::new().unwrap();
-        write_email(temp.path(), "Perso/Banque/2025/06");
-        write_email(temp.path(), "Perso/Sante/2025/06");
-        write_email(temp.path(), "Code/Projet");
-        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque"));
+        write_email(temp.path(), "Perso/Banque/BNP/2025/06");
+        write_email(temp.path(), "Perso/Sante/Dentiste/2025/06");
+        write_email(temp.path(), "Code/Projet/App");
+        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque/BNP"));
         let Ok(DestGuiIpcResult::FolderSuggestions { new_folders, .. }) = result else {
             panic!("expected folder suggestions");
         };
-        assert_eq!(new_folders, vec!["Perso/Sante".to_string()]);
+        assert_eq!(new_folders, vec![("Perso/Sante/Dentiste".to_string(), 1)]);
     }
 
     #[test]

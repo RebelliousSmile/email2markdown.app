@@ -540,15 +540,18 @@ pub fn scan_domains(root: &Path) -> Result<HashMap<String, usize>> {
     Ok(domains)
 }
 
-/// Destination folders under `root` holding at least one email note, sorted
-/// (relative, forward slashes), restricted to the top-level `branches`
-/// (case-insensitive).
+/// Segment count of a scanned destination: `<Branch>/<Category>/<Subcategory>`.
+const DESTINATION_SEGMENTS: usize = 3;
+
+/// Destination folders under `root` holding at least one email note, with their
+/// email count, sorted by path (relative, forward slashes), restricted to the
+/// top-level `branches` (case-insensitive).
 ///
 /// A note's destination is its directory minus a trailing `<YYYY>/<MM>` or
-/// `<YYYY>/<MM>/<bucket>`. A note is an email when it carries a `from` header.
-/// Notes are read only until one email is found per destination.
+/// `<YYYY>/<MM>/<bucket>`; only `<Branch>/<Category>/<Subcategory>` destinations
+/// are kept. A note is an email when it carries a `from` header.
 /// Same exclusion and symlink rules as [`scan_domains`].
-pub fn scan_folders(root: &Path, branches: &[String]) -> Result<Vec<String>> {
+pub fn scan_folders(root: &Path, branches: &[String]) -> Result<Vec<(String, usize)>> {
     let mut files: Vec<PathBuf> = Vec::new();
     if root.exists() {
         let walk = Walk {
@@ -565,15 +568,62 @@ pub fn scan_folders(root: &Path, branches: &[String]) -> Result<Vec<String>> {
             continue;
         };
         let destination = destination_of(&rel_dir.to_string_lossy().replace('\\', "/"));
-        if !destination.is_empty() {
+        if destination.split('/').count() == DESTINATION_SEGMENTS {
             by_destination.entry(destination).or_default().push(file);
         }
     }
     Ok(by_destination
         .into_iter()
-        .filter(|(_, notes)| notes.iter().any(|note| is_email_note(note)))
-        .map(|(destination, _)| destination)
+        .map(|(destination, notes)| {
+            let emails = notes.iter().filter(|note| is_email_note(note)).count();
+            (destination, emails)
+        })
+        .filter(|(_, emails)| *emails > 0)
         .collect())
+}
+
+/// Email notes of one destination, per year of their `<YYYY>/<MM>` folder.
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct EmailStats {
+    /// Email count per year folder.
+    pub by_year: std::collections::BTreeMap<u16, usize>,
+    /// Emails stored directly in the destination folder, outside any year.
+    pub undated: usize,
+}
+
+/// Count the email notes of the destination folder `dest_dir`, per year.
+///
+/// Only notes in `dest_dir`, `<YYYY>/<MM>` or `<YYYY>/<MM>/<bucket>` count:
+/// deeper folders are other destinations. A missing folder yields empty stats.
+/// Same exclusion and symlink rules as [`scan_domains`].
+pub fn email_stats(dest_dir: &Path) -> Result<EmailStats> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    if dest_dir.is_dir() {
+        let walk = Walk {
+            max_depth: 3,
+            branches: None,
+        };
+        walk.run(dest_dir, 0, &mut files)?;
+    }
+    let mut stats = EmailStats::default();
+    for file in files {
+        let Some(rel_dir) = file.parent().and_then(|p| p.strip_prefix(dest_dir).ok()) else {
+            continue;
+        };
+        let rel_dir = rel_dir.to_string_lossy().replace('\\', "/");
+        if !destination_of(&rel_dir).is_empty() || !is_email_note(&file) {
+            continue;
+        }
+        match rel_dir
+            .split('/')
+            .next()
+            .and_then(|y| y.parse::<u16>().ok())
+        {
+            Some(year) => *stats.by_year.entry(year).or_default() += 1,
+            None => stats.undated += 1,
+        }
+    }
+    Ok(stats)
 }
 
 /// Destination of a note directory: `rel_dir` minus a trailing `<YYYY>/<MM>`

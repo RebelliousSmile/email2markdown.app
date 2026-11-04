@@ -417,6 +417,18 @@ pub(super) fn build_dest_gui_window(
                     drop(cfg_guard);
                     let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
                 }
+                super::ipc::DestGuiIpcResult::Stats => {
+                    // Reads every note of every destination: keep the event loop free.
+                    let cfg = cfg_guard.clone();
+                    drop(cfg_guard);
+                    let proxy = proxy_ipc.clone();
+                    std::thread::spawn(move || {
+                        let result = super::ipc::handle_dest_stats(&cfg);
+                        if let Some(json) = dest_reply_json(&result) {
+                            let _ = proxy.send_event(AppCommand::PushDestState { window_id, json });
+                        }
+                    });
+                }
                 super::ipc::DestGuiIpcResult::Scan => {
                     // Walking notes_dir can take seconds: keep the event loop free.
                     let cfg = cfg_guard.clone();
@@ -430,7 +442,8 @@ pub(super) fn build_dest_gui_window(
                     });
                 }
                 reply @ (super::ipc::DestGuiIpcResult::Error(_)
-                | super::ipc::DestGuiIpcResult::FolderSuggestions { .. }) => {
+                | super::ipc::DestGuiIpcResult::FolderSuggestions { .. }
+                | super::ipc::DestGuiIpcResult::DestStats(_)) => {
                     drop(cfg_guard);
                     if let Some(json) = dest_reply_json(&reply) {
                         let _ = proxy_ipc.send_event(AppCommand::PushDestState { window_id, json });
@@ -550,8 +563,18 @@ fn dest_reply_json(result: &super::ipc::DestGuiIpcResult) -> Option<String> {
             orphans,
         } => serde_json::json!({
             "type": "folder_suggestions",
-            "paths": new_folders,
+            "folders": new_folders
+                .iter()
+                .map(|(path, emails)| serde_json::json!({"path": path, "emails": emails}))
+                .collect::<Vec<_>>(),
             "orphans": orphans,
+        }),
+        DestGuiIpcResult::DestStats(stats) => serde_json::json!({
+            "type": "dest_stats",
+            "stats": stats
+                .iter()
+                .map(|(path, s)| (path.clone(), serde_json::json!(s)))
+                .collect::<serde_json::Map<_, _>>(),
         }),
         _ => return None,
     };
