@@ -136,7 +136,7 @@ pub fn prepare_contextual_launch(target: &std::path::Path) -> Result<ContextualL
             crate::route::MatchRule::Correspondent(value) => format!("correspondant : {value}"),
             crate::route::MatchRule::From(value) => format!("expéditeur : {value}"),
             crate::route::MatchRule::Domain(value) => format!("domaine : {value}"),
-            crate::route::MatchRule::Subject(value) => format!("objet : {value}"),
+            crate::route::MatchRule::Subject(value) => format!("sujet : {value}"),
             crate::route::MatchRule::Account(value) => format!("compte : {value}"),
         })
         .collect();

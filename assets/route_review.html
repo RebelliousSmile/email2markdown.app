@@ -711,7 +711,7 @@
     row.correspondents.forEach(function (addr) {
       choices.push({ kind: 'correspondent', value: addr, label: 'correspondant : ' + addr });
     });
-    choices.push({ kind: 'subject', value: '', label: 'objet contient…' });
+    choices.push({ kind: 'subject', value: '', label: 'sujet contient…' });
 
     // Button
     var btn = document.createElement('button');
@@ -740,7 +740,7 @@
     subjectInput.type = 'text';
     subjectInput.className = 'rule-subject-input';
     subjectInput.value = row.subject_from_header ? row.subject : '';
-    subjectInput.placeholder = "mot-clé de l'objet";
+    subjectInput.placeholder = "mot-clé du sujet";
     subjectInput.style.display = 'none';
     attrSel.addEventListener('change', function () {
       var isSubject = choices[parseInt(attrSel.value, 10)].kind === 'subject';
@@ -858,7 +858,7 @@
       domain: 'Le domaine ',
       from: "L'expéditeur ",
       correspondent: 'Le correspondant ',
-      subject: "L'objet contenant "
+      subject: "Le sujet contenant "
     }[kind] || '';
     return prefix + value;
   }
