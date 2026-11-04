@@ -1326,6 +1326,27 @@ const QUOTE_INDEX_TTL: std::time::Duration = std::time::Duration::from_secs(300)
 static QUOTE_INDEX: std::sync::Mutex<Option<(PathBuf, std::time::Instant, quote_link::Index)>> =
     std::sync::Mutex::new(None);
 
+/// Top-level branches to index for quote links: those of the configured destinations,
+/// plus the branch of the routed note `rel`. `notes_dir` may be a whole `Documents/`
+/// tree, so indexing it entirely would read tens of thousands of unrelated notes.
+fn index_branches(rel: &str) -> Vec<String> {
+    let mut branches: Vec<String> = Vec::new();
+    let destinations = load_destinations().unwrap_or_default();
+    let candidates = destinations
+        .iter()
+        .map(|d| d.path.as_str())
+        .chain(std::iter::once(rel));
+    for path in candidates {
+        let Some(branch) = path.split(['/', '\\']).find(|s| !s.is_empty()) else {
+            continue;
+        };
+        if !branches.iter().any(|b| b.eq_ignore_ascii_case(branch)) {
+            branches.push(branch.to_string());
+        }
+    }
+    branches
+}
+
 /// Replace the quoted messages of a routed note by links to the notes already in `notes_dir`.
 ///
 /// The note is rewritten only when at least one message is linked. Once handled, it is
@@ -1350,7 +1371,7 @@ fn link_routed_note(note_path: &Path, notes_dir: &Path) -> Result<()> {
         *guard = Some((
             notes_dir.to_path_buf(),
             std::time::Instant::now(),
-            quote_link::Index::from_dir(notes_dir),
+            quote_link::Index::from_branches(notes_dir, &index_branches(&rel)),
         ));
     }
     let Some((_, _, index)) = guard.as_mut() else {

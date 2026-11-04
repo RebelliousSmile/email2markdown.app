@@ -80,7 +80,36 @@ impl Index {
     /// Index every `.md` note under `root`, never following symlinks.
     pub fn from_dir(root: &Path) -> Self {
         let mut index = Index::default();
-        for entry in WalkDir::new(root)
+        index.add_tree(root, root);
+        index
+    }
+
+    /// Index only the notes under the top-level `branches` of `root` (case-insensitive),
+    /// never following symlinks. Avoids reading a whole `Documents/` tree.
+    pub fn from_branches(root: &Path, branches: &[String]) -> Self {
+        let mut index = Index::default();
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return index;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() || !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if branches.iter().any(|b| b.eq_ignore_ascii_case(&name)) {
+                index.add_tree(root, &entry.path());
+            }
+        }
+        index
+    }
+
+    /// Add every `.md` note under `dir`, named relative to `root`.
+    fn add_tree(&mut self, root: &Path, dir: &Path) {
+        for entry in WalkDir::new(dir)
             .follow_links(false)
             .into_iter()
             // `_*` holds staging, quarantine and deleted notes, as in `handled`.
@@ -96,10 +125,9 @@ impl Index {
                 continue;
             };
             if let Ok(rel) = entry.path().strip_prefix(root) {
-                index.add(&rel.to_string_lossy(), &content);
+                self.add(&rel.to_string_lossy(), &content);
             }
         }
-        index
     }
 
     /// Add one note; a note without sender, date or readable body is only counted by name.

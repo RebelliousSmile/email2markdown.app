@@ -5040,6 +5040,32 @@ mod quote_link_tests {
     }
 
     #[test]
+    fn test_index_from_branches_skips_other_branches() {
+        let vault = TempDir::new().unwrap();
+        let dir = vault.path().join("Code/Projet");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Devis original.md"), original()).unwrap();
+
+        let index = Index::from_branches(vault.path(), &["Pro".to_string()]);
+        let out = link_note(&reply(), "Reponse.md", &index);
+
+        assert_eq!(out.left, vec![Left::NoNote]);
+    }
+
+    #[test]
+    fn test_index_from_branches_indexes_listed_branch() {
+        let vault = TempDir::new().unwrap();
+        let dir = vault.path().join("Pro/Clients/Acme");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Devis original.md"), original()).unwrap();
+
+        let index = Index::from_branches(vault.path(), &["pro".to_string()]);
+        let out = link_note(&reply(), "Reponse.md", &index);
+
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
+    }
+
+    #[test]
     fn test_link_note_without_note_reports_reason() {
         let out = link_note(&reply(), "Reponse.md", &Index::build([]));
         assert_eq!(out.left, vec![Left::NoNote]);
