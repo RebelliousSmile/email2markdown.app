@@ -687,6 +687,7 @@ pub fn export_to_markdown(
         from: from_field.clone(),
         to: split_addresses(&to_field),
         cc: split_addresses(&cc_field),
+        bcc: split_addresses(&bcc_field),
         date: date_value,
     };
     let frontmatter = EmailFrontmatter {

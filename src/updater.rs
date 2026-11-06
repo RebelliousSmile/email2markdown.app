@@ -195,8 +195,74 @@ pub fn download_and_apply(release: &Release, on_progress: impl Fn(&str)) -> Resu
         |path| Ok(self_replace::self_replace(path)?),
     )?;
 
+    // The binary is already replaced: a stale "Programs and Features" entry is
+    // cosmetic, so its failure is reported but never fails the update.
+    #[cfg(target_os = "windows")]
+    if let Err(e) = installer_registry::set_display_version(&release.tag_name) {
+        eprintln!("Version du registre non mise à jour : {e:#}");
+    }
+
     on_progress("Mise à jour terminée — fermez et relancez l'application.");
     Ok(())
+}
+
+/// Inno Setup uninstall entry, whose `DisplayVersion` the installer writes once:
+/// an in-place update must rewrite it or "Programs and Features" shows the
+/// version originally installed.
+#[cfg(target_os = "windows")]
+mod installer_registry {
+    use anyhow::{anyhow, Result};
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ,
+    };
+
+    /// `AppId` of `packaging/windows/email-to-markdown.iss`, suffixed `_is1` by Inno Setup.
+    const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{8BC2AB85-9C79-4D83-A0AE-237D321B5EF6}_is1";
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// Rewrite `DisplayVersion` of the per-user install; a no-op when the app
+    /// was not installed by the installer (key absent), never creating the key.
+    pub(super) fn set_display_version(version: &str) -> Result<()> {
+        let key_path = wide(UNINSTALL_KEY);
+        let mut key: HKEY = std::ptr::null_mut();
+        // SAFETY: `key_path` is NUL-terminated and outlives the call; `key` is a valid out-pointer.
+        let opened = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                key_path.as_ptr(),
+                0,
+                KEY_SET_VALUE,
+                &mut key,
+            )
+        };
+        if opened != ERROR_SUCCESS {
+            return Ok(());
+        }
+        let name = wide("DisplayVersion");
+        let data = wide(version);
+        let byte_len = u32::try_from(data.len() * 2)?;
+        // SAFETY: `key` was opened above with KEY_SET_VALUE; `data` holds `byte_len` bytes.
+        let status = unsafe {
+            let status = RegSetValueExW(
+                key,
+                name.as_ptr(),
+                0,
+                REG_SZ,
+                data.as_ptr().cast(),
+                byte_len,
+            );
+            RegCloseKey(key);
+            status
+        };
+        if status != ERROR_SUCCESS {
+            return Err(anyhow!("RegSetValueExW a échoué (code {status})"));
+        }
+        Ok(())
+    }
 }
 
 /// Copy at most `max_bytes` of `reader` into a temporary file of `temp_dir`,

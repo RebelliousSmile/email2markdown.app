@@ -1319,11 +1319,12 @@ pub fn apply_decision(staging_md: &Path, rel_path: &str, notes_dir: &Path) -> Re
     Ok(())
 }
 
-/// How long the vault index of [`link_routed_note`] is reused before a re-scan.
+/// How long the vault index of [`link_routed_note`] is trusted before listing the vault
+/// again for notes changed outside the app. The listing reads no note it already knows.
 const QUOTE_INDEX_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Vault index kept between calls, so routing n notes scans the vault once, not n times.
-static QUOTE_INDEX: std::sync::Mutex<Option<(PathBuf, std::time::Instant, quote_link::Index)>> =
+/// Vault index kept for the whole process, with the time it was last checked against disk.
+static QUOTE_INDEX: std::sync::Mutex<Option<(std::time::Instant, quote_link::Vault)>> =
     std::sync::Mutex::new(None);
 
 /// Top-level branches to index for quote links: those of the configured destinations,
@@ -1363,22 +1364,26 @@ fn link_routed_note(note_path: &Path, notes_dir: &Path) -> Result<()> {
     let mut guard = QUOTE_INDEX
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let fresh = matches!(
-        guard.as_ref(),
-        Some((root, built, _)) if root == notes_dir && built.elapsed() < QUOTE_INDEX_TTL
-    );
-    if !fresh {
-        *guard = Some((
-            notes_dir.to_path_buf(),
-            std::time::Instant::now(),
-            quote_link::Index::from_branches(notes_dir, &index_branches(&rel)),
-        ));
+    let branches = index_branches(&rel);
+    match guard.as_mut() {
+        Some((checked, vault)) if vault.root() == notes_dir => {
+            if checked.elapsed() >= QUOTE_INDEX_TTL || !vault.lists_branches(&branches) {
+                vault.refresh(&branches);
+                *checked = std::time::Instant::now();
+            }
+        }
+        _ => {
+            *guard = Some((
+                std::time::Instant::now(),
+                quote_link::Vault::open(notes_dir, &branches),
+            ));
+        }
     }
-    let Some((_, _, index)) = guard.as_mut() else {
+    let Some((_, vault)) = guard.as_mut() else {
         return Ok(());
     };
 
-    let outcome = quote_link::link_note(&content, &rel, index);
+    let outcome = quote_link::link_note(&content, &rel, &vault.index);
     let final_content = if outcome.linked.is_empty() {
         content
     } else {
@@ -1386,7 +1391,7 @@ fn link_routed_note(note_path: &Path, notes_dir: &Path) -> Result<()> {
             .with_context(|| format!("failed to write {}", note_path.display()))?;
         outcome.content
     };
-    index.add(&rel, &final_content);
+    vault.record(&rel, &final_content, note_path);
     Ok(())
 }
 

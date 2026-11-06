@@ -1,6 +1,6 @@
 //! Tray icon and context menu: construction and click dispatch.
 
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 
 use anyhow::{Context, Result};
 use tray_icon::{
@@ -28,8 +28,43 @@ mod menu_ids {
     pub const CLEAN_SERVER_PREFIX: &str = "clean_server_";
 }
 
+/// Tray tooltip when no operation is running and no update is known.
+const DEFAULT_TOOLTIP: &str = "Email to Markdown";
+
+/// Version found by the background update check, shown in the menu and the
+/// idle tooltip until the tray restarts.
+static AVAILABLE_UPDATE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Record the version offered by the background update check.
+pub(super) fn set_available_update(version: String) {
+    match AVAILABLE_UPDATE.lock() {
+        Ok(mut slot) => *slot = Some(version),
+        Err(_) => eprintln!("Mise à jour disponible : mutex empoisonné"),
+    }
+}
+
+fn available_update() -> Option<String> {
+    AVAILABLE_UPDATE.lock().ok().and_then(|slot| slot.clone())
+}
+
 /// Tray tooltip when no operation is running.
-pub(super) const DEFAULT_TOOLTIP: &str = "Email to Markdown";
+pub(super) fn idle_tooltip() -> String {
+    idle_tooltip_for(available_update().as_deref())
+}
+
+fn idle_tooltip_for(update: Option<&str>) -> String {
+    match update {
+        Some(version) => format!("{DEFAULT_TOOLTIP} — mise à jour {version} disponible"),
+        None => DEFAULT_TOOLTIP.to_string(),
+    }
+}
+
+fn update_menu_label(update: Option<&str>) -> String {
+    match update {
+        Some(version) => format!("Mise à jour {version} disponible…"),
+        None => "Mise à jour…".to_string(),
+    }
+}
 
 /// Create the system tray icon with menu.
 pub(super) fn create_tray_icon() -> Result<TrayIcon> {
@@ -37,7 +72,7 @@ pub(super) fn create_tray_icon() -> Result<TrayIcon> {
     let icon = load_icon()?;
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip(DEFAULT_TOOLTIP)
+        .with_tooltip(idle_tooltip())
         .with_icon(icon)
         .build()
         .context("Failed to create tray icon")?;
@@ -170,7 +205,7 @@ pub(super) fn create_menu() -> Result<Menu> {
 
     if let Err(e) = outils_submenu.append(&MenuItem::with_id(
         menu_ids::UPDATE,
-        "Mise à jour…",
+        update_menu_label(available_update().as_deref()),
         true,
         no_accel,
     )) {
@@ -273,4 +308,35 @@ fn load_icon() -> Result<tray_icon::Icon> {
     let size = crate::app_icon::WINDOWS_ICON_SIZE;
     tray_icon::Icon::from_rgba(crate::app_icon::rgba(size), size, size)
         .context("Failed to create application icon")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{idle_tooltip_for, update_menu_label};
+
+    #[test]
+    fn test_update_menu_label_with_version_names_it() {
+        assert_eq!(
+            update_menu_label(Some("0.26.0")),
+            "Mise à jour 0.26.0 disponible…"
+        );
+    }
+
+    #[test]
+    fn test_update_menu_label_without_version_is_plain() {
+        assert_eq!(update_menu_label(None), "Mise à jour…");
+    }
+
+    #[test]
+    fn test_idle_tooltip_for_with_version_names_it() {
+        assert_eq!(
+            idle_tooltip_for(Some("0.26.0")),
+            "Email to Markdown — mise à jour 0.26.0 disponible"
+        );
+    }
+
+    #[test]
+    fn test_idle_tooltip_for_without_version_is_default() {
+        assert_eq!(idle_tooltip_for(None), "Email to Markdown");
+    }
 }

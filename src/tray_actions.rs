@@ -860,6 +860,7 @@ fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
     let from_raw = field("from");
     let to_raw = field("to");
     let cc_raw = field("cc");
+    let bcc_raw = field("bcc");
     let subject = field("subject");
     let date_raw = field("date");
 
@@ -878,7 +879,7 @@ fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
         from: sender_addr,
         to: crate::utils::extract_emails(Some(&to_raw)),
         cc: crate::utils::extract_emails(Some(&cc_raw)),
-        bcc: Vec::new(),
+        bcc: crate::utils::extract_emails(Some(&bcc_raw)),
         domain,
         subject,
         account: account_name.to_string(),
@@ -1364,6 +1365,22 @@ mod tests {
     fn test_meta_from_frontmatter_with_cc() {
         let meta = meta_from_frontmatter(CC_NOTE, "Perso");
         assert_eq!(meta.cc, vec!["carol@x.fr".to_string()]);
+    }
+
+    #[test]
+    fn test_meta_from_frontmatter_with_bcc_in_block() {
+        let header = crate::email_block::BlockHeader {
+            from: "Moi <moi@a.fr>".into(),
+            to: vec!["bob@b.fr".into()],
+            bcc: vec!["Carol <carol@x.fr>".into()],
+            ..Default::default()
+        };
+        let note = format!(
+            "---\ntags: []\n---\n\n{}",
+            crate::email_block::render(&header, "Corps")
+        );
+        let meta = meta_from_frontmatter(&note, "Perso");
+        assert_eq!(meta.bcc, vec!["carol@x.fr".to_string()]);
     }
 
     #[test]

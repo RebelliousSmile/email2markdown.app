@@ -13,8 +13,9 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, NaiveDate};
 use regex::Regex;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::time::SystemTime;
 use walkdir::WalkDir;
 
 const SECTION_TITLE: &str = "### Messages cités :";
@@ -88,44 +89,17 @@ impl Index {
     /// never following symlinks. Avoids reading a whole `Documents/` tree.
     pub fn from_branches(root: &Path, branches: &[String]) -> Self {
         let mut index = Index::default();
-        let Ok(entries) = std::fs::read_dir(root) else {
-            return index;
-        };
-        for entry in entries.flatten() {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_symlink() || !file_type.is_dir() {
-                continue;
-            }
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if branches.iter().any(|b| b.eq_ignore_ascii_case(&name)) {
-                index.add_tree(root, &entry.path());
-            }
+        for dir in branch_dirs(root, branches) {
+            index.add_tree(root, &dir);
         }
         index
     }
 
     /// Add every `.md` note under `dir`, named relative to `root`.
     fn add_tree(&mut self, root: &Path, dir: &Path) {
-        for entry in WalkDir::new(dir)
-            .follow_links(false)
-            .into_iter()
-            // `_*` holds staging, quarantine and deleted notes, as in `handled`.
-            .filter_entry(|e| {
-                e.depth() == 0 || !e.file_name().to_string_lossy().starts_with(['.', '_'])
-            })
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() || entry.path().extension().is_none_or(|e| e != "md") {
-                continue;
-            }
-            let Ok(content) = std::fs::read_to_string(entry.path()) else {
-                continue;
-            };
-            if let Ok(rel) = entry.path().strip_prefix(root) {
-                self.add(&rel.to_string_lossy(), &content);
+        for file in md_files(root, dir) {
+            if let Ok(content) = std::fs::read_to_string(&file.path) {
+                self.add(&file.rel, &content);
             }
         }
     }
@@ -179,6 +153,161 @@ impl Index {
         } else {
             stem(&note.path).to_string()
         }
+    }
+}
+
+/// Top-level directories of `root` named like one of `branches` (case-insensitive),
+/// never following symlinks.
+fn branch_dirs(root: &Path, branches: &[String]) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_type()
+                .is_ok_and(|t| !t.is_symlink() && t.is_dir())
+        })
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            branches.iter().any(|b| b.eq_ignore_ascii_case(&name))
+        })
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// When a note was last written: same stamp, same content, without reading it.
+type Stamp = (Option<SystemTime>, u64);
+
+/// A `.md` note found on disk, with its path relative to the vault (`/`-separated).
+struct MdFile {
+    rel: String,
+    path: PathBuf,
+    stamp: Stamp,
+}
+
+/// Every `.md` note under `dir`, named relative to `root`, never following symlinks.
+/// Reads directory entries only, never the notes themselves.
+fn md_files(root: &Path, dir: &Path) -> Vec<MdFile> {
+    WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        // `_*` holds staging, quarantine and deleted notes, as in `handled`.
+        .filter_entry(|e| {
+            e.depth() == 0 || !e.file_name().to_string_lossy().starts_with(['.', '_'])
+        })
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "md"))
+        .filter_map(|e| {
+            let rel = e
+                .path()
+                .strip_prefix(root)
+                .ok()?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let stamp = e
+                .metadata()
+                .map(|m| (m.modified().ok(), m.len()))
+                .unwrap_or((None, 0));
+            Some(MdFile {
+                rel,
+                path: e.path().to_path_buf(),
+                stamp,
+            })
+        })
+        .collect()
+}
+
+/// An [`Index`] of the branches of a vault, kept up to date between routing runs.
+///
+/// [`Vault::refresh`] lists the notes without reading them and reads only those new since
+/// the last listing: a large vault is read once per process, not once per run. A note
+/// changed or deleted behind the app's back rebuilds the index, since an [`Index`] cannot
+/// forget a note.
+pub struct Vault {
+    root: PathBuf,
+    branches: Vec<String>,
+    stamps: HashMap<String, Stamp>,
+    pub index: Index,
+}
+
+impl Vault {
+    /// Index the notes under the top-level `branches` of `root`.
+    pub fn open(root: &Path, branches: &[String]) -> Self {
+        let mut vault = Vault {
+            root: root.to_path_buf(),
+            branches: Vec::new(),
+            stamps: HashMap::new(),
+            index: Index::default(),
+        };
+        vault.refresh(branches);
+        vault
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Bring the index in line with the notes now under `branches`.
+    pub fn refresh(&mut self, branches: &[String]) {
+        let files: Vec<MdFile> = branch_dirs(&self.root, branches)
+            .iter()
+            .flat_map(|dir| md_files(&self.root, dir))
+            .collect();
+        let on_disk: HashMap<&str, Stamp> =
+            files.iter().map(|f| (f.rel.as_str(), f.stamp)).collect();
+        let stale = self
+            .stamps
+            .iter()
+            .any(|(rel, stamp)| on_disk.get(rel.as_str()) != Some(stamp));
+        if stale {
+            self.index = Index::default();
+            self.stamps.clear();
+        }
+        for file in &files {
+            if self.stamps.contains_key(&file.rel) {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&file.path) {
+                self.index.add(&file.rel, &content);
+            }
+            self.stamps.insert(file.rel.clone(), file.stamp);
+        }
+        self.branches = branches.to_vec();
+    }
+
+    /// Add a note the app just wrote at `path`, so the next refresh does not read it again.
+    pub fn record(&mut self, rel_path: &str, content: &str, path: &Path) {
+        let rel = rel_path.replace('\\', "/");
+        if self.stamps.contains_key(&rel) {
+            return;
+        }
+        self.index.add(&rel, content);
+        // A note outside the listed branches would look deleted at the next refresh.
+        if !self.lists(&rel) {
+            return;
+        }
+        if let Ok(meta) = std::fs::metadata(path) {
+            self.stamps.insert(rel, (meta.modified().ok(), meta.len()));
+        }
+    }
+
+    /// Whether every one of `branches` is already indexed.
+    pub fn lists_branches(&self, branches: &[String]) -> bool {
+        branches
+            .iter()
+            .all(|b| self.branches.iter().any(|x| x.eq_ignore_ascii_case(b)))
+    }
+
+    /// Whether [`Vault::refresh`] would list the note at `rel`.
+    fn lists(&self, rel: &str) -> bool {
+        let mut parts = rel.split('/');
+        let in_branch = parts
+            .next()
+            .is_some_and(|b| self.branches.iter().any(|x| x.eq_ignore_ascii_case(b)));
+        in_branch && rel.ends_with(".md") && parts.all(|p| !p.starts_with(['.', '_']))
     }
 }
 

@@ -17,6 +17,9 @@ pub struct BlockHeader {
     pub from: String,
     pub to: Vec<String>,
     pub cc: Vec<String>,
+    /// Only present on the sender's copy (Sent folder); routing rules match it,
+    /// so a re-sort from staging must read it back.
+    pub bcc: Vec<String>,
     /// RFC 3339 when the exporter could parse the `Date` header, raw otherwise.
     pub date: String,
 }
@@ -31,6 +34,8 @@ struct RawBlock {
     to: Option<OneOrMany>,
     #[serde(default)]
     cc: Option<OneOrMany>,
+    #[serde(default)]
+    bcc: Option<OneOrMany>,
     #[serde(default)]
     date: Option<toml::Value>,
     #[serde(default)]
@@ -134,6 +139,9 @@ pub fn render(header: &BlockHeader, body: &str) -> String {
     out.push_str(&format!("to = {}\n", string_array(&header.to)));
     if !header.cc.is_empty() {
         out.push_str(&format!("cc = {}\n", string_array(&header.cc)));
+    }
+    if !header.bcc.is_empty() {
+        out.push_str(&format!("bcc = {}\n", string_array(&header.bcc)));
     }
     if !header.date.is_empty() {
         if chrono::DateTime::parse_from_rfc3339(&header.date).is_ok() {
@@ -315,6 +323,7 @@ pub fn read_header(content: &str) -> Option<BlockHeader> {
         from: raw.from.unwrap_or_default(),
         to: raw.to.map(OneOrMany::into_vec).unwrap_or_default(),
         cc: raw.cc.map(OneOrMany::into_vec).unwrap_or_default(),
+        bcc: raw.bcc.map(OneOrMany::into_vec).unwrap_or_default(),
         date,
     })
 }
@@ -341,10 +350,10 @@ fn frontmatter_scalar(content: &str, field: &str) -> Option<String> {
     None
 }
 
-/// One header field (`subject`, `from`, `to`, `cc`, `date`) of a note.
+/// One header field (`subject`, `from`, `to`, `cc`, `bcc`, `date`) of a note.
 ///
 /// The frontmatter wins (notes exported before the block existed), the
-/// ```email block fills in otherwise. `to` / `cc` are joined with `", "`.
+/// ```email block fills in otherwise. `to` / `cc` / `bcc` are joined with `", "`.
 /// Every reader of a message header goes through here.
 pub fn note_header_field(content: &str, field: &str) -> Option<String> {
     let [value] = note_header_fields(content, [field]);
@@ -366,6 +375,7 @@ pub fn note_header_fields<const N: usize>(content: &str, fields: [&str; N]) -> [
             "from" => header.from.clone(),
             "to" => header.to.join(", "),
             "cc" => header.cc.join(", "),
+            "bcc" => header.bcc.join(", "),
             "date" => header.date.clone(),
             _ => return None,
         };
@@ -383,8 +393,26 @@ mod tests {
             from: "Alice <alice@example.com>".to_string(),
             to: vec!["Bob <bob@example.com>".to_string()],
             cc: vec!["Carol <carol@example.com>".to_string()],
+            bcc: vec!["Dave <dave@example.com>".to_string()],
             date: "2026-07-02T10:18:19+00:00".to_string(),
         }
+    }
+
+    #[test]
+    fn test_render_without_bcc_omits_the_key() {
+        let mut h = header();
+        h.bcc.clear();
+        let block = render(&h, "x");
+        assert!(!block.contains("bcc ="), "{block}");
+    }
+
+    #[test]
+    fn test_note_header_field_reads_bcc_from_block() {
+        let note = format!("---\ntags: []\n---\n\n{}", render(&header(), "x"));
+        assert_eq!(
+            note_header_field(&note, "bcc").as_deref(),
+            Some("Dave <dave@example.com>")
+        );
     }
 
     #[test]
