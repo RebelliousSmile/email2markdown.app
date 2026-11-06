@@ -5065,6 +5065,53 @@ mod quote_link_tests {
         assert_eq!(out.linked, vec!["Devis original".to_string()]);
     }
 
+    fn pro_vault() -> (TempDir, std::path::PathBuf) {
+        let vault = TempDir::new().unwrap();
+        let dir = vault.path().join("Pro/Clients");
+        std::fs::create_dir_all(&dir).unwrap();
+        (vault, dir)
+    }
+
+    #[test]
+    fn test_vault_refresh_with_new_note_indexes_it() {
+        let (vault, dir) = pro_vault();
+        let mut index = Vault::open(vault.path(), &["Pro".to_string()]);
+        std::fs::write(dir.join("Devis original.md"), original()).unwrap();
+
+        index.refresh(&["Pro".to_string()]);
+        let out = link_note(&reply(), "Reponse.md", &index.index);
+
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
+    }
+
+    #[test]
+    fn test_vault_refresh_with_deleted_note_forgets_it() {
+        let (vault, dir) = pro_vault();
+        std::fs::write(dir.join("Devis original.md"), original()).unwrap();
+        let mut index = Vault::open(vault.path(), &["Pro".to_string()]);
+        std::fs::remove_file(dir.join("Devis original.md")).unwrap();
+
+        index.refresh(&["Pro".to_string()]);
+        let out = link_note(&reply(), "Reponse.md", &index.index);
+
+        assert_eq!(out.left, vec![Left::NoNote]);
+    }
+
+    #[test]
+    fn test_vault_refresh_with_recorded_note_indexes_it_once() {
+        let (vault, dir) = pro_vault();
+        let mut index = Vault::open(vault.path(), &["Pro".to_string()]);
+        let path = dir.join("Devis original.md");
+        std::fs::write(&path, original()).unwrap();
+        index.record("Pro/Clients/Devis original.md", &original(), &path);
+
+        index.refresh(&["Pro".to_string()]);
+        let out = link_note(&reply(), "Reponse.md", &index.index);
+
+        // Indexed twice, the stem would look ambiguous and the link would carry the path.
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
+    }
+
     #[test]
     fn test_link_note_without_note_reports_reason() {
         let out = link_note(&reply(), "Reponse.md", &Index::build([]));
