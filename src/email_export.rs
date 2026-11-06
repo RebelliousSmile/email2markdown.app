@@ -2750,6 +2750,7 @@ impl ImapExporter {
                         cancel_token,
                         self.debug_mode,
                     );
+                    stats.handled += prefiltered.handled.len();
                     seen_handled.extend(prefiltered.handled);
                     (
                         prefiltered.kept,
@@ -2920,6 +2921,7 @@ impl ImapExporter {
                                     });
                                 }
                                 stats.skipped += 1;
+                                stats.handled += 1;
                                 continue;
                             }
                             let mut ctx = ExportContext {
@@ -2986,6 +2988,7 @@ impl ImapExporter {
                                     }
                                     if is_malformed {
                                         stats.skipped += 1;
+                                        stats.malformed += 1;
                                     } else {
                                         stats.errors += 1;
                                     }
@@ -3254,8 +3257,9 @@ impl ImapExporter {
                 )?;
                 if let Some(s) = on_status {
                     s(&format!(
-                        "{} — {} exportés, {} déjà connus localement, {} erreurs",
-                        folder.display, stats.exported, stats.skipped, stats.errors
+                        "{} — {}",
+                        folder.display,
+                        counts_summary(std::iter::once(&stats))
                     ));
                 }
                 all_decisions.extend(folder_decisions);
@@ -3302,7 +3306,13 @@ impl ImapExporter {
 #[derive(Debug, Default, Clone)]
 pub struct ExportStats {
     pub exported: usize,
+    /// Every message not exported: `handled` + `malformed` + the ones whose
+    /// note is still in the export folder, waiting to be sorted.
     pub skipped: usize,
+    /// Skipped because the ledger records them: already sorted or discarded.
+    pub handled: usize,
+    /// Skipped because their MIME structure cannot be parsed.
+    pub malformed: usize,
     pub errors: usize,
     /// Handled messages deleted from the server (or found already gone).
     pub purged: usize,
@@ -3310,6 +3320,28 @@ pub struct ExportStats {
     pub legacy_handled: usize,
     /// Handled messages kept because their proof targets another message.
     pub stale_proof: usize,
+}
+
+/// French export counts. Skipped messages are split by reason: a note still
+/// waiting to be sorted keeps its message on the server, a handled one does
+/// not, so lumping them together hides why a message stays.
+pub fn counts_summary<'a>(stats: impl IntoIterator<Item = &'a ExportStats>) -> String {
+    let (mut exported, mut skipped, mut handled, mut malformed, mut errors) = (0, 0, 0, 0, 0);
+    for s in stats {
+        exported += s.exported;
+        skipped += s.skipped;
+        handled += s.handled;
+        malformed += s.malformed;
+        errors += s.errors;
+    }
+    let staged = skipped.saturating_sub(handled + malformed);
+    let mut out =
+        format!("{exported} exportés, {staged} en attente de tri, {handled} déjà traités");
+    if malformed > 0 {
+        out.push_str(&format!(", {malformed} illisibles"));
+    }
+    out.push_str(&format!(", {errors} erreurs"));
+    out
 }
 
 /// French summary of the purge of handled messages, empty when nothing to say.
@@ -3351,6 +3383,41 @@ pub struct FolderName {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_counts_summary_splits_staged_from_handled() {
+        let folders = [
+            ExportStats {
+                exported: 2,
+                skipped: 10,
+                handled: 4,
+                errors: 1,
+                ..ExportStats::default()
+            },
+            ExportStats {
+                skipped: 6,
+                ..ExportStats::default()
+            },
+        ];
+        assert_eq!(
+            counts_summary(&folders),
+            "2 exportés, 12 en attente de tri, 4 déjà traités, 1 erreurs"
+        );
+    }
+
+    #[test]
+    fn test_counts_summary_with_malformed_lists_them_apart() {
+        let stats = ExportStats {
+            skipped: 3,
+            handled: 1,
+            malformed: 2,
+            ..ExportStats::default()
+        };
+        assert_eq!(
+            counts_summary([&stats]),
+            "0 exportés, 0 en attente de tri, 1 déjà traités, 2 illisibles, 0 erreurs"
+        );
+    }
 
     #[test]
     fn bounded_progress_counts_exports_against_the_batch_limit() {
