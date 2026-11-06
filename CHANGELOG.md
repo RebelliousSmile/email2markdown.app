@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-11-06
+
+### Fixed
+
+- **Résumé de l'export plus clair** : « déjà connus localement » est remplacé par deux compteurs, « en attente de tri » (la note est encore dans le dossier d'export, le message reste sur le serveur) et « déjà traités » (le message a été trié ou écarté). Les messages illisibles sont comptés à part. Un message en attente de tri n'est jamais supprimé par « Nettoyer le serveur » : il faut d'abord le trier.
+- **Publication des versions débloquée** : la dépendance `pin-utils`, désormais signalée comme non maintenue, est retirée en mettant à jour `futures`. Les versions 0.25.1 et 0.26.0 n'avaient pas pu être publiées à cause de cet avertissement.
+
 ## [0.26.0] - 2026-11-06
 
 ### Added
