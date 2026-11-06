@@ -724,10 +724,16 @@ pub fn export_to_markdown(
         }
     }
 
-    // Body of the note: the email block, then images, links and attachments.
+    // A calendar invitation is summarised after the block; its `.ics` stays an attachment.
+    let invitation_section = crate::calendar::find_invitation(&mail)
+        .map(|invitation| crate::calendar::render(&invitation, &normalized_body))
+        .unwrap_or_default();
+
+    // Body of the note: the email block, then invitation, images, links and attachments.
     let note_body = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         crate::email_block::render(&block_header, &normalized_body),
+        invitation_section,
         media_section,
         attachments_section
     );
@@ -3943,6 +3949,128 @@ abc123
             "email_2024-01-01_AlicMart_Plan du projet – version finale.md"
         );
         assert!(!name.contains("_to_"), "{name}");
+    }
+
+    /// Note written by `export_to_markdown` for a raw email, exported into `temp`.
+    fn exported_note(temp: &tempfile::TempDir, raw: &[u8]) -> String {
+        let account = make_account(&temp.path().to_string_lossy());
+        let mut ctx = ExportContext {
+            errors: Vec::new(),
+            export_directory: temp.path(),
+            base_export_directory: temp.path(),
+            account: &account,
+            debug_mode: false,
+            dests: &[],
+            source_proof: None,
+            organize_by_date: false,
+            exported: None,
+            quarantine: None,
+        };
+        let (path, _) = export_to_markdown(raw, vec![], None, &mut ctx)
+            .unwrap()
+            .unwrap();
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    const DOCTOLIB_INVITATION: &str = "From: Doctolib <no-reply@doctolib.fr>\r\n\
+To: fx@example.test\r\n\
+Subject: Rendez-vous confirmé\r\n\
+Date: Mon, 03 May 2027 09:00:00 +0000\r\n\
+Message-ID: <rdv1@doctolib>\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/alternative; boundary=\"ALT\"\r\n\
+\r\n\
+--ALT\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Votre rendez-vous est confirmé.\r\n\
+--ALT\r\n\
+Content-Type: text/calendar; charset=utf-8; method=REQUEST\r\n\
+\r\n\
+BEGIN:VCALENDAR\r\n\
+METHOD:REQUEST\r\n\
+BEGIN:VEVENT\r\n\
+DTSTART;TZID=Europe/Paris:20270505T180000\r\n\
+DTEND;TZID=Europe/Paris:20270505T181000\r\n\
+SUMMARY:Rendez-vous chez Dr Gregory Meyrieu\r\n\
+LOCATION:3 bis Rue Henry Bordeaux\\, 74000 Annecy\r\n\
+ORGANIZER;CN=Doctolib:mailto:no-reply@doctolib.fr\r\n\
+DESCRIPTION:Informations pratiques :\\n* Sans as\r\n censeur\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n\
+--ALT--\r\n";
+
+    #[test]
+    fn test_export_to_markdown_with_calendar_part_adds_invitation_section() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let note = exported_note(&temp, DOCTOLIB_INVITATION.as_bytes());
+
+        assert!(note.contains("### Invitation à un évènement :"), "{note}");
+        assert!(note.contains("- **Titre** : Rendez-vous chez Dr Gregory Meyrieu"));
+        assert!(note.contains("- **Quand** : mercredi 5 mai 2027, 18:00 – 18:10"));
+        assert!(note.contains("- **Lieu** : 3 bis Rue Henry Bordeaux, 74000 Annecy"));
+        assert!(note.contains("- **Organisateur** : Doctolib <no-reply@doctolib.fr>"));
+        assert!(note.contains("* Sans ascenseur"), "{note}");
+        assert!(!note.contains("\\,"), "{note}");
+        assert!(!note.contains("BEGIN:VCALENDAR"), "{note}");
+        assert!(!note.contains("as censeur"), "{note}");
+    }
+
+    #[test]
+    fn test_export_to_markdown_places_invitation_after_email_block() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let note = exported_note(&temp, DOCTOLIB_INVITATION.as_bytes());
+
+        let block_end = note.rfind("```").unwrap();
+        let section = note.find("### Invitation").unwrap();
+        assert!(section > block_end, "{note}");
+    }
+
+    const EXCHANGE_CANCEL: &str = "From: Boursin Philippe <pb@corp.test>\r\n\
+To: fx@example.test\r\n\
+Subject: Annulé : Point projet\r\n\
+Date: Fri, 27 Dec 2024 10:00:00 +0000\r\n\
+Message-ID: <cancel1@corp>\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"MIX\"\r\n\
+\r\n\
+--MIX\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<html><head><style><!--\r\n/* Font Definitions */\r\n@font-face {font-family:\"Cambria Math\";}\r\np.MsoNormal {margin:0cm;}\r\n--></style></head>\
+<body><p class=\"MsoNormal\">Le point est annulé.</p></body></html>\r\n\
+--MIX\r\n\
+Content-Type: application/ics; name=\"invite.ics\"\r\n\
+Content-Disposition: attachment; filename=\"invite.ics\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+QkVHSU46VkNBTEVOREFSDQpNRVRIT0Q6Q0FOQ0VMDQpCRUdJTjpWRVZFTlQNClNVTU1BUlk6UG9p\r\n\
+bnQgcHJvamV0DQpEVFNUQVJUOjIwMjUwMTA2VDA5MzAwMFoNCkRURU5EOjIwMjUwMTA2VDEwMzAw\r\n\
+MFoNClNUQVRVUzpDQU5DRUxMRUQNCk9SR0FOSVpFUjtDTj0iQm91cnNpbiwgUGhpbGlwcGUiOm1h\r\n\
+aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
+--MIX--\r\n";
+
+    #[test]
+    fn test_export_to_markdown_with_ics_attachment_marks_cancellation() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let note = exported_note(&temp, EXCHANGE_CANCEL.as_bytes());
+
+        assert!(note.contains("### Évènement annulé :"), "{note}");
+        assert!(note.contains("- **Titre** : Point projet"), "{note}");
+        assert!(note.contains("- **Organisateur** : Boursin, Philippe <pb@corp.test>"));
+        assert!(note.contains("invite.ics"), "{note}");
+        assert!(!note.contains("BEGIN:VEVENT"), "{note}");
+    }
+
+    #[test]
+    fn test_export_to_markdown_with_outlook_style_comment_drops_css() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let note = exported_note(&temp, EXCHANGE_CANCEL.as_bytes());
+
+        assert!(note.contains("Le point est annulé."), "{note}");
+        assert!(!note.contains("Font Definitions"), "{note}");
+        assert!(!note.contains("@font-face"), "{note}");
+        assert!(!note.contains("MsoNormal"), "{note}");
     }
 
     #[test]
