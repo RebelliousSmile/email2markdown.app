@@ -739,10 +739,6 @@ fn run_export(
     exporter.disconnect().ok();
 
     let cancelled = cancel_token.load(Ordering::Relaxed);
-    let total_exported: usize = results.values().map(|s| s.exported).sum();
-    let total_skipped: usize = results.values().map(|s| s.skipped).sum();
-    let total_errors: usize = results.values().map(|s| s.errors).sum();
-
     let prefix = if cancelled {
         "Export annulé"
     } else if batch_full {
@@ -751,8 +747,8 @@ fn run_export(
         "Export terminé"
     };
     let mut summary = format!(
-        "{} — {} exportés, {} déjà connus localement, {} erreurs",
-        prefix, total_exported, total_skipped, total_errors
+        "{prefix} — {}",
+        email_export::counts_summary(results.values())
     );
     let purge = email_export::purge_summary(results.values());
     if !purge.is_empty() {
