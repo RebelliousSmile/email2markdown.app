@@ -1070,6 +1070,7 @@ Corps
             from: "bob@example.net".to_string(),
             to: vec!["a@x.fr".to_string(), "b@x.fr".to_string()],
             cc: vec!["Carol <c@x.fr>".to_string(), "a@x.fr".to_string()],
+            bcc: Vec::new(),
             date: "2026-07-02T10:18:19+00:00".to_string(),
         };
         std::fs::write(
