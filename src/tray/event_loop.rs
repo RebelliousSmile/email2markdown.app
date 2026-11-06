@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::Result;
 use tao::event::{Event, StartCause, WindowEvent};
@@ -20,6 +21,9 @@ use super::{
     ActionCb, AppCommand, CloseCb, ConfigState, DestGuiState, ProgressState, RouteState,
     UpdateState, WState, APP_PROXY,
 };
+
+/// Delay between two background update checks while no update is found.
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 
 /// Identifies each single-instance GUI window kind tracked by [`WINDOW_REGISTRY`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -99,6 +103,22 @@ pub(super) fn run() -> Result<()> {
         }
     });
 
+    // Background update check: once at startup, then periodically because the
+    // tray runs for days. Stops at the first newer release found.
+    let update_check_proxy = proxy.clone();
+    thread::spawn(move || loop {
+        match crate::updater::check_update(env!("CARGO_PKG_VERSION")) {
+            Ok(Some(release)) => {
+                let _ =
+                    update_check_proxy.send_event(AppCommand::UpdateAvailable(release.tag_name));
+                break;
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("Vérification de mise à jour : {e:#}"),
+        }
+        thread::sleep(UPDATE_CHECK_INTERVAL);
+    });
+
     let mut tray_icon: Option<TrayIcon> = None;
     let mut windows: HashMap<WindowId, WState> = HashMap::new();
 
@@ -147,13 +167,22 @@ pub(super) fn run() -> Result<()> {
                 handle_open_update(target, &proxy, &mut windows, &result_sender)
             }
             Event::UserEvent(AppCommand::UpdateMsg(msg)) => handle_update_msg(&windows, msg),
+            Event::UserEvent(AppCommand::UpdateAvailable(version)) => {
+                super::menu::set_available_update(version);
+                rebuild_tray_menu(&tray_icon);
+                if let Some(icon) = &tray_icon {
+                    if let Err(e) = icon.set_tooltip(Some(super::menu::idle_tooltip())) {
+                        eprintln!("Info-bulle du tray : {e}");
+                    }
+                }
+            }
             Event::UserEvent(AppCommand::ProgressUpdate { window_id, update }) => {
                 handle_progress_update(&windows, window_id, update)
             }
             Event::UserEvent(AppCommand::RefreshMenu) => rebuild_tray_menu(&tray_icon),
             Event::UserEvent(AppCommand::SetTooltip(text)) => {
                 if let Some(icon) = &tray_icon {
-                    let text = text.as_deref().unwrap_or(super::menu::DEFAULT_TOOLTIP);
+                    let text = text.unwrap_or_else(super::menu::idle_tooltip);
                     if let Err(e) = icon.set_tooltip(Some(text)) {
                         eprintln!("Info-bulle du tray : {e}");
                     }

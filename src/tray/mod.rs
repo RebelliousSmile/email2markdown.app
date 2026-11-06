@@ -79,6 +79,8 @@ pub enum AppCommand {
     },
     OpenUpdate,
     UpdateMsg(String),
+    /// The background update check found a newer release (its version).
+    UpdateAvailable(String),
     /// Forwarded by the bridge thread that drains `progress_rx`.
     ProgressUpdate {
         window_id: WindowId,
