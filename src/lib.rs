@@ -1,4 +1,5 @@
 pub mod app_icon;
+pub mod calendar; // Calendar invitation (VEVENT) summary for notes
 pub mod cleaner; // Email body cleaner pipeline
 pub mod config;
 pub mod contextual_export;
