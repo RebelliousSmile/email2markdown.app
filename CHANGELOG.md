@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-06
+
+### Added
+
+- **Invitations calendrier** : quand un email contient une invitation (partie `text/calendar` ou pièce jointe `.ics`), la note reçoit une section « Invitation » après le bloc email, avec le titre, la date et l'heure en français, le lieu et l'organisateur. Une annulation s'affiche comme « Évènement annulé ». La description est reprise seulement si le corps du mail ne la contient pas déjà, et le fichier `.ics` reste en pièce jointe.
+
 ## [0.25.1] - 2026-11-06
 
 ### Changed
