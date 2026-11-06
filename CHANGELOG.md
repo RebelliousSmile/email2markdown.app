@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-11-06
+
+### Changed
+
+- **Application des décisions plus rapide** : l'index des messages cités reste en mémoire tant que le tray tourne. Les applications suivantes ne lisent plus que les notes nouvelles ; une note modifiée ou supprimée hors de l'application provoque une reconstruction complète.
+
+### Fixed
+
+- **Mises à jour signalées** : le tray vérifie les nouvelles versions au démarrage puis toutes les 12 heures, et l'annonce dans l'infobulle et le menu « Mise à jour… ». Après une mise à jour automatique, Windows affiche la bonne version dans « Applications installées ».
+- **Reprendre le tri** route désormais comme l'export : les destinataires en copie cachée (bcc) sont enregistrés dans la note, si bien que les règles qui les visent s'appliquent aussi à la reprise. Les notes exportées avant cette version n'en portent pas.
+
 ## [0.25.0] - 2026-11-04
 
 ### Added
