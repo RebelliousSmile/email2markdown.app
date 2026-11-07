@@ -395,6 +395,139 @@ mod config_tests {
 
 mod settings_tests {
     use super::*;
+    use email_to_markdown::date_layout::DateLayout;
+
+    #[test]
+    fn test_settings_date_layout_absent_file_is_year_month() {
+        let temp = TempDir::new().unwrap();
+        let s = Settings::load(&temp.path().join("settings.yaml")).unwrap();
+        assert_eq!(s.date_layout(), DateLayout::YearMonth);
+    }
+
+    #[test]
+    fn test_settings_date_layout_with_organize_by_date_false() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "organize_by_date: false\n").unwrap();
+        assert_eq!(
+            Settings::load(&path).unwrap().date_layout(),
+            DateLayout::None
+        );
+    }
+
+    #[test]
+    fn test_settings_date_layout_key_overrides_organize_by_date() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(
+            &path,
+            "organize_by_date: false\ndate_layout: year_month_day\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Settings::load(&path).unwrap().date_layout(),
+            DateLayout::YearMonthDay
+        );
+    }
+
+    #[test]
+    fn test_settings_date_layout_absent_with_organize_by_date_true() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "organize_by_date: true\n").unwrap();
+        assert_eq!(
+            Settings::load(&path).unwrap().date_layout(),
+            DateLayout::YearMonth
+        );
+    }
+
+    #[test]
+    fn test_settings_date_layout_year_routes_into_year_folder() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "date_layout: year\n").unwrap();
+        let layout = Settings::load(&path).unwrap().date_layout();
+        let dests =
+            email_to_markdown::route::parse_destinations("Perso/Banque | domain:bank.com\n")
+                .unwrap();
+        let meta = email_to_markdown::route::EmailMeta {
+            from: "a@bank.com".into(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            domain: "bank.com".into(),
+            subject: "Statement".into(),
+            account: "personal".into(),
+            date: chrono::DateTime::parse_from_rfc3339("2026-10-03T10:00:00+00:00").unwrap(),
+        };
+        let decision = email_to_markdown::route::route_email(&meta, &dests, layout);
+        assert_eq!(decision.rel_path, "Perso/Banque/2026");
+    }
+
+    #[test]
+    fn test_settings_date_layout_unknown_value_lists_variants() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "date_layout: week\n").unwrap();
+        let err = format!("{:#}", Settings::load(&path).unwrap_err());
+        for variant in ["none", "year", "year_month", "year_month_day"] {
+            assert!(err.contains(variant), "missing {variant} in: {err}");
+        }
+    }
+
+    #[test]
+    fn test_settings_set_date_layout_none_writes_both_keys() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        let mut s = Settings::default();
+        s.set_date_layout(DateLayout::None);
+        s.save(&path).unwrap();
+        let yaml = std::fs::read_to_string(&path).unwrap();
+        assert!(yaml.contains("organize_by_date: false"), "{yaml}");
+        assert!(yaml.contains("date_layout: none"), "{yaml}");
+    }
+
+    #[test]
+    fn test_settings_destination_max_depth_absent_is_2() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "organize_by_date: true\n").unwrap();
+        assert_eq!(Settings::load(&path).unwrap().destination_max_depth(), 2);
+    }
+
+    #[test]
+    fn test_settings_destination_max_depth_with_3() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "destination_max_depth: 3\n").unwrap();
+        assert_eq!(Settings::load(&path).unwrap().destination_max_depth(), 3);
+    }
+
+    #[test]
+    fn test_settings_destination_max_depth_zero_is_refused_on_load() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "destination_max_depth: 0\n").unwrap();
+        let err = Settings::load(&path).unwrap_err().to_string();
+        assert!(err.contains("destination_max_depth"), "{err}");
+    }
+
+    #[test]
+    fn test_settings_destination_max_depth_zero_is_refused_on_save() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "notes_dir: C:/notes\n").unwrap();
+        let s = Settings {
+            destination_max_depth: Some(0),
+            ..Settings::default()
+        };
+        let err = s.save(&path).unwrap_err().to_string();
+        assert!(err.contains("destination_max_depth"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "notes_dir: C:/notes\n"
+        );
+    }
 
     #[test]
     fn test_settings_default() {
@@ -1187,11 +1320,12 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 
 mod route_tests {
     use chrono::DateTime;
+    use email_to_markdown::date_layout::DateLayout;
     use email_to_markdown::route::{
-        ai_route, apply_decision, delete_email, destinations_path_from, ensure_year_month,
-        join_safe_segments, load_destinations_from, move_email, normalize_address,
-        parse_destinations, repair_legacy_attachments, resolve_contextual_destination, route_email,
-        unique_addresses, upsert_rule, Destination, EmailMeta, MatchRule,
+        ai_route, apply_decision, delete_email, destinations_path_from, join_safe_segments,
+        load_destinations_from, move_email, normalize_address, parse_destinations,
+        repair_legacy_attachments, resolve_contextual_destination, route_email, unique_addresses,
+        upsert_rule, Destination, EmailMeta, MatchRule,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1400,7 +1534,7 @@ attachments:
                 2 => meta.cc.push("contact+project@example.com".into()),
                 _ => meta.bcc.push("contact+project@example.com".into()),
             }
-            assert!(!route_email(&meta, &dests, true).is_default);
+            assert!(!route_email(&meta, &dests, DateLayout::YearMonth).is_default);
         }
     }
 
@@ -1415,7 +1549,7 @@ attachments:
             "2026-09-01T12:00:00+00:00",
         );
         meta.to.push("contact@example.com".into());
-        assert!(route_email(&meta, &dests, true).is_default);
+        assert!(route_email(&meta, &dests, DateLayout::YearMonth).is_default);
     }
 
     #[test]
@@ -2190,7 +2324,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-06-15T10:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, false);
+        let decision = route_email(&meta, &dests, DateLayout::None);
         // Inclusive: first destination wins, second is offered
         assert_eq!(decision.rel_path, "Perso/A");
         assert_eq!(decision.alternatives, vec!["Perso/B".to_string()]);
@@ -2209,7 +2343,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-06-15T10:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, false);
+        let decision = route_email(&meta, &dests, DateLayout::None);
         assert!(decision.alternatives.is_empty());
     }
 
@@ -2258,7 +2392,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-06-15T10:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: path starts with expected dir
         assert!(
             decision.rel_path.starts_with("Perso/Finance/Banque/"),
@@ -2281,7 +2415,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-06-15T10:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: subdomain "mail.acme.com" matches rule "acme.com"
         assert!(
             decision.rel_path.starts_with("Perso/Finance/Banque/"),
@@ -2303,7 +2437,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-06-15T10:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: falls to default
         assert!(
             decision.is_default,
@@ -2326,7 +2460,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "work",
             "2026-03-01T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: from rule matched despite case difference
         assert!(
             decision.rel_path.starts_with("Pro/Clients/X/"),
@@ -2351,7 +2485,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-01-05T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: substring "invoice" found case-insensitively in "Your Invoice #123"
         assert!(
             decision.rel_path.starts_with("Perso/Shopping/"),
@@ -2372,7 +2506,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-01-05T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: subject "Hello world" does not contain "invoice" → falls to default
         assert!(
             decision.is_default,
@@ -2395,7 +2529,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "work@corp.com",
             "2026-04-10T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: account rule matched
         assert!(
             decision.rel_path.starts_with("Pro/Work/"),
@@ -2412,7 +2546,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         // No rule matches → default → Perso
         let dests: Vec<Destination> = vec![];
         let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-05-20T00:00:00+00:00");
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: starts with Perso
         assert!(
             decision.rel_path.starts_with("Perso/"),
@@ -2433,7 +2567,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "work",
             "2026-02-14T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: first segment is Pro
         assert!(
             decision.rel_path.starts_with("Pro/"),
@@ -2458,7 +2592,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "personal",
             "2026-03-15T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: ends with 2026/03
         assert!(
             decision.rel_path.ends_with("2026/03"),
@@ -2479,10 +2613,33 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     }
 
     #[test]
+    fn test_route_email_year_month_day_layout() {
+        let dests = parse_destinations("Perso/Banque | domain:bank.com\n").unwrap();
+        let meta = make_meta(
+            "noreply@bank.com",
+            "bank.com",
+            "Statement",
+            "personal",
+            "2026-10-03T10:00:00+00:00",
+        );
+        let decision = route_email(&meta, &dests, DateLayout::YearMonthDay);
+        assert_eq!(decision.rel_path, "Perso/Banque/2026/10/03");
+        assert!(!decision.rel_path.contains("2026/10/2026"));
+    }
+
+    #[test]
+    fn test_ensure_year_month_day_keeps_hand_picked_year_month() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 3).unwrap();
+        let out = DateLayout::YearMonthDay.ensure("Perso/Banque/2026/10", &date);
+        assert_eq!(out, "Perso/Banque/2026/10");
+        assert!(!out.contains("2026/10/2026"));
+    }
+
+    #[test]
     fn test_route_email_default_appends_year_month() {
         let dests: Vec<Destination> = vec![];
         let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-11-30T00:00:00+00:00");
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: path ends with 2026/11
         assert!(
             decision.rel_path.ends_with("2026/11"),
@@ -2497,6 +2654,17 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     }
 
     // ── ensure_year_month — normalize manually reassigned destinations ───────
+
+    /// Former `route::ensure_year_month`, now `DateLayout::YearMonth.ensure`.
+    fn ensure_year_month(rel_path: &str, year: &str, month: &str) -> String {
+        let date = chrono::NaiveDate::from_ymd_opt(
+            year.parse().expect("year"),
+            month.parse().expect("month"),
+            1,
+        )
+        .expect("date");
+        DateLayout::YearMonth.ensure(rel_path, &date)
+    }
 
     #[test]
     fn test_ensure_year_month_appends_to_bare_path() {
@@ -2522,10 +2690,11 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 
     #[test]
     fn test_ensure_year_month_appends_when_tail_is_not_a_date() {
-        // A trailing "13" (invalid month) or a non-year folder must NOT be mistaken
-        // for a dated suffix → year/month is appended.
+        // A trailing "13" (invalid month) must NOT be mistaken for a dated suffix
+        // → year/month is appended. A bare year tail ("Perso/Bank/2026") is a
+        // recognized `year` suffix since layouts became configurable: kept as is.
         let out = ensure_year_month("Perso/Bank/2026", "2026", "06");
-        assert_eq!(out, "Perso/Bank/2026/2026/06");
+        assert_eq!(out, "Perso/Bank/2026");
         let out2 = ensure_year_month("Perso/X/Reports/13", "2026", "06");
         assert_eq!(out2, "Perso/X/Reports/13/2026/06");
         assert!(
@@ -2547,7 +2716,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "acc",
             "2026-06-01T00:00:00+00:00",
         );
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
         // Inclusive: is_default flag set
         assert!(decision.is_default, "unknown domain must fall to default");
         // Exclusive: not routed to a known destination
@@ -2734,7 +2903,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "2026-06-01T00:00:00+00:00",
         );
 
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
 
         // Inclusive: first destination matched
         assert!(
@@ -2767,7 +2936,7 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
             "2026-06-01T00:00:00+00:00",
         );
 
-        let decision = route_email(&meta, &dests, true);
+        let decision = route_email(&meta, &dests, DateLayout::YearMonth);
 
         // Inclusive: the destination that is now first in file wins
         assert!(
@@ -2986,6 +3155,7 @@ mod contextual_export_tests {
         validate_uidvalidity, ContextualLock, ConversionStatus, DeletionProvider, DeletionRequest,
         LocalSourceProof, MessageConversionResult, MessageLocation, SourceIdentity,
     };
+    use email_to_markdown::date_layout::DateLayout;
     use email_to_markdown::route::MatchRule;
     use std::fs;
     use std::time::{Duration, SystemTime};
@@ -3050,8 +3220,15 @@ mod contextual_export_tests {
         let location = location("INBOX", 42);
         let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
 
-        let status =
-            convert_raw_contextual(&target, &account, &candidate, &location, &raw, false).unwrap();
+        let status = convert_raw_contextual(
+            &target,
+            &account,
+            &candidate,
+            &location,
+            &raw,
+            DateLayout::None,
+        )
+        .unwrap();
         let (markdown, quarantined) = match status {
             ConversionStatus::Written {
                 markdown,
@@ -3070,6 +3247,41 @@ mod contextual_export_tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".email-to-markdown-tmp-")));
+    }
+
+    #[test]
+    fn test_convert_raw_contextual_already_present_after_layout_change() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("Perso").join("Banque");
+        fs::create_dir_all(&target).unwrap();
+        let raw = multipart_raw("layout@example.com");
+        let location = location("INBOX", 7);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+        let convert = |layout| {
+            convert_raw_contextual(
+                &target,
+                &account(&target),
+                &candidate,
+                &location,
+                &raw,
+                layout,
+            )
+            .unwrap()
+        };
+
+        assert!(matches!(
+            convert(DateLayout::YearMonth),
+            ConversionStatus::Written { .. }
+        ));
+        assert!(target.join("2026").join("09").is_dir());
+
+        for layout in [DateLayout::YearMonthDay, DateLayout::None] {
+            assert!(matches!(
+                convert(layout),
+                ConversionStatus::AlreadyPresent { .. }
+            ));
+        }
+        assert!(!target.join("2026").join("09").join("01").exists());
     }
 
     #[test]
@@ -3328,7 +3540,7 @@ body
             &candidate,
             &location,
             &raw,
-            false,
+            DateLayout::None,
         )
         .unwrap();
         let (markdown, proof) = match first {
@@ -3352,7 +3564,7 @@ body
             &candidate,
             &location,
             &raw,
-            false,
+            DateLayout::None,
         )
         .unwrap();
         assert!(matches!(second, ConversionStatus::AlreadyPresent { .. }));
@@ -3386,7 +3598,7 @@ body
             &candidate,
             &source_location,
             &raw,
-            false,
+            DateLayout::None,
         )
         .unwrap();
         let valid = MessageConversionResult {
@@ -3425,7 +3637,7 @@ body
             &candidate,
             &location,
             &raw,
-            false,
+            DateLayout::None,
         )
         .unwrap();
         let original = match first {
@@ -3452,7 +3664,7 @@ body
             &candidate,
             &location,
             &raw,
-            false,
+            DateLayout::None,
         )
         .unwrap();
         let second_path = match second {
@@ -3510,7 +3722,7 @@ body
             &candidate,
             &stale_location,
             &valid,
-            false,
+            DateLayout::None,
         )
         .is_err());
         assert_eq!(
@@ -4142,7 +4354,9 @@ mod destinations_tests {
 }
 
 mod dest_cmd_tests {
-    use email_to_markdown::dest_cmd::{add_entry, detect_anomalies, orphaned_entries};
+    use email_to_markdown::dest_cmd::{
+        add_entry, detect_anomalies, exceeds_max_depth, orphaned_entries,
+    };
     use email_to_markdown::destinations::{
         load_yaml, DestinationEntry, DestinationRule, DestinationsConfig,
     };
@@ -4175,6 +4389,18 @@ mod dest_cmd_tests {
         let warnings = detect_anomalies(&cfg);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("default"));
+    }
+
+    /// A path deeper than the maximum is still recorded, but flagged.
+    #[test]
+    fn test_add_entry_with_too_deep_path() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        add_entry(&dest_file, "Pro/A/B/C", &[], None, false).unwrap();
+
+        let cfg = load_yaml(&dest_file).unwrap();
+        assert_eq!(cfg.destinations[0].path, "Pro/A/B/C");
+        assert!(exceeds_max_depth(&cfg.destinations[0].path, 2));
     }
 
     /// add_entry with no rules creates a bare classification entry.
@@ -4305,9 +4531,10 @@ mod dest_cmd_tests {
 }
 
 mod suggest_tests {
+    use email_to_markdown::date_layout::strip_date_suffix as strip_trailing_year_month;
     use email_to_markdown::dest_cmd::{
-        destination_branches, email_stats, extract_domain, scan_domains, scan_folders,
-        strip_trailing_year_month, uncovered_domains, EmailStats,
+        destination_branches, email_stats, exceeds_max_depth, extract_domain, scan_domains,
+        scan_folders, uncovered_domains, EmailStats,
     };
     use email_to_markdown::destinations::{DestinationEntry, DestinationRule, DestinationsConfig};
     use std::fs;
@@ -4331,7 +4558,7 @@ mod suggest_tests {
         write_md(temp.path(), "b.md", "Bob <bob@ubs.ch>");
         write_md(temp.path(), "c.md", "carol@bnp.fr");
 
-        let groups = scan_domains(temp.path()).unwrap();
+        let groups = scan_domains(temp.path(), 2).unwrap();
         assert_eq!(groups.get("ubs.ch"), Some(&2));
         assert_eq!(groups.get("bnp.fr"), Some(&1));
     }
@@ -4343,7 +4570,7 @@ mod suggest_tests {
         write_md(&temp.path().join(".obsidian"), "x.md", "x@hidden.com");
         write_md(temp.path(), "ok.md", "ok@visible.com");
 
-        let groups = scan_domains(temp.path()).unwrap();
+        let groups = scan_domains(temp.path(), 2).unwrap();
         assert!(
             !groups.contains_key("hidden.com"),
             "dot-dir must be skipped"
@@ -4358,7 +4585,7 @@ mod suggest_tests {
         write_md(&temp.path().join("_deleted"), "x.md", "x@gone.com");
         write_md(temp.path(), "ok.md", "ok@here.com");
 
-        let groups = scan_domains(temp.path()).unwrap();
+        let groups = scan_domains(temp.path(), 2).unwrap();
         assert!(
             !groups.contains_key("gone.com"),
             "underscore-dir must be skipped"
@@ -4378,7 +4605,7 @@ mod suggest_tests {
         write_md(&root, "ok.md", "ok@inside.com");
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
 
-        let groups = scan_domains(&root).unwrap();
+        let groups = scan_domains(&root, 2).unwrap();
         assert!(
             !groups.contains_key("external.com"),
             "symlink must not be followed"
@@ -4398,7 +4625,7 @@ mod suggest_tests {
         write_md(&root, "ok.md", "ok@inside.com");
         // Symlink creation may require privileges; skip the assertion if it fails.
         if std::os::windows::fs::symlink_dir(&outside, root.join("link")).is_ok() {
-            let groups = scan_domains(&root).unwrap();
+            let groups = scan_domains(&root, 2).unwrap();
             assert!(
                 !groups.contains_key("external.com"),
                 "symlink must not be followed"
@@ -4450,7 +4677,7 @@ mod suggest_tests {
             "a@ubs.ch",
         );
 
-        let folders = scan_folders(temp.path(), &["Pro".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Pro".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Pro/Banque/UBS".to_string(), 1)]);
     }
 
@@ -4464,7 +4691,7 @@ mod suggest_tests {
             "a@jal.co.jp",
         );
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Voyage/Japon".to_string(), 1)]);
     }
 
@@ -4482,7 +4709,7 @@ mod suggest_tests {
         .unwrap();
         write_md(&temp.path().join("Perso/Banque/BNP"), "a.md", "a@bnp.fr");
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 1)]);
     }
 
@@ -4502,7 +4729,7 @@ mod suggest_tests {
         );
         write_md(&temp.path().join("Perso/Banque/BNP"), "a.md", "a@x.com");
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 1)]);
     }
 
@@ -4513,11 +4740,12 @@ mod suggest_tests {
         write_md(&temp.path().join("Perso/Banque/BNP"), "a.md", "a@x.com");
         write_md(&temp.path().join("Code/Projet/App"), "a.md", "a@x.com");
 
-        let folders = scan_folders(temp.path(), &["perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 1)]);
     }
 
-    /// Only `<Branch>/<Category>/<Subcategory>` destinations are proposed.
+    /// Destinations 1 to `max_depth` levels below the branch are proposed; the
+    /// branch itself and deeper folders are not.
     #[test]
     fn test_scan_folders_with_shallow_and_deep_destinations() {
         let temp = TempDir::new().unwrap();
@@ -4534,8 +4762,70 @@ mod suggest_tests {
             "a@x.com",
         );
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
-        assert_eq!(folders, vec![("Perso/Bank/BNP".to_string(), 1)]);
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
+        assert_eq!(
+            folders,
+            vec![
+                ("Perso/Bank".to_string(), 1),
+                ("Perso/Bank/BNP".to_string(), 1)
+            ]
+        );
+    }
+
+    /// Tree with emails one, two and three levels below `Pro`, each under `YYYY/MM`.
+    fn three_level_tree() -> TempDir {
+        let temp = TempDir::new().unwrap();
+        for dir in [
+            "Pro/Clients/2025/06",
+            "Pro/Clients/Acme/2025/06",
+            "Pro/Clients/Acme/Contrats/2025/06",
+        ] {
+            write_md(&temp.path().join(dir), "a.md", "a@x.com");
+        }
+        temp
+    }
+
+    fn scanned_paths(temp: &TempDir, max_depth: usize) -> Vec<String> {
+        scan_folders(temp.path(), &["Pro".to_string()], max_depth)
+            .unwrap()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+
+    #[test]
+    fn test_scan_folders_with_max_depth_1() {
+        let temp = three_level_tree();
+        assert_eq!(scanned_paths(&temp, 1), vec!["Pro/Clients"]);
+    }
+
+    #[test]
+    fn test_scan_folders_with_max_depth_2() {
+        let temp = three_level_tree();
+        assert_eq!(
+            scanned_paths(&temp, 2),
+            vec!["Pro/Clients", "Pro/Clients/Acme"]
+        );
+    }
+
+    #[test]
+    fn test_scan_folders_with_max_depth_3() {
+        let temp = three_level_tree();
+        assert_eq!(
+            scanned_paths(&temp, 3),
+            vec![
+                "Pro/Clients",
+                "Pro/Clients/Acme",
+                "Pro/Clients/Acme/Contrats"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_exceeds_max_depth_ignores_date_suffix() {
+        assert!(!exceeds_max_depth("Pro/A/B/2026/10", 2));
+        assert!(!exceeds_max_depth("Pro/A/B", 2));
+        assert!(exceeds_max_depth("Pro/A/B/C", 2));
     }
 
     /// Every email note of a destination is counted, across months and buckets.
@@ -4548,7 +4838,7 @@ mod suggest_tests {
         write_md(&base.join("2025/07/releves"), "c.md", "c@bnp.fr");
         fs::write(base.join("2025/06/note.md"), "# Note\n").unwrap();
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Bank/BNP".to_string(), 3)]);
     }
 
@@ -4576,6 +4866,35 @@ mod suggest_tests {
             vec![(2018, 1), (2024, 2)]
         );
         assert_eq!(stats.undated, 1);
+    }
+
+    /// Notes filed under any date layout count for their year.
+    #[test]
+    fn test_email_stats_counts_every_layout() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("Perso/Banque");
+        write_md(&base.join("2026"), "a.md", "a@x.com");
+        write_md(&base.join("2026/10"), "b.md", "b@x.com");
+        write_md(&base.join("2026/10/03"), "c.md", "c@x.com");
+        write_md(&base.join("2026/10/03/releves"), "d.md", "d@x.com");
+
+        let stats = email_stats(&base).unwrap();
+        assert_eq!(
+            stats.by_year.into_iter().collect::<Vec<_>>(),
+            vec![(2026, 4)]
+        );
+    }
+
+    /// A note in `YYYY/MM/DD/bucket` proposes its destination once.
+    #[test]
+    fn test_scan_folders_with_year_month_day_bucket() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("Perso/Banque/BNP");
+        write_md(&base.join("2026/10/03/releves"), "a.md", "a@bnp.fr");
+        write_md(&base.join("2026/10"), "b.md", "b@bnp.fr");
+
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
+        assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 2)]);
     }
 
     #[test]
@@ -4606,7 +4925,7 @@ mod suggest_tests {
     #[test]
     fn test_suggest_no_md_files() {
         let temp = TempDir::new().unwrap();
-        let groups = scan_domains(temp.path()).unwrap();
+        let groups = scan_domains(temp.path(), 2).unwrap();
         assert!(groups.is_empty());
     }
 

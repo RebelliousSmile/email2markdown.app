@@ -236,9 +236,6 @@ pub fn run_contextual_search(
     if account.password.is_none() {
         anyhow::bail!("No password found for {}", account.name);
     }
-    let organize_by_date = Settings::load(&config::settings_path())
-        .context("failed to load settings")?
-        .organize_by_date;
     let mut exporter = ImapExporter::new(account, false);
     exporter
         .connect()
@@ -262,11 +259,6 @@ pub fn run_contextual_search(
                     .chain(&candidate.to)
                     .chain(&candidate.cc),
             );
-            let effective_target = crate::contextual_export::candidate_target(
-                &launch.target,
-                candidate,
-                organize_by_date,
-            );
             Ok(ContextualCandidateRow {
                 key: candidate.logical_key(),
                 date: candidate.date,
@@ -279,7 +271,7 @@ pub fn run_contextual_search(
                     .first()
                     .map(|location| location.folder_display.clone())
                     .unwrap_or_default(),
-                already_present: find_existing_proof(&effective_target, candidate)?.is_some(),
+                already_present: find_existing_proof(&launch.target, candidate)?.is_some(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -320,14 +312,14 @@ pub fn run_contextual_batch_in(
         .with_context(|| format!("Account '{}' not found", account_name))?
         .clone();
     let delete_after_export = account.delete_after_export;
-    let organize_by_date = Settings::load(&paths.settings)
+    let date_layout = Settings::load(&paths.settings)
         .context("failed to load settings")?
-        .organize_by_date;
+        .date_layout();
     let mut exporter = ImapExporter::new(account, false);
     exporter
         .connect()
         .context("Failed to connect to IMAP server")?;
-    let conversions = exporter.convert_contextual_selection(target, selected, organize_by_date)?;
+    let conversions = exporter.convert_contextual_selection(target, selected, date_layout)?;
     let converted = conversions
         .iter()
         .filter(|result| {
@@ -819,9 +811,9 @@ fn scan_staged_decisions(account_name: &str) -> Result<RouteDecisions> {
     }
 
     let dests = route::load_destinations()?;
-    let organize_by_date = Settings::load(&config::settings_path())
+    let date_layout = Settings::load(&config::settings_path())
         .context("failed to load settings")?
-        .organize_by_date;
+        .date_layout();
     let mut decisions = Vec::new();
 
     let walker = WalkDir::new(&base)
@@ -841,7 +833,7 @@ fn scan_staged_decisions(account_name: &str) -> Result<RouteDecisions> {
             Err(_) => continue,
         };
         let meta = meta_from_frontmatter(&content, account_name);
-        let decision = route::route_email(&meta, &dests, organize_by_date);
+        let decision = route::route_email(&meta, &dests, date_layout);
         decisions.push((path.to_path_buf(), decision));
     }
 
@@ -1394,7 +1386,7 @@ mod tests {
                 is_default: false,
             },
         ];
-        let decision = route_email(&meta, &dests, false);
+        let decision = route_email(&meta, &dests, crate::date_layout::DateLayout::None);
         assert_eq!(decision.rel_path, "Perso/Equipe/Carol");
     }
 

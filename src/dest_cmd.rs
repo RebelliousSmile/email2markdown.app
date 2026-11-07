@@ -12,6 +12,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::config;
+use crate::date_layout;
 use crate::destinations::{self, DestinationEntry, DestinationRule, DestinationsConfig};
 use crate::route;
 
@@ -120,6 +121,15 @@ pub fn run(args: DestArgs) -> Result<()> {
                 rules.push(DestinationRule::Account(a));
             }
 
+            let max_depth = config::Settings::load(&config::settings_path())
+                .context("failed to load settings")?
+                .destination_max_depth();
+            if exceeds_max_depth(&path, max_depth) {
+                eprintln!(
+                    "Warning: \"{path}\" is deeper than destination_max_depth ({max_depth}); \
+                     folder scans will not propose it."
+                );
+            }
             add_entry(&dest_file, &path, &rules, note.as_deref(), default)?;
 
             if rules.is_empty() {
@@ -413,7 +423,7 @@ fn suggest(dest_file: &Path) -> Result<()> {
     let scan_root = resolve_scan_root(&settings, &cfg)?;
     println!("Scanning {} ...", scan_root.display());
 
-    let groups = scan_domains(&scan_root)?;
+    let groups = scan_domains(&scan_root, settings.destination_max_depth())?;
     let candidates = uncovered_domains(groups, &cfg);
     if candidates.is_empty() {
         println!("Nothing to suggest — no uncovered sender domains found.");
@@ -450,7 +460,7 @@ fn suggest(dest_file: &Path) -> Result<()> {
                 continue;
             }
 
-            let path = strip_trailing_year_month(input);
+            let path = date_layout::strip_date_suffix(input);
             destinations::upsert_entry(&mut cfg, &path, &[DestinationRule::Domain(domain.clone())]);
             added += 1;
             break;
@@ -491,8 +501,12 @@ pub fn resolve_scan_root(settings: &config::Settings, cfg: &DestinationsConfig) 
     Ok(notes_dir.join(default_sub))
 }
 
-/// Walk depth of the notes scans: notes live under `<Branch>/<Cat>/<Sub>/<YYYY>/<MM>/<bucket?>`.
-const NOTES_SCAN_DEPTH: usize = 6;
+/// Walk depth of the notes scans: notes live under
+/// `<Branch>/<1 to max_depth levels>/<date suffix>/<bucket?>`, the date suffix
+/// holding up to [`date_layout::MAX_DATE_SEGMENTS`] folders.
+fn notes_scan_depth(max_depth: usize) -> usize {
+    1 + max_depth + date_layout::MAX_DATE_SEGMENTS + 1
+}
 
 /// Top-level directories used by the destination list (first path segment of each
 /// entry), deduplicated case-insensitively, in list order.
@@ -516,11 +530,11 @@ pub fn destination_branches(cfg: &DestinationsConfig) -> Vec<String> {
 ///
 /// Excludes entries starting with `.` or `_`, never follows symlinks
 /// (rule 02-rust-filesystem-safety).
-pub fn scan_domains(root: &Path) -> Result<HashMap<String, usize>> {
+pub fn scan_domains(root: &Path, max_depth: usize) -> Result<HashMap<String, usize>> {
     let mut files: Vec<PathBuf> = Vec::new();
     if root.exists() {
         let walk = Walk {
-            max_depth: NOTES_SCAN_DEPTH,
+            max_depth: notes_scan_depth(max_depth),
             branches: None,
         };
         walk.run(root, 0, &mut files)?;
@@ -540,22 +554,23 @@ pub fn scan_domains(root: &Path) -> Result<HashMap<String, usize>> {
     Ok(domains)
 }
 
-/// Segment count of a scanned destination: `<Branch>/<Category>/<Subcategory>`.
-const DESTINATION_SEGMENTS: usize = 3;
-
 /// Destination folders under `root` holding at least one email note, with their
 /// email count, sorted by path (relative, forward slashes), restricted to the
 /// top-level `branches` (case-insensitive).
 ///
-/// A note's destination is its directory minus a trailing `<YYYY>/<MM>` or
-/// `<YYYY>/<MM>/<bucket>`; only `<Branch>/<Category>/<Subcategory>` destinations
-/// are kept. A note is an email when it carries a `from` header.
-/// Same exclusion and symlink rules as [`scan_domains`].
-pub fn scan_folders(root: &Path, branches: &[String]) -> Result<Vec<(String, usize)>> {
+/// A note's destination is its directory minus a trailing date suffix, with or
+/// without a bucket ([`date_layout::destination_of`]); only destinations 1 to
+/// `max_depth` levels below their branch are kept. A note is an email when it
+/// carries a `from` header. Same exclusion and symlink rules as [`scan_domains`].
+pub fn scan_folders(
+    root: &Path,
+    branches: &[String],
+    max_depth: usize,
+) -> Result<Vec<(String, usize)>> {
     let mut files: Vec<PathBuf> = Vec::new();
     if root.exists() {
         let walk = Walk {
-            max_depth: NOTES_SCAN_DEPTH,
+            max_depth: notes_scan_depth(max_depth),
             branches: Some(branches),
         };
         walk.run(root, 0, &mut files)?;
@@ -567,8 +582,9 @@ pub fn scan_folders(root: &Path, branches: &[String]) -> Result<Vec<(String, usi
         let Some(rel_dir) = file.parent().and_then(|p| p.strip_prefix(root).ok()) else {
             continue;
         };
-        let destination = destination_of(&rel_dir.to_string_lossy().replace('\\', "/"));
-        if destination.split('/').count() == DESTINATION_SEGMENTS {
+        let destination =
+            date_layout::destination_of(&rel_dir.to_string_lossy().replace('\\', "/"));
+        if (2..=1 + max_depth).contains(&destination.split('/').count()) {
             by_destination.entry(destination).or_default().push(file);
         }
     }
@@ -582,7 +598,7 @@ pub fn scan_folders(root: &Path, branches: &[String]) -> Result<Vec<(String, usi
         .collect())
 }
 
-/// Email notes of one destination, per year of their `<YYYY>/<MM>` folder.
+/// Email notes of one destination, per year of their date suffix.
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct EmailStats {
     /// Email count per year folder.
@@ -593,14 +609,15 @@ pub struct EmailStats {
 
 /// Count the email notes of the destination folder `dest_dir`, per year.
 ///
-/// Only notes in `dest_dir`, `<YYYY>/<MM>` or `<YYYY>/<MM>/<bucket>` count:
-/// deeper folders are other destinations. A missing folder yields empty stats.
+/// Only notes in `dest_dir`, a date suffix (`<YYYY>`, `<YYYY>/<MM>`,
+/// `<YYYY>/<MM>/<DD>`, whatever the configured layout) or a bucket below it
+/// count: deeper folders are other destinations. A missing folder yields empty stats.
 /// Same exclusion and symlink rules as [`scan_domains`].
 pub fn email_stats(dest_dir: &Path) -> Result<EmailStats> {
     let mut files: Vec<PathBuf> = Vec::new();
     if dest_dir.is_dir() {
         let walk = Walk {
-            max_depth: 3,
+            max_depth: date_layout::MAX_DATE_SEGMENTS + 1,
             branches: None,
         };
         walk.run(dest_dir, 0, &mut files)?;
@@ -611,7 +628,7 @@ pub fn email_stats(dest_dir: &Path) -> Result<EmailStats> {
             continue;
         };
         let rel_dir = rel_dir.to_string_lossy().replace('\\', "/");
-        if !destination_of(&rel_dir).is_empty() || !is_email_note(&file) {
+        if !date_layout::destination_of(&rel_dir).is_empty() || !is_email_note(&file) {
             continue;
         }
         match rel_dir
@@ -624,20 +641,6 @@ pub fn email_stats(dest_dir: &Path) -> Result<EmailStats> {
         }
     }
     Ok(stats)
-}
-
-/// Destination of a note directory: `rel_dir` minus a trailing `<YYYY>/<MM>`
-/// or `<YYYY>/<MM>/<bucket>` (forward slashes).
-fn destination_of(rel_dir: &str) -> String {
-    let segs: Vec<&str> = rel_dir.split('/').filter(|s| !s.is_empty()).collect();
-    let keep = if route::ends_with_year_month(&segs.join("/")) {
-        segs.len() - 2
-    } else if segs.len() >= 3 && route::ends_with_year_month(&segs[..segs.len() - 1].join("/")) {
-        segs.len() - 3
-    } else {
-        segs.len()
-    };
-    segs[..keep].join("/")
 }
 
 /// Whether the note at `path` is an exported email (has a `from` header).
@@ -739,6 +742,13 @@ pub fn uncovered_domains(
     out
 }
 
+/// Whether `path` sits deeper than `max_depth` levels below its branch, its
+/// date suffix not counted (`Pro/A/B/2026/10` is 2 levels deep).
+pub fn exceeds_max_depth(path: &str, max_depth: usize) -> bool {
+    let bare = date_layout::strip_date_suffix(path);
+    bare.split('/').filter(|s| !s.is_empty()).count() > 1 + max_depth
+}
+
 /// Destination-list entries whose target directory no longer exists under `notes_dir`.
 ///
 /// Returns the raw `path` field of each orphaned entry, in list order.
@@ -748,17 +758,6 @@ pub fn orphaned_entries(notes_dir: &Path, cfg: &DestinationsConfig) -> Vec<Strin
         .filter(|e| !notes_dir.join(&e.path).is_dir())
         .map(|e| e.path.clone())
         .collect()
-}
-
-/// Strip a trailing `<Year>/<Month>` from a user-typed path (the router re-appends it).
-pub fn strip_trailing_year_month(path: &str) -> String {
-    let trimmed = path.trim_end_matches('/');
-    if route::ends_with_year_month(trimmed) {
-        let segs: Vec<&str> = trimmed.split('/').collect();
-        segs[..segs.len() - 2].join("/")
-    } else {
-        trimmed.to_string()
-    }
 }
 
 /// Upsert a destination into `dest_file`: validate the path, apply rules, note and

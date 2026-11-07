@@ -7,6 +7,7 @@ use anyhow::Context;
 use serde_json::Value;
 
 use crate::config::{self, AccountBehavior, RawAccount, Settings};
+use crate::date_layout::DateLayout;
 use crate::tray_actions::{action_open_config, ActionResult};
 
 /// Read a string field from a JSON object, `None` if missing or not a string.
@@ -44,19 +45,35 @@ pub(super) enum DestGuiIpcResult {
 }
 
 pub(super) fn state_json(cfg: &crate::destinations::DestinationsConfig) -> String {
+    // Unreadable settings: defaults, so the list still opens.
+    let settings = Settings::load(&config::settings_path()).unwrap_or_default();
+    state_json_with(cfg, &settings)
+}
+
+fn state_json_with(cfg: &crate::destinations::DestinationsConfig, settings: &Settings) -> String {
     // Entries whose folder no longer exists under `notes_dir`. Empty when
     // `notes_dir` is unset or unreachable: nothing can be asserted then.
-    let missing: Vec<String> = Settings::load(&config::settings_path())
-        .ok()
-        .and_then(|s| s.notes_dir)
-        .map(std::path::PathBuf::from)
+    let missing: Vec<String> = settings
+        .notes_dir
+        .as_deref()
+        .map(std::path::Path::new)
         .filter(|dir| dir.is_dir())
-        .map(|dir| crate::dest_cmd::orphaned_entries(&dir, cfg))
+        .map(|dir| crate::dest_cmd::orphaned_entries(dir, cfg))
         .unwrap_or_default();
+    // Entries deeper than the configured maximum: kept, but flagged.
+    let max_depth = settings.destination_max_depth();
+    let too_deep: Vec<String> = cfg
+        .destinations
+        .iter()
+        .filter(|e| crate::dest_cmd::exceeds_max_depth(&e.path, max_depth))
+        .map(|e| e.path.clone())
+        .collect();
     let json = serde_json::json!({
         "type": "state",
         "destinations": cfg.destinations,
         "missing": missing,
+        "too_deep": too_deep,
+        "max_depth": max_depth,
     });
     serde_json::to_string(&json).unwrap_or_default()
 }
@@ -333,7 +350,13 @@ fn dest_stats(
 pub(super) fn handle_scan(cfg: &crate::destinations::DestinationsConfig) -> DestGuiIpcResult {
     let scanned = Settings::load(&config::settings_path())
         .context("failed to load settings")
-        .and_then(|settings| scan_destinations(settings.notes_dir.as_deref().map(Path::new), cfg));
+        .and_then(|settings| {
+            scan_destinations(
+                settings.notes_dir.as_deref().map(Path::new),
+                cfg,
+                settings.destination_max_depth(),
+            )
+        });
     match scanned {
         Ok(result) => result,
         Err(e) => DestGuiIpcResult::Error(format!("Analyse impossible : {:#}", e)),
@@ -352,6 +375,7 @@ pub(super) fn handle_scan(cfg: &crate::destinations::DestinationsConfig) -> Dest
 fn scan_destinations(
     notes_dir: Option<&Path>,
     cfg: &crate::destinations::DestinationsConfig,
+    max_depth: usize,
 ) -> anyhow::Result<DestGuiIpcResult> {
     let notes_dir = notes_dir
         .ok_or_else(|| anyhow::anyhow!("le dossier de notes n'est pas configur\u{00e9}"))?;
@@ -367,7 +391,7 @@ fn scan_destinations(
             "aucune destination : ajoutez-en une pour indiquer les branches \u{00e0} analyser"
         );
     }
-    let new_folders = crate::dest_cmd::scan_folders(notes_dir, &branches)
+    let new_folders = crate::dest_cmd::scan_folders(notes_dir, &branches, max_depth)
         .context("failed to scan notes directory")?
         .into_iter()
         .filter(|(f, _)| {
@@ -516,25 +540,21 @@ pub(super) fn parse_route_decisions(body: &str) -> anyhow::Result<Vec<RouteDecis
     Ok(payload.decisions)
 }
 
-/// Final destination of a row, carrying the email's `<Year>/<Month>`.
+/// Final destination of a row, carrying the email's date folders per `layout`.
 ///
-/// The auto proposal already ends with it; a manually reassigned path (cascade /
-/// free entry / bulk) comes bare from destinations.txt — append it from the email
-/// date so files always land under `<dest>/<Year>/<Month>` (no double suffix).
-/// Skipped entirely when the "organize by date" preference is off, so a bare
+/// The auto proposal already ends with them; a manually reassigned path (cascade /
+/// free entry / bulk) comes bare from destinations.txt — append them from the email
+/// date so files always land under `<dest>/<date suffix>` (no double suffix).
+/// Skipped entirely when the layout is [`DateLayout::None`], so a bare
 /// manual path stays flat instead of being silently re-dated.
-fn dated_dest_path(row: &RouteDecisionRow, organize_by_date: bool) -> String {
-    if !organize_by_date {
+fn dated_dest_path(row: &RouteDecisionRow, layout: DateLayout) -> String {
+    if layout == DateLayout::None {
         return row.dest_path.clone();
     }
     match read_note_header_field(Path::new(&row.file), "date")
         .and_then(|d| chrono::DateTime::parse_from_rfc3339(d.trim()).ok())
     {
-        Some(dt) => crate::route::ensure_year_month(
-            &row.dest_path,
-            &dt.format("%Y").to_string(),
-            &dt.format("%m").to_string(),
-        ),
+        Some(dt) => layout.ensure(&row.dest_path, &dt),
         // Date unreadable/unparseable → keep the path as-is (no guess).
         None => row.dest_path.clone(),
     }
@@ -551,7 +571,7 @@ pub(super) fn apply_route_decisions(
     rows: &[RouteDecisionRow],
     notes_dir: &Path,
     allowed: &mut HashSet<String>,
-    organize_by_date: bool,
+    layout: DateLayout,
 ) -> anyhow::Result<RouteApplyReport> {
     // Pass 1 — validation only, no side effect.
     let mut dest_paths = Vec::with_capacity(rows.len());
@@ -562,7 +582,7 @@ pub(super) fn apply_route_decisions(
         if row.dest_path.trim().is_empty() {
             anyhow::bail!("empty destination path for file {:?}", row.file);
         }
-        let dest_path = dated_dest_path(row, organize_by_date);
+        let dest_path = dated_dest_path(row, layout);
         // Anti-traversal validation — rejects "..", "\", absolute paths.
         crate::route::join_safe_segments(notes_dir, &dest_path).with_context(|| {
             format!(
@@ -709,13 +729,11 @@ struct ConfigIpcMessage {
 #[derive(serde::Deserialize)]
 struct SettingsData {
     export_base_dir: Option<String>,
-    #[serde(default = "default_organize_by_date_field")]
-    organize_by_date: bool,
+    /// Required: the form is compiled into the binary and always sends it.
+    date_layout: DateLayout,
+    #[serde(default)]
+    destination_max_depth: Option<usize>,
     defaults: DefaultsData,
-}
-
-fn default_organize_by_date_field() -> bool {
-    true
 }
 
 #[derive(serde::Deserialize)]
@@ -765,7 +783,9 @@ fn save_settings(data: SettingsData, settings_path: &Path) -> anyhow::Result<()>
     let mut settings = Settings::load(settings_path)
         .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
     settings.export_base_dir = data.export_base_dir;
-    settings.organize_by_date = data.organize_by_date;
+    settings.set_date_layout(data.date_layout);
+    // `0` is refused by `Settings::save`, before the file is touched.
+    settings.destination_max_depth = data.destination_max_depth;
     settings.defaults = AccountBehavior {
         folder_name: settings.defaults.folder_name,
         quote_depth: data.defaults.quote_depth,
@@ -1305,10 +1325,11 @@ mod tests {
         apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails,
         frontmatter_list, move_account, move_outcome, relative_destination, reload_outcome,
         remove_env_passwords, save_account, save_outcome, save_settings, scan_destinations,
-        set_env_password, validate_new_account_name, AccountData, DestGuiIpcResult,
-        RouteApplyReport, RouteDecisionRow, SettingsData,
+        set_env_password, state_json_with, validate_new_account_name, AccountData,
+        DestGuiIpcResult, RouteApplyReport, RouteDecisionRow, SettingsData,
     };
     use crate::config::{load_raw_accounts, RawAccount, Settings};
+    use crate::date_layout::DateLayout;
     use crate::destinations::{DestinationEntry, DestinationsConfig};
     use std::collections::HashSet;
     use std::fs;
@@ -1352,7 +1373,7 @@ mod tests {
 
     #[test]
     fn test_scan_destinations_with_unconfigured_notes_dir() {
-        let result = scan_destinations(None, &DestinationsConfig::default());
+        let result = scan_destinations(None, &DestinationsConfig::default(), 2);
         assert!(result.is_err());
     }
 
@@ -1360,7 +1381,7 @@ mod tests {
     fn test_scan_destinations_with_missing_notes_dir() {
         let temp = TempDir::new().unwrap();
         let missing = temp.path().join("absent");
-        let result = scan_destinations(Some(&missing), &DestinationsConfig::default());
+        let result = scan_destinations(Some(&missing), &DestinationsConfig::default(), 2);
         assert!(result.is_err());
     }
 
@@ -1393,7 +1414,7 @@ Body
     fn test_scan_destinations_with_empty_notes_dir() {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join("Perso/Banque")).unwrap();
-        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque"));
+        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque"), 2);
         assert!(matches!(
             result,
             Ok(DestGuiIpcResult::FolderSuggestions { new_folders, orphans })
@@ -1404,7 +1425,7 @@ Body
     #[test]
     fn test_scan_destinations_without_destinations() {
         let temp = TempDir::new().unwrap();
-        let result = scan_destinations(Some(temp.path()), &DestinationsConfig::default());
+        let result = scan_destinations(Some(temp.path()), &DestinationsConfig::default(), 2);
         assert!(result.is_err());
     }
 
@@ -1415,7 +1436,7 @@ Body
         write_email(temp.path(), "Perso/Banque/BNP/2025/06");
         write_email(temp.path(), "Perso/Sante/Dentiste/2025/06");
         write_email(temp.path(), "Code/Projet/App");
-        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque/BNP"));
+        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque/BNP"), 2);
         let Ok(DestGuiIpcResult::FolderSuggestions { new_folders, .. }) = result else {
             panic!("expected folder suggestions");
         };
@@ -1518,7 +1539,13 @@ Body
             (&fx.files[2], "Travail"),
         ]);
 
-        apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), false).unwrap();
+        apply_route_decisions(
+            &decisions,
+            &fx.notes,
+            &mut allowed(&fx.files),
+            DateLayout::None,
+        )
+        .unwrap();
 
         assert_eq!(
             (
@@ -1535,7 +1562,7 @@ Body
     }
 
     #[test]
-    fn test_apply_route_decisions_organize_by_date_single_suffix() {
+    fn test_apply_route_decisions_year_month_single_suffix() {
         let fx = route_fixture();
         let decisions = rows(&[
             (&fx.files[0], "Perso/Banque"),
@@ -1548,7 +1575,13 @@ Body
             .join("2026")
             .join("06");
 
-        apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), true).unwrap();
+        apply_route_decisions(
+            &decisions,
+            &fx.notes,
+            &mut allowed(&fx.files),
+            DateLayout::YearMonth,
+        )
+        .unwrap();
 
         assert_eq!(
             (md_names(&dated), dated.join("2026").exists()),
@@ -1584,7 +1617,7 @@ hi
             dest_path: "Perso/Banque".to_string(),
         };
 
-        let dated = dated_dest_path(&row, true);
+        let dated = dated_dest_path(&row, DateLayout::YearMonth);
 
         assert_eq!(dated, "Perso/Banque/2026/07");
     }
@@ -1598,8 +1631,13 @@ hi
             (&fx.files[2], "Travail"),
         ]);
 
-        let err = apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), false)
-            .unwrap_err();
+        let err = apply_route_decisions(
+            &decisions,
+            &fx.notes,
+            &mut allowed(&fx.files),
+            DateLayout::None,
+        )
+        .unwrap_err();
 
         assert!(format!("{:#}", err).contains("b.md"));
         assert_eq!(md_names(&fx.staging), ["a.md", "b.md", "c.md"]);
@@ -1612,7 +1650,8 @@ hi
         let decisions = rows(&[(&fx.files[0], "Perso"), (&fx.files[1], "Perso")]);
         let mut allowed = allowed(&fx.files[..1]);
 
-        let err = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap_err();
+        let err = apply_route_decisions(&decisions, &fx.notes, &mut allowed, DateLayout::None)
+            .unwrap_err();
 
         assert!(format!("{:#}", err).contains("b.md"));
         assert_eq!(md_names(&fx.staging), ["a.md", "b.md", "c.md"]);
@@ -1630,7 +1669,8 @@ hi
         fs::remove_file(&fx.files[1]).unwrap();
         let mut allowed = allowed(&fx.files);
 
-        let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
+        let report =
+            apply_route_decisions(&decisions, &fx.notes, &mut allowed, DateLayout::None).unwrap();
 
         assert_eq!(
             report,
@@ -1653,7 +1693,8 @@ hi
         let decisions = rows(&[(&fx.files[0], "Perso")]);
         let mut allowed = allowed(&fx.files);
 
-        let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
+        let report =
+            apply_route_decisions(&decisions, &fx.notes, &mut allowed, DateLayout::None).unwrap();
 
         assert_eq!(report.deletions.len(), 1);
         assert_eq!(
@@ -1681,7 +1722,8 @@ hi
         let decisions = rows(&[(&fx.files[0], "Perso")]);
         let mut allowed = allowed(&fx.files);
 
-        let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
+        let report =
+            apply_route_decisions(&decisions, &fx.notes, &mut allowed, DateLayout::None).unwrap();
 
         assert!(report.deletions.is_empty());
     }
@@ -1742,7 +1784,7 @@ hi
     fn settings_data(export_base_dir: &str) -> SettingsData {
         serde_json::from_value(serde_json::json!({
             "export_base_dir": export_base_dir,
-            "organize_by_date": true,
+            "date_layout": "year_month",
             "defaults": {}
         }))
         .unwrap()
@@ -2000,6 +2042,78 @@ hi
             (saved.notes_dir.as_deref(), saved.export_base_dir.as_deref()),
             (Some("C:/notes"), Some("C:/new"))
         );
+    }
+
+    #[test]
+    fn test_save_settings_writes_layout_and_depth() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, "organize_by_date: false\n").unwrap();
+        let mut data = settings_data("C:/new");
+        data.date_layout = DateLayout::YearMonthDay;
+        data.destination_max_depth = Some(3);
+
+        save_settings(data, &path).unwrap();
+
+        let yaml = fs::read_to_string(&path).unwrap();
+        assert!(yaml.contains("date_layout: year_month_day"), "{yaml}");
+        assert!(yaml.contains("destination_max_depth: 3"), "{yaml}");
+        assert!(yaml.contains("organize_by_date: true"), "{yaml}");
+    }
+
+    #[test]
+    fn test_save_settings_with_none_layout() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, "date_layout: year_month_day\n").unwrap();
+        let mut data = settings_data("C:/new");
+        data.date_layout = DateLayout::None;
+
+        save_settings(data, &path).unwrap();
+
+        let yaml = fs::read_to_string(&path).unwrap();
+        assert!(yaml.contains("date_layout: none"), "{yaml}");
+        assert!(yaml.contains("organize_by_date: false"), "{yaml}");
+    }
+
+    #[test]
+    fn test_save_settings_with_zero_depth_keeps_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, "organize_by_date: false\n").unwrap();
+        let mut data = settings_data("C:/new");
+        data.destination_max_depth = Some(0);
+
+        let err = format!("{:#}", save_settings(data, &path).unwrap_err());
+
+        assert!(err.contains("destination_max_depth"), "{err}");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "organize_by_date: false\n"
+        );
+    }
+
+    #[test]
+    fn test_state_json_lists_too_deep_entries() {
+        let cfg = DestinationsConfig {
+            destinations: ["Pro/A/B/C", "Pro/A/B", "Pro/A/B/2026/10"]
+                .into_iter()
+                .map(|path| DestinationEntry {
+                    path: path.into(),
+                    ..Default::default()
+                })
+                .collect(),
+        };
+        let settings = Settings {
+            destination_max_depth: Some(2),
+            ..Settings::default()
+        };
+
+        let state: serde_json::Value =
+            serde_json::from_str(&state_json_with(&cfg, &settings)).unwrap();
+
+        assert_eq!(state["too_deep"], serde_json::json!(["Pro/A/B/C"]));
+        assert_eq!(state["max_depth"], 2);
     }
 
     #[test]

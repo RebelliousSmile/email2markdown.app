@@ -1,3 +1,4 @@
+use crate::date_layout::DateLayout;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -104,7 +105,8 @@ pub struct Settings {
     pub export_base_dir: Option<String>,
 
     /// Root of the user's second-brain tree.
-    /// Plain base path — joined with `(Perso|Pro)/<Category>/<Sub>/<Year>/<Month>`.
+    /// Plain base path — joined with `<Branch>/<1 to destination_max_depth levels>`
+    /// plus the date suffix of `date_layout`.
     /// NOT the tree of valid paths; that tree is defined by `destinations.yaml`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes_dir: Option<String>,
@@ -126,13 +128,27 @@ pub struct Settings {
     #[serde(default = "default_ai_confidence_threshold")]
     pub ai_confidence_threshold: f32,
 
-    /// Whether converted emails land under `<dest>/<Year>/<Month>` (`true`) or flat
-    /// at `<dest>` (`false`). Applies uniformly to the deterministic router, manual
+    /// Legacy on/off switch of the date folders, kept in sync by
+    /// [`Settings::set_date_layout`]; `date_layout` wins when present. `true`
+    /// means `<dest>/<Year>/<Month>`, `false` flat at `<dest>`. Applies uniformly to the deterministic router, manual
     /// picks in the route-review window, and the contextual (right-click) export —
     /// so the destination layout never depends on which flow produced the file.
     /// Defaults to `true`, the router's historical behavior.
     #[serde(default = "default_organize_by_date")]
     pub organize_by_date: bool,
+
+    /// Date folders under each destination. Absent: derived from
+    /// `organize_by_date` (see [`Settings::date_layout`]). Written together with
+    /// `organize_by_date` by [`Settings::set_date_layout`], so an older version
+    /// reading the file still gets a consistent value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_layout: Option<DateLayout>,
+
+    /// Deepest destination level under a branch (`Perso/Banque` = 1,
+    /// `Perso/Banque/BNP` = 2), date folders not counted. Absent: 2 (see
+    /// [`Settings::destination_max_depth`]). `0` is refused on load and save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_max_depth: Option<usize>,
 
     /// Default behaviour applied to every account unless overridden.
     #[serde(default)]
@@ -157,6 +173,8 @@ impl Default for Settings {
             ai_routing_enabled: false,
             ai_confidence_threshold: default_ai_confidence_threshold(),
             organize_by_date: default_organize_by_date(),
+            date_layout: None,
+            destination_max_depth: None,
             defaults: AccountBehavior::default(),
             accounts: HashMap::new(),
         }
@@ -164,6 +182,38 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Resolved date layout of note folders: the `date_layout` key when present,
+    /// otherwise `organize_by_date` `true` gives [`DateLayout::YearMonth`] and
+    /// `false` gives [`DateLayout::None`].
+    pub fn date_layout(&self) -> DateLayout {
+        match self.date_layout {
+            Some(layout) => layout,
+            None if self.organize_by_date => DateLayout::YearMonth,
+            None => DateLayout::None,
+        }
+    }
+
+    /// Set the date layout, keeping `organize_by_date` consistent with it.
+    pub fn set_date_layout(&mut self, layout: DateLayout) {
+        self.date_layout = Some(layout);
+        self.organize_by_date = layout != DateLayout::None;
+    }
+
+    /// Deepest destination level scanned under a branch: the
+    /// `destination_max_depth` key, or [`DEFAULT_DESTINATION_MAX_DEPTH`].
+    pub fn destination_max_depth(&self) -> usize {
+        self.destination_max_depth
+            .unwrap_or(DEFAULT_DESTINATION_MAX_DEPTH)
+    }
+
+    /// Values serde cannot reject on its own; shared by `load` and `save`.
+    fn validate(&self) -> Result<(), String> {
+        if self.destination_max_depth == Some(0) {
+            return Err("destination_max_depth doit valoir au moins 1".to_string());
+        }
+        Ok(())
+    }
+
     /// Defaults when the file is absent; an unreadable or invalid file is an
     /// error naming the file, never silently replaced by the defaults.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
@@ -175,10 +225,15 @@ impl Settings {
             reason,
         };
         let content = fs::read_to_string(path).map_err(|e| invalid(e.to_string()))?;
-        serde_yaml::from_str(&content).map_err(|e| invalid(e.to_string()))
+        let settings: Settings =
+            serde_yaml::from_str(&content).map_err(|e| invalid(e.to_string()))?;
+        settings.validate().map_err(invalid)?;
+        Ok(settings)
     }
 
+    /// Refuses invalid values before touching the file.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
+        self.validate().map_err(ConfigError::ValidationError)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -474,6 +529,9 @@ impl Config {
 fn default_ai_confidence_threshold() -> f32 {
     0.7
 }
+
+/// Destination depth under a branch when `destination_max_depth` is absent.
+pub const DEFAULT_DESTINATION_MAX_DEPTH: usize = 2;
 
 fn default_organize_by_date() -> bool {
     true
