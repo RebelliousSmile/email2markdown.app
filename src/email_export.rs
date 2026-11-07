@@ -2278,9 +2278,8 @@ impl ImapExporter {
         date_layout: crate::date_layout::DateLayout,
     ) -> Result<Vec<crate::contextual_export::MessageConversionResult>> {
         use crate::contextual_export::{
-            candidate_target, convert_raw_contextual_unlocked, find_existing_proof,
-            parse_uid_fetch_response, validate_uidvalidity, ContextualLock, ConversionStatus,
-            MessageConversionResult,
+            convert_raw_contextual_unlocked, find_existing_proof, parse_uid_fetch_response,
+            validate_uidvalidity, ContextualLock, ConversionStatus, MessageConversionResult,
         };
         use std::collections::{BTreeMap, HashMap};
 
@@ -2298,8 +2297,7 @@ impl ImapExporter {
         let mut pending = Vec::new();
         for candidate in selected {
             let key = candidate.logical_key();
-            let effective_target = candidate_target(target, candidate, date_layout);
-            if let Some((markdown, proof)) = find_existing_proof(&effective_target, candidate)? {
+            if let Some((markdown, proof)) = find_existing_proof(target, candidate)? {
                 results.push(MessageConversionResult {
                     candidate_key: key,
                     status: Some(ConversionStatus::AlreadyPresent { markdown, proof }),

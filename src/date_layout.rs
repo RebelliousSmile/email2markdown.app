@@ -2,9 +2,19 @@
 //!
 //! The only place that builds or recognizes the dated part of a destination path.
 //! Recognition is a per-segment check (no `Regex`): years `19xx`/`20xx`,
-//! months `01`–`12`.
+//! months `01`–`12`, days `01`–`31`.
+//!
+//! Accepted false positive: a destination level literally named like a year
+//! (`Perso/Archives/2026`) is read as a date suffix. Destination names are
+//! words in practice, and recognizing every layout keeps notes filed under an
+//! older layout attached to their destination.
+
+use std::path::{Path, PathBuf};
 
 use chrono::Datelike;
+
+/// Most date folders any layout adds (`YYYY/MM/DD`).
+pub const MAX_DATE_SEGMENTS: usize = 3;
 use serde::{Deserialize, Serialize};
 
 /// How exported notes are filed by date under their destination folder.
@@ -46,8 +56,9 @@ impl DateLayout {
     }
 
     /// Like [`apply`](Self::apply), but leaves `rel` as is when it already ends
-    /// with a recognized date suffix (a path picked by hand in the review window
-    /// may already be dated: no `…/2026/06/2026/06`). `None` returns `rel` unchanged.
+    /// with a recognized date suffix, even a shorter one than this layout (a path
+    /// picked by hand in the review window may already be dated: no
+    /// `…/2026/06/2026/06`). `None` returns `rel` unchanged.
     pub fn ensure<D: Datelike>(self, rel: &str, date: &D) -> String {
         if self == DateLayout::None {
             return rel.to_string();
@@ -58,6 +69,20 @@ impl DateLayout {
             self.apply(rel, date)
         }
     }
+
+    /// Every folder a note for `date` may sit in under `base`, whatever layout
+    /// filed it: `base`, `base/Y`, `base/Y/M`, `base/Y/M/D` (only `base` without date).
+    pub fn lookup_dirs<D: Datelike>(base: &Path, date: Option<&D>) -> Vec<PathBuf> {
+        let mut dirs = vec![base.to_path_buf()];
+        if let Some(date) = date {
+            let mut dir = base.to_path_buf();
+            for segment in DateLayout::YearMonthDay.segments(date) {
+                dir = dir.join(segment);
+                dirs.push(dir.clone());
+            }
+        }
+        dirs
+    }
 }
 
 fn is_year(segment: &str) -> bool {
@@ -66,20 +91,33 @@ fn is_year(segment: &str) -> bool {
         && (segment.starts_with("19") || segment.starts_with("20"))
 }
 
-fn is_month(segment: &str) -> bool {
+fn is_two_digits_in(segment: &str, max: &str) -> bool {
     segment.len() == 2
         && segment.bytes().all(|b| b.is_ascii_digit())
-        && ("01"..="12").contains(&segment)
+        && ("01"..=max).contains(&segment)
+}
+
+fn is_month(segment: &str) -> bool {
+    is_two_digits_in(segment, "12")
+}
+
+fn is_day(segment: &str) -> bool {
+    is_two_digits_in(segment, "31")
 }
 
 /// Number of trailing date segments of `rel` (0 when it carries none).
 ///
-/// Recognized suffix: `<YYYY>/<MM>`.
+/// Longest recognized suffix wins: `<YYYY>/<MM>/<DD>`, then `<YYYY>/<MM>`,
+/// then `<YYYY>`.
 pub fn date_suffix_len(rel: &str) -> usize {
     let segs: Vec<&str> = rel.trim_end_matches('/').split('/').collect();
     let n = segs.len();
-    if n >= 2 && is_year(segs[n - 2]) && is_month(segs[n - 1]) {
+    if n >= 3 && is_year(segs[n - 3]) && is_month(segs[n - 2]) && is_day(segs[n - 1]) {
+        3
+    } else if n >= 2 && is_year(segs[n - 2]) && is_month(segs[n - 1]) {
         2
+    } else if n >= 1 && is_year(segs[n - 1]) {
+        1
     } else {
         0
     }
@@ -194,6 +232,74 @@ mod tests {
     fn test_strip_removes_year_month() {
         assert_eq!(strip_date_suffix("Perso/Banque/2026/06"), "Perso/Banque");
         assert_eq!(strip_date_suffix("Perso/Banque/"), "Perso/Banque");
+    }
+
+    #[test]
+    fn test_apply_all_layouts() {
+        let d = oct3();
+        assert_eq!(DateLayout::None.apply("A/B", &d), "A/B");
+        assert_eq!(DateLayout::Year.apply("A/B", &d), "A/B/2026");
+        assert_eq!(DateLayout::YearMonth.apply("A/B", &d), "A/B/2026/10");
+        assert_eq!(DateLayout::YearMonthDay.apply("A/B", &d), "A/B/2026/10/03");
+    }
+
+    #[test]
+    fn test_suffix_prefers_longest() {
+        assert_eq!(date_suffix_len("A/B/2026/10/03"), 3);
+        assert_eq!(date_suffix_len("A/B/2026/10"), 2);
+        assert_eq!(date_suffix_len("A/B/2026"), 1);
+        assert_eq!(date_suffix_len("A/B"), 0);
+    }
+
+    #[test]
+    fn test_suffix_rejects_day_32() {
+        // `2026/10/32`: not a day, and `10/32` is not year/month either.
+        assert_eq!(date_suffix_len("A/B/2026/10/32"), 0);
+    }
+
+    #[test]
+    fn test_ensure_keeps_shorter_suffix() {
+        assert_eq!(
+            DateLayout::YearMonthDay.ensure("Perso/Banque/2026/10", &oct3()),
+            "Perso/Banque/2026/10"
+        );
+    }
+
+    #[test]
+    fn test_ensure_year_month_day_on_bare_path() {
+        assert_eq!(
+            DateLayout::YearMonthDay.ensure("Perso/Banque", &oct3()),
+            "Perso/Banque/2026/10/03"
+        );
+    }
+
+    #[test]
+    fn test_lookup_dirs_with_and_without_date() {
+        let base = Path::new("root");
+        assert_eq!(
+            DateLayout::lookup_dirs(base, Some(&oct3())),
+            vec![
+                base.to_path_buf(),
+                base.join("2026"),
+                base.join("2026").join("10"),
+                base.join("2026").join("10").join("03"),
+            ]
+        );
+        assert_eq!(
+            DateLayout::lookup_dirs::<NaiveDate>(base, None),
+            vec![base.to_path_buf()]
+        );
+    }
+
+    #[test]
+    fn test_destination_of_any_suffix_length() {
+        assert_eq!(destination_of("Perso/Banque/2026"), "Perso/Banque");
+        assert_eq!(destination_of("Perso/Banque/2026/10/03"), "Perso/Banque");
+        assert_eq!(
+            destination_of("Perso/Banque/2026/10/03/bucket"),
+            "Perso/Banque"
+        );
+        assert_eq!(destination_of("Perso/Banque/2026/bucket"), "Perso/Banque");
     }
 
     #[test]

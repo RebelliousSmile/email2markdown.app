@@ -416,6 +416,78 @@ mod settings_tests {
     }
 
     #[test]
+    fn test_settings_date_layout_key_overrides_organize_by_date() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(
+            &path,
+            "organize_by_date: false\ndate_layout: year_month_day\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Settings::load(&path).unwrap().date_layout(),
+            DateLayout::YearMonthDay
+        );
+    }
+
+    #[test]
+    fn test_settings_date_layout_absent_with_organize_by_date_true() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "organize_by_date: true\n").unwrap();
+        assert_eq!(
+            Settings::load(&path).unwrap().date_layout(),
+            DateLayout::YearMonth
+        );
+    }
+
+    #[test]
+    fn test_settings_date_layout_year_routes_into_year_folder() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "date_layout: year\n").unwrap();
+        let layout = Settings::load(&path).unwrap().date_layout();
+        let dests =
+            email_to_markdown::route::parse_destinations("Perso/Banque | domain:bank.com\n")
+                .unwrap();
+        let meta = email_to_markdown::route::EmailMeta {
+            from: "a@bank.com".into(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            domain: "bank.com".into(),
+            subject: "Statement".into(),
+            account: "personal".into(),
+            date: chrono::DateTime::parse_from_rfc3339("2026-10-03T10:00:00+00:00").unwrap(),
+        };
+        let decision = email_to_markdown::route::route_email(&meta, &dests, layout);
+        assert_eq!(decision.rel_path, "Perso/Banque/2026");
+    }
+
+    #[test]
+    fn test_settings_date_layout_unknown_value_lists_variants() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "date_layout: week\n").unwrap();
+        let err = format!("{:#}", Settings::load(&path).unwrap_err());
+        for variant in ["none", "year", "year_month", "year_month_day"] {
+            assert!(err.contains(variant), "missing {variant} in: {err}");
+        }
+    }
+
+    #[test]
+    fn test_settings_set_date_layout_none_writes_both_keys() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        let mut s = Settings::default();
+        s.set_date_layout(DateLayout::None);
+        s.save(&path).unwrap();
+        let yaml = std::fs::read_to_string(&path).unwrap();
+        assert!(yaml.contains("organize_by_date: false"), "{yaml}");
+        assert!(yaml.contains("date_layout: none"), "{yaml}");
+    }
+
+    #[test]
     fn test_settings_default() {
         let s = Settings::default();
         assert!(s.export_base_dir.is_none());
@@ -2499,6 +2571,29 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
     }
 
     #[test]
+    fn test_route_email_year_month_day_layout() {
+        let dests = parse_destinations("Perso/Banque | domain:bank.com\n").unwrap();
+        let meta = make_meta(
+            "noreply@bank.com",
+            "bank.com",
+            "Statement",
+            "personal",
+            "2026-10-03T10:00:00+00:00",
+        );
+        let decision = route_email(&meta, &dests, DateLayout::YearMonthDay);
+        assert_eq!(decision.rel_path, "Perso/Banque/2026/10/03");
+        assert!(!decision.rel_path.contains("2026/10/2026"));
+    }
+
+    #[test]
+    fn test_ensure_year_month_day_keeps_hand_picked_year_month() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 3).unwrap();
+        let out = DateLayout::YearMonthDay.ensure("Perso/Banque/2026/10", &date);
+        assert_eq!(out, "Perso/Banque/2026/10");
+        assert!(!out.contains("2026/10/2026"));
+    }
+
+    #[test]
     fn test_route_email_default_appends_year_month() {
         let dests: Vec<Destination> = vec![];
         let meta = make_meta("x@y.com", "y.com", "Hi", "acc", "2026-11-30T00:00:00+00:00");
@@ -2553,10 +2648,11 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
 
     #[test]
     fn test_ensure_year_month_appends_when_tail_is_not_a_date() {
-        // A trailing "13" (invalid month) or a non-year folder must NOT be mistaken
-        // for a dated suffix → year/month is appended.
+        // A trailing "13" (invalid month) must NOT be mistaken for a dated suffix
+        // → year/month is appended. A bare year tail ("Perso/Bank/2026") is a
+        // recognized `year` suffix since layouts became configurable: kept as is.
         let out = ensure_year_month("Perso/Bank/2026", "2026", "06");
-        assert_eq!(out, "Perso/Bank/2026/2026/06");
+        assert_eq!(out, "Perso/Bank/2026");
         let out2 = ensure_year_month("Perso/X/Reports/13", "2026", "06");
         assert_eq!(out2, "Perso/X/Reports/13/2026/06");
         assert!(
@@ -3109,6 +3205,41 @@ mod contextual_export_tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".email-to-markdown-tmp-")));
+    }
+
+    #[test]
+    fn test_convert_raw_contextual_already_present_after_layout_change() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("Perso").join("Banque");
+        fs::create_dir_all(&target).unwrap();
+        let raw = multipart_raw("layout@example.com");
+        let location = location("INBOX", 7);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+        let convert = |layout| {
+            convert_raw_contextual(
+                &target,
+                &account(&target),
+                &candidate,
+                &location,
+                &raw,
+                layout,
+            )
+            .unwrap()
+        };
+
+        assert!(matches!(
+            convert(DateLayout::YearMonth),
+            ConversionStatus::Written { .. }
+        ));
+        assert!(target.join("2026").join("09").is_dir());
+
+        for layout in [DateLayout::YearMonthDay, DateLayout::None] {
+            assert!(matches!(
+                convert(layout),
+                ConversionStatus::AlreadyPresent { .. }
+            ));
+        }
+        assert!(!target.join("2026").join("09").join("01").exists());
     }
 
     #[test]
@@ -4616,6 +4747,35 @@ mod suggest_tests {
             vec![(2018, 1), (2024, 2)]
         );
         assert_eq!(stats.undated, 1);
+    }
+
+    /// Notes filed under any date layout count for their year.
+    #[test]
+    fn test_email_stats_counts_every_layout() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("Perso/Banque");
+        write_md(&base.join("2026"), "a.md", "a@x.com");
+        write_md(&base.join("2026/10"), "b.md", "b@x.com");
+        write_md(&base.join("2026/10/03"), "c.md", "c@x.com");
+        write_md(&base.join("2026/10/03/releves"), "d.md", "d@x.com");
+
+        let stats = email_stats(&base).unwrap();
+        assert_eq!(
+            stats.by_year.into_iter().collect::<Vec<_>>(),
+            vec![(2026, 4)]
+        );
+    }
+
+    /// A note in `YYYY/MM/DD/bucket` proposes its destination once.
+    #[test]
+    fn test_scan_folders_with_year_month_day_bucket() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("Perso/Banque/BNP");
+        write_md(&base.join("2026/10/03/releves"), "a.md", "a@bnp.fr");
+        write_md(&base.join("2026/10"), "b.md", "b@bnp.fr");
+
+        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 2)]);
     }
 
     #[test]

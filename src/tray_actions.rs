@@ -236,9 +236,6 @@ pub fn run_contextual_search(
     if account.password.is_none() {
         anyhow::bail!("No password found for {}", account.name);
     }
-    let date_layout = Settings::load(&config::settings_path())
-        .context("failed to load settings")?
-        .date_layout();
     let mut exporter = ImapExporter::new(account, false);
     exporter
         .connect()
@@ -262,8 +259,6 @@ pub fn run_contextual_search(
                     .chain(&candidate.to)
                     .chain(&candidate.cc),
             );
-            let effective_target =
-                crate::contextual_export::candidate_target(&launch.target, candidate, date_layout);
             Ok(ContextualCandidateRow {
                 key: candidate.logical_key(),
                 date: candidate.date,
@@ -276,7 +271,7 @@ pub fn run_contextual_search(
                     .first()
                     .map(|location| location.folder_display.clone())
                     .unwrap_or_default(),
-                already_present: find_existing_proof(&effective_target, candidate)?.is_some(),
+                already_present: find_existing_proof(&launch.target, candidate)?.is_some(),
             })
         })
         .collect::<Result<Vec<_>>>()?;

@@ -492,8 +492,10 @@ pub fn resolve_scan_root(settings: &config::Settings, cfg: &DestinationsConfig) 
     Ok(notes_dir.join(default_sub))
 }
 
-/// Walk depth of the notes scans: notes live under `<Branch>/<Cat>/<Sub>/<YYYY>/<MM>/<bucket?>`.
-const NOTES_SCAN_DEPTH: usize = 6;
+/// Walk depth of the notes scans: notes live under
+/// `<Branch>/<Cat>/<Sub>/<date suffix>/<bucket?>`, the date suffix holding up to
+/// [`date_layout::MAX_DATE_SEGMENTS`] folders.
+const NOTES_SCAN_DEPTH: usize = 1 + 2 + date_layout::MAX_DATE_SEGMENTS + 1;
 
 /// Top-level directories used by the destination list (first path segment of each
 /// entry), deduplicated case-insensitively, in list order.
@@ -595,14 +597,15 @@ pub struct EmailStats {
 
 /// Count the email notes of the destination folder `dest_dir`, per year.
 ///
-/// Only notes in `dest_dir`, `<YYYY>/<MM>` or `<YYYY>/<MM>/<bucket>` count:
-/// deeper folders are other destinations. A missing folder yields empty stats.
+/// Only notes in `dest_dir`, a date suffix (`<YYYY>`, `<YYYY>/<MM>`,
+/// `<YYYY>/<MM>/<DD>`, whatever the configured layout) or a bucket below it
+/// count: deeper folders are other destinations. A missing folder yields empty stats.
 /// Same exclusion and symlink rules as [`scan_domains`].
 pub fn email_stats(dest_dir: &Path) -> Result<EmailStats> {
     let mut files: Vec<PathBuf> = Vec::new();
     if dest_dir.is_dir() {
         let walk = Walk {
-            max_depth: 3,
+            max_depth: date_layout::MAX_DATE_SEGMENTS + 1,
             branches: None,
         };
         walk.run(dest_dir, 0, &mut files)?;

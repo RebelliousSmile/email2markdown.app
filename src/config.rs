@@ -135,6 +135,13 @@ pub struct Settings {
     #[serde(default = "default_organize_by_date")]
     pub organize_by_date: bool,
 
+    /// Date folders under each destination. Absent: derived from
+    /// `organize_by_date` (see [`Settings::date_layout`]). Written together with
+    /// `organize_by_date` by [`Settings::set_date_layout`], so an older version
+    /// reading the file still gets a consistent value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_layout: Option<DateLayout>,
+
     /// Default behaviour applied to every account unless overridden.
     #[serde(default)]
     pub defaults: AccountBehavior,
@@ -158,6 +165,7 @@ impl Default for Settings {
             ai_routing_enabled: false,
             ai_confidence_threshold: default_ai_confidence_threshold(),
             organize_by_date: default_organize_by_date(),
+            date_layout: None,
             defaults: AccountBehavior::default(),
             accounts: HashMap::new(),
         }
@@ -165,14 +173,21 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Resolved date layout of note folders: `organize_by_date` `true` gives
-    /// [`DateLayout::YearMonth`], `false` gives [`DateLayout::None`].
+    /// Resolved date layout of note folders: the `date_layout` key when present,
+    /// otherwise `organize_by_date` `true` gives [`DateLayout::YearMonth`] and
+    /// `false` gives [`DateLayout::None`].
     pub fn date_layout(&self) -> DateLayout {
-        if self.organize_by_date {
-            DateLayout::YearMonth
-        } else {
-            DateLayout::None
+        match self.date_layout {
+            Some(layout) => layout,
+            None if self.organize_by_date => DateLayout::YearMonth,
+            None => DateLayout::None,
         }
+    }
+
+    /// Set the date layout, keeping `organize_by_date` consistent with it.
+    pub fn set_date_layout(&mut self, layout: DateLayout) {
+        self.date_layout = Some(layout);
+        self.organize_by_date = layout != DateLayout::None;
     }
 
     /// Defaults when the file is absent; an unreadable or invalid file is an

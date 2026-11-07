@@ -751,11 +751,27 @@ pub fn candidate_target(
     }
 }
 
+/// Note already exported for `candidate` under the **undated** `target`, whatever
+/// date layout filed it: looks in `target` and each of its dated folders for the
+/// candidate's date ([`DateLayout::lookup_dirs`]), so a layout change never
+/// re-exports an email.
 pub fn find_existing_proof(
     target: &Path,
     candidate: &ContextualCandidate,
 ) -> Result<Option<(PathBuf, LocalSourceProof)>> {
-    if !target.exists() {
+    for dir in DateLayout::lookup_dirs(target, candidate.date.as_ref()) {
+        if let Some(found) = find_proof_in_dir(&dir, candidate)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
+fn find_proof_in_dir(
+    target: &Path,
+    candidate: &ContextualCandidate,
+) -> Result<Option<(PathBuf, LocalSourceProof)>> {
+    if !target.is_dir() {
         return Ok(None);
     }
     for entry in fs::read_dir(target)? {
@@ -799,10 +815,10 @@ pub(crate) fn convert_raw_contextual_unlocked(
     raw_email: &[u8],
     date_layout: DateLayout,
 ) -> Result<ConversionStatus> {
-    let effective_target = candidate_target(target, candidate, date_layout);
-    if let Some((markdown, proof)) = find_existing_proof(&effective_target, candidate)? {
+    if let Some((markdown, proof)) = find_existing_proof(target, candidate)? {
         return Ok(ConversionStatus::AlreadyPresent { markdown, proof });
     }
+    let effective_target = candidate_target(target, candidate, date_layout);
     if !candidate.locations.iter().any(|known| known == location) {
         anyhow::bail!("selected IMAP location does not belong to the candidate");
     }

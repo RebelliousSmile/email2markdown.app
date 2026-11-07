@@ -762,7 +762,13 @@ fn save_settings(data: SettingsData, settings_path: &Path) -> anyhow::Result<()>
     let mut settings = Settings::load(settings_path)
         .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
     settings.export_base_dir = data.export_base_dir;
-    settings.organize_by_date = data.organize_by_date;
+    // The form only has an on/off box: keep the configured layout when it is on.
+    let layout = match (data.organize_by_date, settings.date_layout()) {
+        (false, _) => DateLayout::None,
+        (true, DateLayout::None) => DateLayout::YearMonth,
+        (true, current) => current,
+    };
+    settings.set_date_layout(layout);
     settings.defaults = AccountBehavior {
         folder_name: settings.defaults.folder_name,
         quote_depth: data.defaults.quote_depth,
@@ -2019,6 +2025,36 @@ hi
             (saved.notes_dir.as_deref(), saved.export_base_dir.as_deref()),
             (Some("C:/notes"), Some("C:/new"))
         );
+    }
+
+    #[test]
+    fn test_save_settings_checked_keeps_year_month_day() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, "date_layout: year_month_day\n").unwrap();
+
+        save_settings(settings_data("C:/new"), &path).unwrap();
+
+        let saved = Settings::load(&path).unwrap();
+        assert_eq!(
+            (saved.date_layout(), saved.organize_by_date),
+            (DateLayout::YearMonthDay, true)
+        );
+    }
+
+    #[test]
+    fn test_save_settings_unchecked_writes_none() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, "date_layout: year_month_day\n").unwrap();
+        let mut data = settings_data("C:/new");
+        data.organize_by_date = false;
+
+        save_settings(data, &path).unwrap();
+
+        let yaml = fs::read_to_string(&path).unwrap();
+        assert!(yaml.contains("date_layout: none"), "{yaml}");
+        assert!(yaml.contains("organize_by_date: false"), "{yaml}");
     }
 
     #[test]
