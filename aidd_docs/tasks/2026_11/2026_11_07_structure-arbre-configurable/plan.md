@@ -1,6 +1,6 @@
 ---
 objective: "La profondeur maximale des destinations et le motif de date des dossiers se règlent dans settings.yaml et la fenêtre de configuration, sans changement pour une installation existante."
-status: in-progress
+status: implemented
 ---
 
 <!-- Fill or omit these sections; never add, rename, or reorder one. -->
