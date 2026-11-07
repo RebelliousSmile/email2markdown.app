@@ -540,12 +540,12 @@ pub(super) fn parse_route_decisions(body: &str) -> anyhow::Result<Vec<RouteDecis
     Ok(payload.decisions)
 }
 
-/// Final destination of a row, carrying the email's `<Year>/<Month>`.
+/// Final destination of a row, carrying the email's date folders per `layout`.
 ///
-/// The auto proposal already ends with it; a manually reassigned path (cascade /
-/// free entry / bulk) comes bare from destinations.txt — append it from the email
-/// date so files always land under `<dest>/<Year>/<Month>` (no double suffix).
-/// Skipped entirely when the "organize by date" preference is off, so a bare
+/// The auto proposal already ends with them; a manually reassigned path (cascade /
+/// free entry / bulk) comes bare from destinations.txt — append them from the email
+/// date so files always land under `<dest>/<date suffix>` (no double suffix).
+/// Skipped entirely when the layout is [`DateLayout::None`], so a bare
 /// manual path stays flat instead of being silently re-dated.
 fn dated_dest_path(row: &RouteDecisionRow, layout: DateLayout) -> String {
     if layout == DateLayout::None {
@@ -729,13 +729,11 @@ struct ConfigIpcMessage {
 #[derive(serde::Deserialize)]
 struct SettingsData {
     export_base_dir: Option<String>,
-    #[serde(default = "default_organize_by_date_field")]
-    organize_by_date: bool,
+    /// Required: the form is compiled into the binary and always sends it.
+    date_layout: DateLayout,
+    #[serde(default)]
+    destination_max_depth: Option<usize>,
     defaults: DefaultsData,
-}
-
-fn default_organize_by_date_field() -> bool {
-    true
 }
 
 #[derive(serde::Deserialize)]
@@ -785,13 +783,9 @@ fn save_settings(data: SettingsData, settings_path: &Path) -> anyhow::Result<()>
     let mut settings = Settings::load(settings_path)
         .with_context(|| format!("failed to load settings from {}", settings_path.display()))?;
     settings.export_base_dir = data.export_base_dir;
-    // The form only has an on/off box: keep the configured layout when it is on.
-    let layout = match (data.organize_by_date, settings.date_layout()) {
-        (false, _) => DateLayout::None,
-        (true, DateLayout::None) => DateLayout::YearMonth,
-        (true, current) => current,
-    };
-    settings.set_date_layout(layout);
+    settings.set_date_layout(data.date_layout);
+    // `0` is refused by `Settings::save`, before the file is touched.
+    settings.destination_max_depth = data.destination_max_depth;
     settings.defaults = AccountBehavior {
         folder_name: settings.defaults.folder_name,
         quote_depth: data.defaults.quote_depth,
@@ -1790,7 +1784,7 @@ hi
     fn settings_data(export_base_dir: &str) -> SettingsData {
         serde_json::from_value(serde_json::json!({
             "export_base_dir": export_base_dir,
-            "organize_by_date": true,
+            "date_layout": "year_month",
             "defaults": {}
         }))
         .unwrap()
@@ -2051,33 +2045,52 @@ hi
     }
 
     #[test]
-    fn test_save_settings_checked_keeps_year_month_day() {
+    fn test_save_settings_writes_layout_and_depth() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("settings.yaml");
-        fs::write(&path, "date_layout: year_month_day\n").unwrap();
+        fs::write(&path, "organize_by_date: false\n").unwrap();
+        let mut data = settings_data("C:/new");
+        data.date_layout = DateLayout::YearMonthDay;
+        data.destination_max_depth = Some(3);
 
-        save_settings(settings_data("C:/new"), &path).unwrap();
+        save_settings(data, &path).unwrap();
 
-        let saved = Settings::load(&path).unwrap();
-        assert_eq!(
-            (saved.date_layout(), saved.organize_by_date),
-            (DateLayout::YearMonthDay, true)
-        );
+        let yaml = fs::read_to_string(&path).unwrap();
+        assert!(yaml.contains("date_layout: year_month_day"), "{yaml}");
+        assert!(yaml.contains("destination_max_depth: 3"), "{yaml}");
+        assert!(yaml.contains("organize_by_date: true"), "{yaml}");
     }
 
     #[test]
-    fn test_save_settings_unchecked_writes_none() {
+    fn test_save_settings_with_none_layout() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("settings.yaml");
         fs::write(&path, "date_layout: year_month_day\n").unwrap();
         let mut data = settings_data("C:/new");
-        data.organize_by_date = false;
+        data.date_layout = DateLayout::None;
 
         save_settings(data, &path).unwrap();
 
         let yaml = fs::read_to_string(&path).unwrap();
         assert!(yaml.contains("date_layout: none"), "{yaml}");
         assert!(yaml.contains("organize_by_date: false"), "{yaml}");
+    }
+
+    #[test]
+    fn test_save_settings_with_zero_depth_keeps_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        fs::write(&path, "organize_by_date: false\n").unwrap();
+        let mut data = settings_data("C:/new");
+        data.destination_max_depth = Some(0);
+
+        let err = format!("{:#}", save_settings(data, &path).unwrap_err());
+
+        assert!(err.contains("destination_max_depth"), "{err}");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "organize_by_date: false\n"
+        );
     }
 
     #[test]

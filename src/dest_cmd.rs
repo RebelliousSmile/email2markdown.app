@@ -598,7 +598,7 @@ pub fn scan_folders(
         .collect())
 }
 
-/// Email notes of one destination, per year of their `<YYYY>/<MM>` folder.
+/// Email notes of one destination, per year of their date suffix.
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct EmailStats {
     /// Email count per year folder.

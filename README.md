@@ -93,7 +93,7 @@ Connecte les comptes IMAP configurés, exporte les emails en fichiers Markdown, 
 1. Connexion IMAP → téléchargement des emails
 2. Conversion en Markdown : frontmatter YAML limité aux données de la note, en-tête et corps du courriel dans un bloc ```` ```email ```` TOML (répertoire d'export comme zone tampon)
 3. Calcul du chemin de destination selon les règles de `destinations.yaml`
-4. Déplacement automatique vers `notes_dir/<chemin>/<Année>/<Mois>`
+4. Déplacement automatique vers `notes_dir/<chemin>/<dossiers datés>`, selon le motif `date_layout` (par défaut `<Année>/<Mois>`)
 
 **Format d'une note exportée :**
 
@@ -124,7 +124,7 @@ Les fichiers enregistrés à côté de la note sont liés en wikilinks Obsidian 
 
 Les notes exportées avant ce format gardent leur frontmatter complet et restent lues.
 
-Si aucune règle ne correspond, l'email atterrit dans le dossier fourre-tout : `notes_dir/Perso/Messy/Emails/<Année>/<Mois>`.
+Si aucune règle ne correspond, l'email atterrit dans le dossier fourre-tout : `notes_dir/Perso/Messy/Emails`, suivi des dossiers datés du motif `date_layout`.
 
 Si `destinations.yaml` est absent ou non configuré, un avertissement est affiché et tous les emails tombent dans le fourre-tout — l'export continue sans erreur fatale.
 
@@ -265,6 +265,14 @@ export_base_dir: C:/Users/VotreNom/Documents/Emails
 # Racine du second cerveau — les chemins de destinations.yaml sont joints ici
 notes_dir: C:/Users/VotreNom/Documents/Notes
 
+# Dossiers datés ajoutés sous chaque destination :
+# none | year | year_month | year_month_day (défaut : year_month)
+# date_layout: year_month
+
+# Profondeur maximale des destinations sous la branche, dossiers datés non comptés
+# (Perso/Banque = 1, Perso/Banque/BNP = 2). Minimum 1, défaut 2.
+# destination_max_depth: 2
+
 # Chemin vers destinations.yaml (défaut : <config_dir>/destinations.yaml)
 # destinations_file: C:/Users/VotreNom/.config/email-to-markdown/destinations.yaml
 
@@ -288,6 +296,33 @@ defaults:
 #   Outlook:
 #     collect_contacts: true
 ```
+
+#### Motif de date et profondeur des destinations
+
+`date_layout` choisit les dossiers datés créés sous une destination pour un
+email du 3 octobre 2026 :
+
+| Valeur | Dossier final |
+| ------ | ------------- |
+| `none` | `Perso/Banque` |
+| `year` | `Perso/Banque/2026` |
+| `year_month` (défaut) | `Perso/Banque/2026/10` |
+| `year_month_day` | `Perso/Banque/2026/10/03` |
+
+L'ancienne clé `organize_by_date` reste lue : sans `date_layout`, `true`
+équivaut à `year_month` et `false` à `none`. Quand `date_layout` est présent,
+il l'emporte, et la fenêtre **Paramètres…** écrit les deux clés pour qu'elles
+restent cohérentes. Changer de motif ne déplace aucune note : les notes déjà
+rangées sous un ancien motif restent reconnues (statistiques, analyse des
+dossiers, détection des doublons).
+
+`destination_max_depth` fixe le nombre maximal de niveaux d'une destination
+sous sa branche (`Perso`, `Pro`…), dossiers datés non comptés. Avec la valeur
+par défaut 2, l'analyse des dossiers propose `Perso/Banque` et
+`Perso/Banque/BNP`, mais pas `Perso/Banque/BNP/Livret`. La valeur 0 est
+refusée au chargement comme à l'enregistrement. Une destination plus profonde
+reste utilisable : `dest add` affiche un avertissement et la fenêtre
+Destinations la marque « trop profonde ».
 
 #### Images de signature
 

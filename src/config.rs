@@ -105,7 +105,8 @@ pub struct Settings {
     pub export_base_dir: Option<String>,
 
     /// Root of the user's second-brain tree.
-    /// Plain base path — joined with `(Perso|Pro)/<Category>/<Sub>/<Year>/<Month>`.
+    /// Plain base path — joined with `<Branch>/<1 to destination_max_depth levels>`
+    /// plus the date suffix of `date_layout`.
     /// NOT the tree of valid paths; that tree is defined by `destinations.yaml`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes_dir: Option<String>,
@@ -127,8 +128,9 @@ pub struct Settings {
     #[serde(default = "default_ai_confidence_threshold")]
     pub ai_confidence_threshold: f32,
 
-    /// Whether converted emails land under `<dest>/<Year>/<Month>` (`true`) or flat
-    /// at `<dest>` (`false`). Applies uniformly to the deterministic router, manual
+    /// Legacy on/off switch of the date folders, kept in sync by
+    /// [`Settings::set_date_layout`]; `date_layout` wins when present. `true`
+    /// means `<dest>/<Year>/<Month>`, `false` flat at `<dest>`. Applies uniformly to the deterministic router, manual
     /// picks in the route-review window, and the contextual (right-click) export —
     /// so the destination layout never depends on which flow produced the file.
     /// Defaults to `true`, the router's historical behavior.

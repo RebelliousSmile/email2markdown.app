@@ -178,6 +178,25 @@ pub(super) fn build_progress_window(
     Ok((window, webview, window_id))
 }
 
+/// JSON injected into the configuration window: the stored settings plus the
+/// resolved `date_layout` and `destination_max_depth`, so the page never
+/// duplicates their fallbacks.
+fn settings_window_json(settings: &crate::config::Settings) -> Result<String> {
+    let mut value = serde_json::to_value(settings).context("failed to serialize settings")?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "date_layout".into(),
+            serde_json::to_value(settings.date_layout())
+                .context("failed to serialize date_layout")?,
+        );
+        object.insert(
+            "destination_max_depth".into(),
+            settings.destination_max_depth().into(),
+        );
+    }
+    serde_json::to_string(&value).context("failed to serialize settings")
+}
+
 pub(super) fn build_config_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
@@ -191,7 +210,7 @@ pub(super) fn build_config_window(
         .with_context(|| format!("failed to load accounts from {}", accounts_path.display()))?;
 
     let html_template = include_str!("../../assets/config_window.html");
-    let settings_json = serde_json::to_string(&settings).context("failed to serialize settings")?;
+    let settings_json = settings_window_json(&settings)?;
     let accounts_json =
         serde_json::to_string(&raw_accounts).context("failed to serialize accounts")?;
     let html = html_template
@@ -881,7 +900,23 @@ fn apply_review(
 
 #[cfg(test)]
 mod tests {
-    use super::{allow_navigation, escape_json_for_script, reply_changed_accounts};
+    use super::{
+        allow_navigation, escape_json_for_script, reply_changed_accounts, settings_window_json,
+    };
+
+    #[test]
+    fn test_settings_window_json_resolves_legacy_settings() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "organize_by_date: false\n").unwrap();
+        let settings = crate::config::Settings::load(&path).unwrap();
+
+        let json: serde_json::Value =
+            serde_json::from_str(&settings_window_json(&settings).unwrap()).unwrap();
+
+        assert_eq!(json["date_layout"], "none");
+        assert_eq!(json["destination_max_depth"], 2);
+    }
 
     #[test]
     fn test_reply_changed_accounts_with_move_account_ok() {

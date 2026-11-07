@@ -598,7 +598,8 @@ pub fn load_destinations_from(settings_file: &Path) -> Result<Vec<Destination>> 
     if !dest_path.exists() {
         eprintln!(
             "warning: destinations file not found at {} — \
-             all emails will fall to the default path (Perso/Messy/Emails/<Year>/<Month>)",
+             all emails will fall to the default path (Perso/Messy/Emails, plus the \
+             date folders of date_layout)",
             dest_path.display()
         );
         return Ok(vec![]);
@@ -843,7 +844,8 @@ pub fn parse_destinations(content: &str) -> Result<Vec<Destination>> {
 
 // ── Router ───────────────────────────────────────────────────────────────────
 
-/// Default fallback path (relative, without year/month — those are appended by the router).
+/// Default fallback path (relative, without date folders — the router appends
+/// those of the configured [`DateLayout`]).
 pub const DEFAULT_BASE: &str = "Perso/Messy/Emails";
 
 /// Route a single email deterministically using the rules from `destinations.txt`.

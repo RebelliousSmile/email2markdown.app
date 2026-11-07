@@ -904,7 +904,7 @@
   document.getElementById('btn-save').addEventListener('click', function () { send('save'); });
   document.getElementById('btn-cancel').addEventListener('click', function () { send('cancel'); });
 
-  // folders: [{path, emails}] — uncovered <Branch>/<Category>/<Subcategory> with their email count.
+  // folders: [{path, emails}] — uncovered destinations (1 to max_depth levels below a branch) with their email count.
   function renderFolderScan(folders) {
     var list = document.getElementById('scan-list');
     var status = document.getElementById('scan-status');

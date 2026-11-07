@@ -85,6 +85,18 @@
     border-color: #1e88e5;
     box-shadow: 0 0 0 2px rgba(30,136,229,0.15);
   }
+  .field select {
+    padding: 5px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    background: #fff;
+  }
+  .field select:focus {
+    outline: none;
+    border-color: #1e88e5;
+    box-shadow: 0 0 0 2px rgba(30,136,229,0.15);
+  }
   .field input[type="number"] {
     width: 80px;
     padding: 5px 8px;
@@ -416,10 +428,21 @@
         <input type="text" id="export-base-dir" placeholder="Chemin vers le dossier d'export (vide = non défini)">
       </div>
       <div class="field">
-        <label for="organize-by-date">Classer par année/mois</label>
-        <input type="checkbox" id="organize-by-date">
-        <span class="field-hint">Sinon, dépôt à la racine du dossier de destination</span>
+        <label for="date-layout">Organisation par date</label>
+        <select id="date-layout">
+          <option value="none">Aucune</option>
+          <option value="year">Année</option>
+          <option value="year_month">Année / Mois</option>
+          <option value="year_month_day">Année / Mois / Jour</option>
+        </select>
+        <span class="field-hint">Aucune : dépôt directement dans la destination</span>
       </div>
+      <div class="field">
+        <label for="destination-max-depth">Profondeur maximale</label>
+        <input type="number" id="destination-max-depth" min="1" step="1" value="2">
+        <span class="field-hint">Niveaux sous la branche, dossiers datés non comptés</span>
+      </div>
+      <div id="destination-max-depth-error" class="error-msg">La profondeur maximale doit être un entier ≥ 1.</div>
     </div>
 
     <div class="section">
@@ -619,8 +642,9 @@
       ? data.export_base_dir
       : '';
 
-  document.getElementById('organize-by-date').checked =
-    data.organize_by_date !== undefined ? data.organize_by_date : true;
+  // Both values are resolved by the binary (settings_window_json): no fallback here.
+  document.getElementById('date-layout').value = data.date_layout;
+  document.getElementById('destination-max-depth').value = data.destination_max_depth;
 
   document.getElementById('quote-depth').value =
     defaults.quote_depth !== undefined ? defaults.quote_depth : 1;
@@ -660,6 +684,17 @@
     }
     errorEl.style.display = 'none';
 
+    var maxDepthError = document.getElementById('destination-max-depth-error');
+    var maxDepthInput = document.getElementById('destination-max-depth');
+    var maxDepthVal = maxDepthInput.value.trim();
+    var maxDepth = parseInt(maxDepthVal, 10);
+    if (maxDepthVal === '' || isNaN(maxDepth) || maxDepth < 1 || String(maxDepth) !== maxDepthVal) {
+      maxDepthError.style.display = 'block';
+      maxDepthInput.focus();
+      return;
+    }
+    maxDepthError.style.display = 'none';
+
     var batchSizeVal = document.getElementById('batch-size').value.trim();
     var batchSize = batchSizeVal === '' ? 0 : parseInt(batchSizeVal, 10);
     if (isNaN(batchSize) || batchSize < 0) batchSize = 0;
@@ -670,7 +705,8 @@
       action: 'save',
       data: {
         export_base_dir: exportDir.length > 0 ? exportDir : null,
-        organize_by_date: document.getElementById('organize-by-date').checked,
+        date_layout: document.getElementById('date-layout').value,
+        destination_max_depth: maxDepth,
         defaults: {
           quote_depth: quoteDepth,
           batch_size: batchSize,
