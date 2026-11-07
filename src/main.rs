@@ -13,7 +13,7 @@ use email_to_markdown::thunderbird; // [1] Import Thunderbird
 use email_to_markdown::tray;
 
 /// Detach the tray process from a hosting console (e.g. Windows Terminal),
-/// best-effort. Redirects stdout/stderr to `NUL` first so any later
+/// best-effort. Redirects stdin/stdout/stderr to `NUL` first so any later
 /// `println!`/`eprintln!` in `tray.rs` writes silently instead of panicking
 /// on the now-invalid inherited console handle.
 #[cfg(all(windows, feature = "tray"))]
@@ -25,7 +25,7 @@ fn detach_console() {
         CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::Console::{
-        FreeConsole, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+        FreeConsole, SetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
     };
 
     let nul: Vec<u16> = std::ffi::OsStr::new("NUL")
@@ -45,8 +45,12 @@ fn detach_console() {
         )
     };
 
+    // stdin too: after `FreeConsole` an inherited console input handle is dead,
+    // and `Command::spawn` (inheriting stdio by default, e.g. in `self_replace`)
+    // then fails with ERROR_NOT_SUPPORTED (os error 50).
     if handle != INVALID_HANDLE_VALUE {
         unsafe {
+            SetStdHandle(STD_INPUT_HANDLE, handle);
             SetStdHandle(STD_OUTPUT_HANDLE, handle);
             SetStdHandle(STD_ERROR_HANDLE, handle);
         }
