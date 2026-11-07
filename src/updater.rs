@@ -192,7 +192,7 @@ pub fn download_and_apply(release: &Release, on_progress: impl Fn(&str)) -> Resu
         &std::env::temp_dir(),
         MAX_ASSET_BYTES,
         &on_progress,
-        |path| Ok(self_replace::self_replace(path)?),
+        |path| self_replace::self_replace(path).context("failed to replace the running binary"),
     )?;
 
     // The binary is already replaced: a stale "Programs and Features" entry is
