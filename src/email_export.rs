@@ -438,8 +438,8 @@ pub struct ExportContext<'a> {
     pub dests: &'a [Destination],
     /// Optional source proof used by contextual exports.
     pub source_proof: Option<&'a crate::contextual_export::LocalSourceProof>,
-    /// Whether `route_email` should nest the destination under `<Year>/<Month>`.
-    pub organize_by_date: bool,
+    /// Date folders `route_email` nests the destination under.
+    pub date_layout: crate::date_layout::DateLayout,
     /// Files already present in `export_directory`, shared by the whole pass.
     /// `None` makes each duplicate check walk the directory again.
     pub exported: Option<&'a mut ExportedIndex>,
@@ -457,8 +457,8 @@ pub struct ExportContext<'a> {
 pub struct FolderRouting<'a> {
     /// Destinations parsed from `destinations.txt`.
     pub dests: &'a [Destination],
-    /// Whether notes go into `YYYY/MM` sub-directories.
-    pub organize_by_date: bool,
+    /// Date folders notes go into.
+    pub date_layout: crate::date_layout::DateLayout,
     /// Ledger of the account (empty without `skip_existing`).
     pub ledger: &'a crate::handled::LedgerProofs,
     /// Every `Message-ID` of `ledger`: messages already sorted or discarded.
@@ -777,7 +777,7 @@ pub fn export_to_markdown(
         }),
     };
 
-    let decision = route_email(&meta, dests, ctx.organize_by_date);
+    let decision = route_email(&meta, dests, ctx.date_layout);
 
     Ok(Some((filepath, decision)))
 }
@@ -2275,7 +2275,7 @@ impl ImapExporter {
         &mut self,
         target: &Path,
         selected: &[crate::contextual_export::ContextualCandidate],
-        organize_by_date: bool,
+        date_layout: crate::date_layout::DateLayout,
     ) -> Result<Vec<crate::contextual_export::MessageConversionResult>> {
         use crate::contextual_export::{
             candidate_target, convert_raw_contextual_unlocked, find_existing_proof,
@@ -2298,7 +2298,7 @@ impl ImapExporter {
         let mut pending = Vec::new();
         for candidate in selected {
             let key = candidate.logical_key();
-            let effective_target = candidate_target(target, candidate, organize_by_date);
+            let effective_target = candidate_target(target, candidate, date_layout);
             if let Some((markdown, proof)) = find_existing_proof(&effective_target, candidate)? {
                 results.push(MessageConversionResult {
                     candidate_key: key,
@@ -2385,7 +2385,7 @@ impl ImapExporter {
                         candidate,
                         location,
                         body,
-                        organize_by_date,
+                        date_layout,
                     ) {
                         Ok(status) => results.push(MessageConversionResult {
                             candidate_key: candidate.logical_key(),
@@ -2932,7 +2932,7 @@ impl ImapExporter {
                                 debug_mode: self.debug_mode,
                                 dests: routing.dests,
                                 source_proof: source_proof.as_ref(),
-                                organize_by_date: routing.organize_by_date,
+                                date_layout: routing.date_layout,
                                 exported: Some(&mut exported),
                                 quarantine: self.account.delete_after_export.then(|| Quarantine {
                                     root: &quarantine_root,
@@ -3157,9 +3157,9 @@ impl ImapExporter {
         // ── Parse destinations.txt ONCE (before the folder loop) ──────────────
         // Shared with the tray "Reprendre le tri" scan via `route::load_destinations`.
         let dests: Vec<Destination> = crate::route::load_destinations_from(&paths.settings)?;
-        let organize_by_date = crate::config::Settings::load(&paths.settings)
+        let date_layout = crate::config::Settings::load(&paths.settings)
             .context("failed to load settings")?
-            .organize_by_date;
+            .date_layout();
         self.deletion_log = paths.deletion_log.clone();
 
         // The ledger is read once per run and shared by every folder.
@@ -3248,7 +3248,7 @@ impl ImapExporter {
                     cancel_token,
                     FolderRouting {
                         dests: &dests,
-                        organize_by_date,
+                        date_layout,
                         ledger: &ledger,
                         handled: &handled,
                     },
@@ -3642,7 +3642,7 @@ abc123
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: true,
+            date_layout: crate::date_layout::DateLayout::YearMonth,
             exported: Some(&mut index),
             quarantine: None,
         };
@@ -4001,7 +4001,7 @@ abc123
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: false,
+            date_layout: crate::date_layout::DateLayout::None,
             exported: None,
             quarantine: None,
         };
@@ -4029,7 +4029,7 @@ abc123
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: false,
+            date_layout: crate::date_layout::DateLayout::None,
             exported: None,
             quarantine: None,
         };
@@ -4254,7 +4254,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: true,
+            date_layout: crate::date_layout::DateLayout::YearMonth,
             exported: None,
             quarantine: None,
         };
@@ -4319,7 +4319,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: true,
+            date_layout: crate::date_layout::DateLayout::YearMonth,
             exported: None,
             quarantine: None,
         };
@@ -4352,7 +4352,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: true,
+            date_layout: crate::date_layout::DateLayout::YearMonth,
             exported: None,
             quarantine: Some(Quarantine {
                 root: &quarantine_root,
@@ -4387,7 +4387,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: true,
+            date_layout: crate::date_layout::DateLayout::YearMonth,
             exported: None,
             quarantine: None,
         };
@@ -4432,7 +4432,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: true,
+            date_layout: crate::date_layout::DateLayout::YearMonth,
             exported: None,
             quarantine: None,
         };
@@ -4503,7 +4503,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: false,
+            date_layout: crate::date_layout::DateLayout::None,
             exported: None,
             quarantine,
         };
@@ -4605,7 +4605,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: false,
+            date_layout: crate::date_layout::DateLayout::None,
             exported: None,
             quarantine: Some(Quarantine {
                 root: &root,
@@ -4838,7 +4838,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             debug_mode: false,
             dests: &[],
             source_proof: None,
-            organize_by_date: true,
+            date_layout: crate::date_layout::DateLayout::YearMonth,
             exported: None,
             quarantine: None,
         };

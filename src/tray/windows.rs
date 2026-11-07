@@ -866,11 +866,11 @@ fn apply_review(
     allowed_files: &mut HashSet<String>,
 ) -> Result<super::ipc::RouteApplyReport> {
     let rows = super::ipc::parse_route_decisions(body)?;
-    let organize_by_date = crate::config::Settings::load(&crate::config::settings_path())
+    let date_layout = crate::config::Settings::load(&crate::config::settings_path())
         .context("failed to load settings")?
-        .organize_by_date;
+        .date_layout();
     let mut report =
-        super::ipc::apply_route_decisions(&rows, notes_dir, allowed_files, organize_by_date)?;
+        super::ipc::apply_route_decisions(&rows, notes_dir, allowed_files, date_layout)?;
     // Sorted notes leave the export folder: remember them so the
     // next export does not propose them again.
     crate::handled::record_proofs(report.deletions.iter().map(|d| &d.proof));

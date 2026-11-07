@@ -1,3 +1,4 @@
+use crate::date_layout::DateLayout;
 use crate::quote_link;
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
@@ -856,27 +857,15 @@ pub const DEFAULT_BASE: &str = "Perso/Messy/Emails";
 /// If no rule matches, the `default`-tagged entry is used; if none exists, the
 /// hard-coded fallback `Perso/Messy/Emails` is returned.
 ///
-/// The returned `rel_path` includes `<Year>/<Month>` derived from `meta.date` when
-/// `organize_by_date` is `true`; otherwise it is the bare destination path.
+/// The returned `rel_path` carries the date folders of `layout` derived from
+/// `meta.date` (none for [`DateLayout::None`]).
 ///
 /// # No Regex in this function
 /// Subject matching uses `str::contains()` (case-insensitive substring). The keyword
 /// `k` is dynamic (read from `destinations.txt`), so `static LazyLock<Regex>` is
 /// inapplicable. `contains()` is correct and sufficient here.
-pub fn route_email(
-    meta: &EmailMeta,
-    dests: &[Destination],
-    organize_by_date: bool,
-) -> RouteDecision {
-    let dated = |base: &str| -> String {
-        if organize_by_date {
-            let year = meta.date.format("%Y").to_string();
-            let month = meta.date.format("%m").to_string();
-            format!("{}/{}/{}", base, year, month)
-        } else {
-            base.to_string()
-        }
-    };
+pub fn route_email(meta: &EmailMeta, dests: &[Destination], layout: DateLayout) -> RouteDecision {
+    let dated = |base: &str| -> String { layout.apply(base, &meta.date) };
 
     // Evaluate destinations in file order; within each destination, evaluate rules in
     // declaration order. First match wins — no priority hierarchy between rule types.
@@ -1252,43 +1241,6 @@ fn reject_symlink_path(notes_dir: &Path, target: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Whether `rel_path` already ends with a `<Year>/<Month>` dated suffix
-/// (4-digit `19xx`/`20xx` then 2-digit `01`–`12`).
-///
-/// No `Regex::new` — a per-segment character check is sufficient and avoids a
-/// hot-path regex (project rule `02-regex-static-lazylock`).
-pub fn ends_with_year_month(rel_path: &str) -> bool {
-    let segs: Vec<&str> = rel_path.trim_end_matches('/').split('/').collect();
-    if segs.len() < 2 {
-        return false;
-    }
-    let year = segs[segs.len() - 2];
-    let month = segs[segs.len() - 1];
-    let year_ok = year.len() == 4
-        && year.bytes().all(|b| b.is_ascii_digit())
-        && (year.starts_with("19") || year.starts_with("20"));
-    let month_ok = month.len() == 2
-        && month.bytes().all(|b| b.is_ascii_digit())
-        && ("01"..="12").contains(&month);
-    year_ok && month_ok
-}
-
-/// Append `<year>/<month>` to a destination path **unless it already carries a
-/// dated suffix**.
-///
-/// The deterministic router (`route_email`) appends `<Year>/<Month>` to its
-/// proposal, but a path chosen manually in the review window (cascade, free
-/// entry, bulk assign) comes straight from `destinations.txt` — bare, without
-/// the dated subfolder. This normalizer guarantees every applied destination
-/// lands under `<dest>/<Year>/<Month>`, with no double `…/2026/06/2026/06`.
-pub fn ensure_year_month(rel_path: &str, year: &str, month: &str) -> String {
-    if ends_with_year_month(rel_path) {
-        rel_path.trim_end_matches('/').to_string()
-    } else {
-        format!("{}/{}/{}", rel_path.trim_end_matches('/'), year, month)
-    }
 }
 
 // ── Apply ────────────────────────────────────────────────────────────────────

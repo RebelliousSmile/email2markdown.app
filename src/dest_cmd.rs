@@ -12,6 +12,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::config;
+use crate::date_layout;
 use crate::destinations::{self, DestinationEntry, DestinationRule, DestinationsConfig};
 use crate::route;
 
@@ -450,7 +451,7 @@ fn suggest(dest_file: &Path) -> Result<()> {
                 continue;
             }
 
-            let path = strip_trailing_year_month(input);
+            let path = date_layout::strip_date_suffix(input);
             destinations::upsert_entry(&mut cfg, &path, &[DestinationRule::Domain(domain.clone())]);
             added += 1;
             break;
@@ -567,7 +568,8 @@ pub fn scan_folders(root: &Path, branches: &[String]) -> Result<Vec<(String, usi
         let Some(rel_dir) = file.parent().and_then(|p| p.strip_prefix(root).ok()) else {
             continue;
         };
-        let destination = destination_of(&rel_dir.to_string_lossy().replace('\\', "/"));
+        let destination =
+            date_layout::destination_of(&rel_dir.to_string_lossy().replace('\\', "/"));
         if destination.split('/').count() == DESTINATION_SEGMENTS {
             by_destination.entry(destination).or_default().push(file);
         }
@@ -611,7 +613,7 @@ pub fn email_stats(dest_dir: &Path) -> Result<EmailStats> {
             continue;
         };
         let rel_dir = rel_dir.to_string_lossy().replace('\\', "/");
-        if !destination_of(&rel_dir).is_empty() || !is_email_note(&file) {
+        if !date_layout::destination_of(&rel_dir).is_empty() || !is_email_note(&file) {
             continue;
         }
         match rel_dir
@@ -624,20 +626,6 @@ pub fn email_stats(dest_dir: &Path) -> Result<EmailStats> {
         }
     }
     Ok(stats)
-}
-
-/// Destination of a note directory: `rel_dir` minus a trailing `<YYYY>/<MM>`
-/// or `<YYYY>/<MM>/<bucket>` (forward slashes).
-fn destination_of(rel_dir: &str) -> String {
-    let segs: Vec<&str> = rel_dir.split('/').filter(|s| !s.is_empty()).collect();
-    let keep = if route::ends_with_year_month(&segs.join("/")) {
-        segs.len() - 2
-    } else if segs.len() >= 3 && route::ends_with_year_month(&segs[..segs.len() - 1].join("/")) {
-        segs.len() - 3
-    } else {
-        segs.len()
-    };
-    segs[..keep].join("/")
 }
 
 /// Whether the note at `path` is an exported email (has a `from` header).
@@ -748,17 +736,6 @@ pub fn orphaned_entries(notes_dir: &Path, cfg: &DestinationsConfig) -> Vec<Strin
         .filter(|e| !notes_dir.join(&e.path).is_dir())
         .map(|e| e.path.clone())
         .collect()
-}
-
-/// Strip a trailing `<Year>/<Month>` from a user-typed path (the router re-appends it).
-pub fn strip_trailing_year_month(path: &str) -> String {
-    let trimmed = path.trim_end_matches('/');
-    if route::ends_with_year_month(trimmed) {
-        let segs: Vec<&str> = trimmed.split('/').collect();
-        segs[..segs.len() - 2].join("/")
-    } else {
-        trimmed.to_string()
-    }
 }
 
 /// Upsert a destination into `dest_file`: validate the path, apply rules, note and

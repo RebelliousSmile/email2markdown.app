@@ -7,6 +7,7 @@ use anyhow::Context;
 use serde_json::Value;
 
 use crate::config::{self, AccountBehavior, RawAccount, Settings};
+use crate::date_layout::DateLayout;
 use crate::tray_actions::{action_open_config, ActionResult};
 
 /// Read a string field from a JSON object, `None` if missing or not a string.
@@ -523,18 +524,14 @@ pub(super) fn parse_route_decisions(body: &str) -> anyhow::Result<Vec<RouteDecis
 /// date so files always land under `<dest>/<Year>/<Month>` (no double suffix).
 /// Skipped entirely when the "organize by date" preference is off, so a bare
 /// manual path stays flat instead of being silently re-dated.
-fn dated_dest_path(row: &RouteDecisionRow, organize_by_date: bool) -> String {
-    if !organize_by_date {
+fn dated_dest_path(row: &RouteDecisionRow, layout: DateLayout) -> String {
+    if layout == DateLayout::None {
         return row.dest_path.clone();
     }
     match read_note_header_field(Path::new(&row.file), "date")
         .and_then(|d| chrono::DateTime::parse_from_rfc3339(d.trim()).ok())
     {
-        Some(dt) => crate::route::ensure_year_month(
-            &row.dest_path,
-            &dt.format("%Y").to_string(),
-            &dt.format("%m").to_string(),
-        ),
+        Some(dt) => layout.ensure(&row.dest_path, &dt),
         // Date unreadable/unparseable → keep the path as-is (no guess).
         None => row.dest_path.clone(),
     }
@@ -551,7 +548,7 @@ pub(super) fn apply_route_decisions(
     rows: &[RouteDecisionRow],
     notes_dir: &Path,
     allowed: &mut HashSet<String>,
-    organize_by_date: bool,
+    layout: DateLayout,
 ) -> anyhow::Result<RouteApplyReport> {
     // Pass 1 — validation only, no side effect.
     let mut dest_paths = Vec::with_capacity(rows.len());
@@ -562,7 +559,7 @@ pub(super) fn apply_route_decisions(
         if row.dest_path.trim().is_empty() {
             anyhow::bail!("empty destination path for file {:?}", row.file);
         }
-        let dest_path = dated_dest_path(row, organize_by_date);
+        let dest_path = dated_dest_path(row, layout);
         // Anti-traversal validation — rejects "..", "\", absolute paths.
         crate::route::join_safe_segments(notes_dir, &dest_path).with_context(|| {
             format!(
@@ -1309,6 +1306,7 @@ mod tests {
         RouteApplyReport, RouteDecisionRow, SettingsData,
     };
     use crate::config::{load_raw_accounts, RawAccount, Settings};
+    use crate::date_layout::DateLayout;
     use crate::destinations::{DestinationEntry, DestinationsConfig};
     use std::collections::HashSet;
     use std::fs;
@@ -1518,7 +1516,13 @@ Body
             (&fx.files[2], "Travail"),
         ]);
 
-        apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), false).unwrap();
+        apply_route_decisions(
+            &decisions,
+            &fx.notes,
+            &mut allowed(&fx.files),
+            DateLayout::None,
+        )
+        .unwrap();
 
         assert_eq!(
             (
@@ -1535,7 +1539,7 @@ Body
     }
 
     #[test]
-    fn test_apply_route_decisions_organize_by_date_single_suffix() {
+    fn test_apply_route_decisions_year_month_single_suffix() {
         let fx = route_fixture();
         let decisions = rows(&[
             (&fx.files[0], "Perso/Banque"),
@@ -1548,7 +1552,13 @@ Body
             .join("2026")
             .join("06");
 
-        apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), true).unwrap();
+        apply_route_decisions(
+            &decisions,
+            &fx.notes,
+            &mut allowed(&fx.files),
+            DateLayout::YearMonth,
+        )
+        .unwrap();
 
         assert_eq!(
             (md_names(&dated), dated.join("2026").exists()),
@@ -1584,7 +1594,7 @@ hi
             dest_path: "Perso/Banque".to_string(),
         };
 
-        let dated = dated_dest_path(&row, true);
+        let dated = dated_dest_path(&row, DateLayout::YearMonth);
 
         assert_eq!(dated, "Perso/Banque/2026/07");
     }
@@ -1598,8 +1608,13 @@ hi
             (&fx.files[2], "Travail"),
         ]);
 
-        let err = apply_route_decisions(&decisions, &fx.notes, &mut allowed(&fx.files), false)
-            .unwrap_err();
+        let err = apply_route_decisions(
+            &decisions,
+            &fx.notes,
+            &mut allowed(&fx.files),
+            DateLayout::None,
+        )
+        .unwrap_err();
 
         assert!(format!("{:#}", err).contains("b.md"));
         assert_eq!(md_names(&fx.staging), ["a.md", "b.md", "c.md"]);
@@ -1612,7 +1627,8 @@ hi
         let decisions = rows(&[(&fx.files[0], "Perso"), (&fx.files[1], "Perso")]);
         let mut allowed = allowed(&fx.files[..1]);
 
-        let err = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap_err();
+        let err = apply_route_decisions(&decisions, &fx.notes, &mut allowed, DateLayout::None)
+            .unwrap_err();
 
         assert!(format!("{:#}", err).contains("b.md"));
         assert_eq!(md_names(&fx.staging), ["a.md", "b.md", "c.md"]);
@@ -1630,7 +1646,8 @@ hi
         fs::remove_file(&fx.files[1]).unwrap();
         let mut allowed = allowed(&fx.files);
 
-        let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
+        let report =
+            apply_route_decisions(&decisions, &fx.notes, &mut allowed, DateLayout::None).unwrap();
 
         assert_eq!(
             report,
@@ -1653,7 +1670,8 @@ hi
         let decisions = rows(&[(&fx.files[0], "Perso")]);
         let mut allowed = allowed(&fx.files);
 
-        let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
+        let report =
+            apply_route_decisions(&decisions, &fx.notes, &mut allowed, DateLayout::None).unwrap();
 
         assert_eq!(report.deletions.len(), 1);
         assert_eq!(
@@ -1681,7 +1699,8 @@ hi
         let decisions = rows(&[(&fx.files[0], "Perso")]);
         let mut allowed = allowed(&fx.files);
 
-        let report = apply_route_decisions(&decisions, &fx.notes, &mut allowed, false).unwrap();
+        let report =
+            apply_route_decisions(&decisions, &fx.notes, &mut allowed, DateLayout::None).unwrap();
 
         assert!(report.deletions.is_empty());
     }

@@ -3,6 +3,7 @@ pub mod calendar; // Calendar invitation (VEVENT) summary for notes
 pub mod cleaner; // Email body cleaner pipeline
 pub mod config;
 pub mod contextual_export;
+pub mod date_layout; // Date suffix of note folders (YYYY, YYYY/MM, …)
 pub mod deletion_log; // Persistent log of server deletion outcomes
 pub mod dest_cmd; // `dest` CLI subcommand (list, add, suggest)
 pub mod destinations; // YAML storage for routing destinations

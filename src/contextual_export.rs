@@ -4,6 +4,7 @@
 //! shell integration. Network orchestration lives on `ImapExporter`, while the
 //! query construction, header parsing and logical-message merging stay testable.
 
+use crate::date_layout::DateLayout;
 use crate::route::{normalize_address, MatchRule};
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
@@ -734,20 +735,18 @@ pub fn read_source_proof(path: &Path) -> Result<Option<LocalSourceProof>> {
 /// `route::route_email`'s dating so contextual export and the deterministic router
 /// place converted emails identically regardless of which flow produced the file.
 ///
-/// Returns `target` unchanged when `organize_by_date` is `false` or `candidate.date`
+/// Returns `target` unchanged when `layout` is [`DateLayout::None`] or `candidate.date`
 /// is unknown (no date to derive a subfolder from).
 pub fn candidate_target(
     target: &Path,
     candidate: &ContextualCandidate,
-    organize_by_date: bool,
+    layout: DateLayout,
 ) -> PathBuf {
-    if !organize_by_date {
-        return target.to_path_buf();
-    }
     match candidate.date {
-        Some(date) => target
-            .join(date.format("%Y").to_string())
-            .join(date.format("%m").to_string()),
+        Some(date) => layout
+            .segments(&date)
+            .iter()
+            .fold(target.to_path_buf(), |path, segment| path.join(segment)),
         None => target.to_path_buf(),
     }
 }
@@ -786,17 +785,10 @@ pub fn convert_raw_contextual(
     candidate: &ContextualCandidate,
     location: &MessageLocation,
     raw_email: &[u8],
-    organize_by_date: bool,
+    date_layout: DateLayout,
 ) -> Result<ConversionStatus> {
     let _lock = ContextualLock::acquire(target, &account.name)?;
-    convert_raw_contextual_unlocked(
-        target,
-        account,
-        candidate,
-        location,
-        raw_email,
-        organize_by_date,
-    )
+    convert_raw_contextual_unlocked(target, account, candidate, location, raw_email, date_layout)
 }
 
 pub(crate) fn convert_raw_contextual_unlocked(
@@ -805,9 +797,9 @@ pub(crate) fn convert_raw_contextual_unlocked(
     candidate: &ContextualCandidate,
     location: &MessageLocation,
     raw_email: &[u8],
-    organize_by_date: bool,
+    date_layout: DateLayout,
 ) -> Result<ConversionStatus> {
-    let effective_target = candidate_target(target, candidate, organize_by_date);
+    let effective_target = candidate_target(target, candidate, date_layout);
     if let Some((markdown, proof)) = find_existing_proof(&effective_target, candidate)? {
         return Ok(ConversionStatus::AlreadyPresent { markdown, proof });
     }
@@ -845,7 +837,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
             debug_mode: false,
             dests: &[],
             source_proof: Some(&proof),
-            organize_by_date,
+            date_layout,
             exported: None,
             quarantine: account
                 .delete_after_export

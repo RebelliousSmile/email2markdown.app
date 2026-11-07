@@ -1,3 +1,4 @@
+use crate::date_layout::DateLayout;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -164,6 +165,16 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Resolved date layout of note folders: `organize_by_date` `true` gives
+    /// [`DateLayout::YearMonth`], `false` gives [`DateLayout::None`].
+    pub fn date_layout(&self) -> DateLayout {
+        if self.organize_by_date {
+            DateLayout::YearMonth
+        } else {
+            DateLayout::None
+        }
+    }
+
     /// Defaults when the file is absent; an unreadable or invalid file is an
     /// error naming the file, never silently replaced by the defaults.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
