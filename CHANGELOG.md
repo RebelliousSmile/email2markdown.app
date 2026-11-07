@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.2] - 2026-11-07
+
+### Fixed
+
+- **Mise à jour depuis le tray réparée** : la mise à jour échouait avec « Cette demande n'est pas prise en charge (os error 50) » et laissait le dossier d'installation sans exécutable. Le tray se détache de sa console au démarrage mais gardait une entrée standard invalide, que le remplacement du binaire ne pouvait pas transmettre au processus qu'il lance. Depuis une version antérieure, installez la 0.26.2 avec l'installeur plutôt que par le bouton « Mettre à jour ».
+
 ## [0.26.1] - 2026-11-06
 
 ### Fixed
