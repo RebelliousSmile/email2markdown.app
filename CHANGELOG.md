@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-07
+
+### Added
+
+- **Motif de date configurable** : la nouvelle clé `date_layout` choisit les dossiers datés créés sous une destination : `none`, `year`, `year_month` (par défaut) ou `year_month_day`. L'ancienne clé `organize_by_date` reste lue quand `date_layout` est absent. Changer de motif ne déplace aucune note, et les notes rangées sous un ancien motif restent reconnues par les statistiques, l'analyse des dossiers et la détection des doublons.
+- **Profondeur des destinations configurable** : `destination_max_depth` fixe le nombre maximal de niveaux sous la branche, sans compter les dossiers datés (défaut 2, minimum 1 ; la valeur 0 est refusée). L'analyse des dossiers propose les destinations de 1 à N niveaux. Une destination plus profonde reste utilisable : `dest add` affiche un avertissement et la fenêtre Destinations la marque « trop profonde ».
+- **Fenêtre Paramètres** : la case « Classer par année/mois » est remplacée par une liste « Organisation par date » et un champ « Profondeur maximale », vérifié avant l'enregistrement.
+
 ## [0.26.2] - 2026-11-07
 
 ### Fixed
