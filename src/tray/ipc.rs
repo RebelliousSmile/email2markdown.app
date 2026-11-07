@@ -45,19 +45,35 @@ pub(super) enum DestGuiIpcResult {
 }
 
 pub(super) fn state_json(cfg: &crate::destinations::DestinationsConfig) -> String {
+    // Unreadable settings: defaults, so the list still opens.
+    let settings = Settings::load(&config::settings_path()).unwrap_or_default();
+    state_json_with(cfg, &settings)
+}
+
+fn state_json_with(cfg: &crate::destinations::DestinationsConfig, settings: &Settings) -> String {
     // Entries whose folder no longer exists under `notes_dir`. Empty when
     // `notes_dir` is unset or unreachable: nothing can be asserted then.
-    let missing: Vec<String> = Settings::load(&config::settings_path())
-        .ok()
-        .and_then(|s| s.notes_dir)
-        .map(std::path::PathBuf::from)
+    let missing: Vec<String> = settings
+        .notes_dir
+        .as_deref()
+        .map(std::path::Path::new)
         .filter(|dir| dir.is_dir())
-        .map(|dir| crate::dest_cmd::orphaned_entries(&dir, cfg))
+        .map(|dir| crate::dest_cmd::orphaned_entries(dir, cfg))
         .unwrap_or_default();
+    // Entries deeper than the configured maximum: kept, but flagged.
+    let max_depth = settings.destination_max_depth();
+    let too_deep: Vec<String> = cfg
+        .destinations
+        .iter()
+        .filter(|e| crate::dest_cmd::exceeds_max_depth(&e.path, max_depth))
+        .map(|e| e.path.clone())
+        .collect();
     let json = serde_json::json!({
         "type": "state",
         "destinations": cfg.destinations,
         "missing": missing,
+        "too_deep": too_deep,
+        "max_depth": max_depth,
     });
     serde_json::to_string(&json).unwrap_or_default()
 }
@@ -334,7 +350,13 @@ fn dest_stats(
 pub(super) fn handle_scan(cfg: &crate::destinations::DestinationsConfig) -> DestGuiIpcResult {
     let scanned = Settings::load(&config::settings_path())
         .context("failed to load settings")
-        .and_then(|settings| scan_destinations(settings.notes_dir.as_deref().map(Path::new), cfg));
+        .and_then(|settings| {
+            scan_destinations(
+                settings.notes_dir.as_deref().map(Path::new),
+                cfg,
+                settings.destination_max_depth(),
+            )
+        });
     match scanned {
         Ok(result) => result,
         Err(e) => DestGuiIpcResult::Error(format!("Analyse impossible : {:#}", e)),
@@ -353,6 +375,7 @@ pub(super) fn handle_scan(cfg: &crate::destinations::DestinationsConfig) -> Dest
 fn scan_destinations(
     notes_dir: Option<&Path>,
     cfg: &crate::destinations::DestinationsConfig,
+    max_depth: usize,
 ) -> anyhow::Result<DestGuiIpcResult> {
     let notes_dir = notes_dir
         .ok_or_else(|| anyhow::anyhow!("le dossier de notes n'est pas configur\u{00e9}"))?;
@@ -368,7 +391,7 @@ fn scan_destinations(
             "aucune destination : ajoutez-en une pour indiquer les branches \u{00e0} analyser"
         );
     }
-    let new_folders = crate::dest_cmd::scan_folders(notes_dir, &branches)
+    let new_folders = crate::dest_cmd::scan_folders(notes_dir, &branches, max_depth)
         .context("failed to scan notes directory")?
         .into_iter()
         .filter(|(f, _)| {
@@ -1308,8 +1331,8 @@ mod tests {
         apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails,
         frontmatter_list, move_account, move_outcome, relative_destination, reload_outcome,
         remove_env_passwords, save_account, save_outcome, save_settings, scan_destinations,
-        set_env_password, validate_new_account_name, AccountData, DestGuiIpcResult,
-        RouteApplyReport, RouteDecisionRow, SettingsData,
+        set_env_password, state_json_with, validate_new_account_name, AccountData,
+        DestGuiIpcResult, RouteApplyReport, RouteDecisionRow, SettingsData,
     };
     use crate::config::{load_raw_accounts, RawAccount, Settings};
     use crate::date_layout::DateLayout;
@@ -1356,7 +1379,7 @@ mod tests {
 
     #[test]
     fn test_scan_destinations_with_unconfigured_notes_dir() {
-        let result = scan_destinations(None, &DestinationsConfig::default());
+        let result = scan_destinations(None, &DestinationsConfig::default(), 2);
         assert!(result.is_err());
     }
 
@@ -1364,7 +1387,7 @@ mod tests {
     fn test_scan_destinations_with_missing_notes_dir() {
         let temp = TempDir::new().unwrap();
         let missing = temp.path().join("absent");
-        let result = scan_destinations(Some(&missing), &DestinationsConfig::default());
+        let result = scan_destinations(Some(&missing), &DestinationsConfig::default(), 2);
         assert!(result.is_err());
     }
 
@@ -1397,7 +1420,7 @@ Body
     fn test_scan_destinations_with_empty_notes_dir() {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join("Perso/Banque")).unwrap();
-        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque"));
+        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque"), 2);
         assert!(matches!(
             result,
             Ok(DestGuiIpcResult::FolderSuggestions { new_folders, orphans })
@@ -1408,7 +1431,7 @@ Body
     #[test]
     fn test_scan_destinations_without_destinations() {
         let temp = TempDir::new().unwrap();
-        let result = scan_destinations(Some(temp.path()), &DestinationsConfig::default());
+        let result = scan_destinations(Some(temp.path()), &DestinationsConfig::default(), 2);
         assert!(result.is_err());
     }
 
@@ -1419,7 +1442,7 @@ Body
         write_email(temp.path(), "Perso/Banque/BNP/2025/06");
         write_email(temp.path(), "Perso/Sante/Dentiste/2025/06");
         write_email(temp.path(), "Code/Projet/App");
-        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque/BNP"));
+        let result = scan_destinations(Some(temp.path()), &cfg_with("Perso/Banque/BNP"), 2);
         let Ok(DestGuiIpcResult::FolderSuggestions { new_folders, .. }) = result else {
             panic!("expected folder suggestions");
         };
@@ -2055,6 +2078,29 @@ hi
         let yaml = fs::read_to_string(&path).unwrap();
         assert!(yaml.contains("date_layout: none"), "{yaml}");
         assert!(yaml.contains("organize_by_date: false"), "{yaml}");
+    }
+
+    #[test]
+    fn test_state_json_lists_too_deep_entries() {
+        let cfg = DestinationsConfig {
+            destinations: ["Pro/A/B/C", "Pro/A/B", "Pro/A/B/2026/10"]
+                .into_iter()
+                .map(|path| DestinationEntry {
+                    path: path.into(),
+                    ..Default::default()
+                })
+                .collect(),
+        };
+        let settings = Settings {
+            destination_max_depth: Some(2),
+            ..Settings::default()
+        };
+
+        let state: serde_json::Value =
+            serde_json::from_str(&state_json_with(&cfg, &settings)).unwrap();
+
+        assert_eq!(state["too_deep"], serde_json::json!(["Pro/A/B/C"]));
+        assert_eq!(state["max_depth"], 2);
     }
 
     #[test]

@@ -36,6 +36,7 @@
   #missing-alert span { flex: 1; word-break: break-word; }
   #dest-list li.missing .path { color: #c62828; }
   #dest-list li .missing-flag { color: #c62828; font-size: 12px; margin-left: 4px; }
+  #dest-list li .too-deep-flag { color: #e65100; font-size: 12px; margin-left: 4px; cursor: help; }
   .layout {
     flex: 1;
     display: flex;
@@ -429,6 +430,8 @@
     if (data.type === 'state') {
       state.destinations = data.destinations || [];
       state.missing = data.missing || [];
+      state.tooDeep = data.too_deep || [];
+      state.maxDepth = data.max_depth;
       renderMissingAlert();
       render();
       requestStatsIfNeeded();
@@ -528,6 +531,15 @@
         flag.className = 'missing-flag';
         flag.textContent = '⚠ dossier introuvable';
         pathSpan.appendChild(flag);
+      }
+      if ((state.tooDeep || []).indexOf(entry.path) >= 0) {
+        var deep = document.createElement('span');
+        deep.className = 'too-deep-flag';
+        deep.textContent = '⚠ trop profonde';
+        deep.title = 'Plus profonde que le maximum configuré (destination_max_depth : ' +
+          state.maxDepth + ' niveau' + (state.maxDepth > 1 ? 'x' : '') +
+          ' sous la branche). L’analyse des dossiers ne la proposera pas.';
+        pathSpan.appendChild(deep);
       }
       li.appendChild(pathSpan);
 

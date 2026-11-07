@@ -488,6 +488,48 @@ mod settings_tests {
     }
 
     #[test]
+    fn test_settings_destination_max_depth_absent_is_2() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "organize_by_date: true\n").unwrap();
+        assert_eq!(Settings::load(&path).unwrap().destination_max_depth(), 2);
+    }
+
+    #[test]
+    fn test_settings_destination_max_depth_with_3() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "destination_max_depth: 3\n").unwrap();
+        assert_eq!(Settings::load(&path).unwrap().destination_max_depth(), 3);
+    }
+
+    #[test]
+    fn test_settings_destination_max_depth_zero_is_refused_on_load() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "destination_max_depth: 0\n").unwrap();
+        let err = Settings::load(&path).unwrap_err().to_string();
+        assert!(err.contains("destination_max_depth"), "{err}");
+    }
+
+    #[test]
+    fn test_settings_destination_max_depth_zero_is_refused_on_save() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.yaml");
+        std::fs::write(&path, "notes_dir: C:/notes\n").unwrap();
+        let s = Settings {
+            destination_max_depth: Some(0),
+            ..Settings::default()
+        };
+        let err = s.save(&path).unwrap_err().to_string();
+        assert!(err.contains("destination_max_depth"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "notes_dir: C:/notes\n"
+        );
+    }
+
+    #[test]
     fn test_settings_default() {
         let s = Settings::default();
         assert!(s.export_base_dir.is_none());
@@ -4312,7 +4354,9 @@ mod destinations_tests {
 }
 
 mod dest_cmd_tests {
-    use email_to_markdown::dest_cmd::{add_entry, detect_anomalies, orphaned_entries};
+    use email_to_markdown::dest_cmd::{
+        add_entry, detect_anomalies, exceeds_max_depth, orphaned_entries,
+    };
     use email_to_markdown::destinations::{
         load_yaml, DestinationEntry, DestinationRule, DestinationsConfig,
     };
@@ -4345,6 +4389,18 @@ mod dest_cmd_tests {
         let warnings = detect_anomalies(&cfg);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("default"));
+    }
+
+    /// A path deeper than the maximum is still recorded, but flagged.
+    #[test]
+    fn test_add_entry_with_too_deep_path() {
+        let temp = TempDir::new().unwrap();
+        let dest_file = temp.path().join("destinations.yaml");
+        add_entry(&dest_file, "Pro/A/B/C", &[], None, false).unwrap();
+
+        let cfg = load_yaml(&dest_file).unwrap();
+        assert_eq!(cfg.destinations[0].path, "Pro/A/B/C");
+        assert!(exceeds_max_depth(&cfg.destinations[0].path, 2));
     }
 
     /// add_entry with no rules creates a bare classification entry.
@@ -4477,8 +4533,8 @@ mod dest_cmd_tests {
 mod suggest_tests {
     use email_to_markdown::date_layout::strip_date_suffix as strip_trailing_year_month;
     use email_to_markdown::dest_cmd::{
-        destination_branches, email_stats, extract_domain, scan_domains, scan_folders,
-        uncovered_domains, EmailStats,
+        destination_branches, email_stats, exceeds_max_depth, extract_domain, scan_domains,
+        scan_folders, uncovered_domains, EmailStats,
     };
     use email_to_markdown::destinations::{DestinationEntry, DestinationRule, DestinationsConfig};
     use std::fs;
@@ -4502,7 +4558,7 @@ mod suggest_tests {
         write_md(temp.path(), "b.md", "Bob <bob@ubs.ch>");
         write_md(temp.path(), "c.md", "carol@bnp.fr");
 
-        let groups = scan_domains(temp.path()).unwrap();
+        let groups = scan_domains(temp.path(), 2).unwrap();
         assert_eq!(groups.get("ubs.ch"), Some(&2));
         assert_eq!(groups.get("bnp.fr"), Some(&1));
     }
@@ -4514,7 +4570,7 @@ mod suggest_tests {
         write_md(&temp.path().join(".obsidian"), "x.md", "x@hidden.com");
         write_md(temp.path(), "ok.md", "ok@visible.com");
 
-        let groups = scan_domains(temp.path()).unwrap();
+        let groups = scan_domains(temp.path(), 2).unwrap();
         assert!(
             !groups.contains_key("hidden.com"),
             "dot-dir must be skipped"
@@ -4529,7 +4585,7 @@ mod suggest_tests {
         write_md(&temp.path().join("_deleted"), "x.md", "x@gone.com");
         write_md(temp.path(), "ok.md", "ok@here.com");
 
-        let groups = scan_domains(temp.path()).unwrap();
+        let groups = scan_domains(temp.path(), 2).unwrap();
         assert!(
             !groups.contains_key("gone.com"),
             "underscore-dir must be skipped"
@@ -4549,7 +4605,7 @@ mod suggest_tests {
         write_md(&root, "ok.md", "ok@inside.com");
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
 
-        let groups = scan_domains(&root).unwrap();
+        let groups = scan_domains(&root, 2).unwrap();
         assert!(
             !groups.contains_key("external.com"),
             "symlink must not be followed"
@@ -4569,7 +4625,7 @@ mod suggest_tests {
         write_md(&root, "ok.md", "ok@inside.com");
         // Symlink creation may require privileges; skip the assertion if it fails.
         if std::os::windows::fs::symlink_dir(&outside, root.join("link")).is_ok() {
-            let groups = scan_domains(&root).unwrap();
+            let groups = scan_domains(&root, 2).unwrap();
             assert!(
                 !groups.contains_key("external.com"),
                 "symlink must not be followed"
@@ -4621,7 +4677,7 @@ mod suggest_tests {
             "a@ubs.ch",
         );
 
-        let folders = scan_folders(temp.path(), &["Pro".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Pro".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Pro/Banque/UBS".to_string(), 1)]);
     }
 
@@ -4635,7 +4691,7 @@ mod suggest_tests {
             "a@jal.co.jp",
         );
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Voyage/Japon".to_string(), 1)]);
     }
 
@@ -4653,7 +4709,7 @@ mod suggest_tests {
         .unwrap();
         write_md(&temp.path().join("Perso/Banque/BNP"), "a.md", "a@bnp.fr");
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 1)]);
     }
 
@@ -4673,7 +4729,7 @@ mod suggest_tests {
         );
         write_md(&temp.path().join("Perso/Banque/BNP"), "a.md", "a@x.com");
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 1)]);
     }
 
@@ -4684,11 +4740,12 @@ mod suggest_tests {
         write_md(&temp.path().join("Perso/Banque/BNP"), "a.md", "a@x.com");
         write_md(&temp.path().join("Code/Projet/App"), "a.md", "a@x.com");
 
-        let folders = scan_folders(temp.path(), &["perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 1)]);
     }
 
-    /// Only `<Branch>/<Category>/<Subcategory>` destinations are proposed.
+    /// Destinations 1 to `max_depth` levels below the branch are proposed; the
+    /// branch itself and deeper folders are not.
     #[test]
     fn test_scan_folders_with_shallow_and_deep_destinations() {
         let temp = TempDir::new().unwrap();
@@ -4705,8 +4762,70 @@ mod suggest_tests {
             "a@x.com",
         );
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
-        assert_eq!(folders, vec![("Perso/Bank/BNP".to_string(), 1)]);
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
+        assert_eq!(
+            folders,
+            vec![
+                ("Perso/Bank".to_string(), 1),
+                ("Perso/Bank/BNP".to_string(), 1)
+            ]
+        );
+    }
+
+    /// Tree with emails one, two and three levels below `Pro`, each under `YYYY/MM`.
+    fn three_level_tree() -> TempDir {
+        let temp = TempDir::new().unwrap();
+        for dir in [
+            "Pro/Clients/2025/06",
+            "Pro/Clients/Acme/2025/06",
+            "Pro/Clients/Acme/Contrats/2025/06",
+        ] {
+            write_md(&temp.path().join(dir), "a.md", "a@x.com");
+        }
+        temp
+    }
+
+    fn scanned_paths(temp: &TempDir, max_depth: usize) -> Vec<String> {
+        scan_folders(temp.path(), &["Pro".to_string()], max_depth)
+            .unwrap()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+
+    #[test]
+    fn test_scan_folders_with_max_depth_1() {
+        let temp = three_level_tree();
+        assert_eq!(scanned_paths(&temp, 1), vec!["Pro/Clients"]);
+    }
+
+    #[test]
+    fn test_scan_folders_with_max_depth_2() {
+        let temp = three_level_tree();
+        assert_eq!(
+            scanned_paths(&temp, 2),
+            vec!["Pro/Clients", "Pro/Clients/Acme"]
+        );
+    }
+
+    #[test]
+    fn test_scan_folders_with_max_depth_3() {
+        let temp = three_level_tree();
+        assert_eq!(
+            scanned_paths(&temp, 3),
+            vec![
+                "Pro/Clients",
+                "Pro/Clients/Acme",
+                "Pro/Clients/Acme/Contrats"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_exceeds_max_depth_ignores_date_suffix() {
+        assert!(!exceeds_max_depth("Pro/A/B/2026/10", 2));
+        assert!(!exceeds_max_depth("Pro/A/B", 2));
+        assert!(exceeds_max_depth("Pro/A/B/C", 2));
     }
 
     /// Every email note of a destination is counted, across months and buckets.
@@ -4719,7 +4838,7 @@ mod suggest_tests {
         write_md(&base.join("2025/07/releves"), "c.md", "c@bnp.fr");
         fs::write(base.join("2025/06/note.md"), "# Note\n").unwrap();
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Bank/BNP".to_string(), 3)]);
     }
 
@@ -4774,7 +4893,7 @@ mod suggest_tests {
         write_md(&base.join("2026/10/03/releves"), "a.md", "a@bnp.fr");
         write_md(&base.join("2026/10"), "b.md", "b@bnp.fr");
 
-        let folders = scan_folders(temp.path(), &["Perso".to_string()]).unwrap();
+        let folders = scan_folders(temp.path(), &["Perso".to_string()], 2).unwrap();
         assert_eq!(folders, vec![("Perso/Banque/BNP".to_string(), 2)]);
     }
 
@@ -4806,7 +4925,7 @@ mod suggest_tests {
     #[test]
     fn test_suggest_no_md_files() {
         let temp = TempDir::new().unwrap();
-        let groups = scan_domains(temp.path()).unwrap();
+        let groups = scan_domains(temp.path(), 2).unwrap();
         assert!(groups.is_empty());
     }
 

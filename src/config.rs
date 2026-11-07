@@ -142,6 +142,12 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_layout: Option<DateLayout>,
 
+    /// Deepest destination level under a branch (`Perso/Banque` = 1,
+    /// `Perso/Banque/BNP` = 2), date folders not counted. Absent: 2 (see
+    /// [`Settings::destination_max_depth`]). `0` is refused on load and save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_max_depth: Option<usize>,
+
     /// Default behaviour applied to every account unless overridden.
     #[serde(default)]
     pub defaults: AccountBehavior,
@@ -166,6 +172,7 @@ impl Default for Settings {
             ai_confidence_threshold: default_ai_confidence_threshold(),
             organize_by_date: default_organize_by_date(),
             date_layout: None,
+            destination_max_depth: None,
             defaults: AccountBehavior::default(),
             accounts: HashMap::new(),
         }
@@ -190,6 +197,21 @@ impl Settings {
         self.organize_by_date = layout != DateLayout::None;
     }
 
+    /// Deepest destination level scanned under a branch: the
+    /// `destination_max_depth` key, or [`DEFAULT_DESTINATION_MAX_DEPTH`].
+    pub fn destination_max_depth(&self) -> usize {
+        self.destination_max_depth
+            .unwrap_or(DEFAULT_DESTINATION_MAX_DEPTH)
+    }
+
+    /// Values serde cannot reject on its own; shared by `load` and `save`.
+    fn validate(&self) -> Result<(), String> {
+        if self.destination_max_depth == Some(0) {
+            return Err("destination_max_depth doit valoir au moins 1".to_string());
+        }
+        Ok(())
+    }
+
     /// Defaults when the file is absent; an unreadable or invalid file is an
     /// error naming the file, never silently replaced by the defaults.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
@@ -201,10 +223,15 @@ impl Settings {
             reason,
         };
         let content = fs::read_to_string(path).map_err(|e| invalid(e.to_string()))?;
-        serde_yaml::from_str(&content).map_err(|e| invalid(e.to_string()))
+        let settings: Settings =
+            serde_yaml::from_str(&content).map_err(|e| invalid(e.to_string()))?;
+        settings.validate().map_err(invalid)?;
+        Ok(settings)
     }
 
+    /// Refuses invalid values before touching the file.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
+        self.validate().map_err(ConfigError::ValidationError)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -500,6 +527,9 @@ impl Config {
 fn default_ai_confidence_threshold() -> f32 {
     0.7
 }
+
+/// Destination depth under a branch when `destination_max_depth` is absent.
+pub const DEFAULT_DESTINATION_MAX_DEPTH: usize = 2;
 
 fn default_organize_by_date() -> bool {
     true
