@@ -1,6 +1,6 @@
 ---
 objective: "Un corpus d'une douzaine de messages (cinq conversations, treize messages) au format MIME de Gmail, qui couvre chaque cas (liens, images collées et jointes, listes, sauts de ligne, transferts), s'exporte sans perte ni bruit, en local, sur Dovecot et entre les deux comptes Gmail de l'utilisateur, avec `skip_signature_images: true`, et chaque cas est vérifié automatiquement."
-status: in-progress
+status: blocked
 ---
 
 # Plan : campagne de tests Gmail par seed (issues #19, #14, #15, #18)
@@ -73,6 +73,16 @@ L'ordre des phases suit la règle de test du projet : le corpus et le harnais d'
 | 4   | Texte : recoller les lignes coupées du `text/plain`        | [`phase-4.md`](./phase-4.md) |
 | 5   | Export réel sur Dovecot avec `skip_signature_images: true` | [`phase-5.md`](./phase-5.md) |
 | 6   | Envoi du seed entre les deux comptes Gmail et export       | [`phase-6.md`](./phase-6.md) |
+
+## Blocage (2026-11-10)
+
+Les phases 1 à 5 sont faites. La phase 6 n'est pas commencée : elle exige les mots de passe d'application des comptes A et B, que seul l'utilisateur peut créer (validation en deux étapes, puis mot de passe d'application sur chaque compte Gmail).
+
+Pour débloquer :
+
+1. Sur chacun des deux comptes, activer la validation en deux étapes puis créer un mot de passe d'application.
+2. Définir localement, hors du dépôt : `EMAIL_TO_MARKDOWN_GMAIL_A_USER`, `EMAIL_TO_MARKDOWN_GMAIL_A_PASSWORD`, `EMAIL_TO_MARKDOWN_GMAIL_B_USER`, `EMAIL_TO_MARKDOWN_GMAIL_B_PASSWORD`.
+3. Relancer l'implémentation de la phase 6.
 
 ## Resources
 
