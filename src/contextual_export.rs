@@ -22,8 +22,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const SEARCH_RULE_BATCH: usize = 50;
 pub const HEADER_UID_BATCH: usize = 500;
-pub const HEADER_FETCH_FIELDS: &str =
-    "BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE FROM TO CC BCC SUBJECT)]";
+/// Headers read to rebuild a message identity on the server: the raw header block.
+/// Proofs are fingerprinted on the full message at export, so the server side must
+/// read the same bytes. `HEADER.FIELDS (…)` is not enough: some servers (lilo.org,
+/// banner `MAILO`) synthesize it, rewriting `Date` to local time and mis-decoding an
+/// 8-bit `Subject`, so every deletion was rejected as an identity mismatch.
+pub const HEADER_FETCH_FIELDS: &str = "BODY.PEEK[HEADER]";
 
 static HEADER_ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#)

@@ -4159,6 +4159,33 @@ keep_on_server: partie image illisible
             let fields = b"Message-ID: <report@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Project report\r\n\r\n".to_vec();
             assert!(identity_matches(&proof_of(&full), &(7, None, fields)));
         }
+
+        /// The server check reads `BODY[HEADER]`: the raw header block of the very
+        /// message the proof was built on must match it.
+        #[test]
+        fn test_identity_matches_full_message_proof_with_raw_header_block() {
+            let full = multipart_raw("report@example.com");
+            let end = full.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+            let header_block = full[..end].to_vec();
+            assert!(identity_matches(&proof_of(&full), &(7, None, header_block)));
+        }
+
+        /// What lilo.org (`MAILO`) returned for `HEADER.FIELDS`: `Date` rewritten
+        /// to local time. Such a header must never pass for the proved message.
+        #[test]
+        fn test_identity_matches_server_rewritten_date_invalid() {
+            let proved = b"Message-ID: <r@example.com>\r\nDate: Tue, 10 Nov 2026 18:02:38 +0000\r\nFrom: a@example.com\r\nTo: b@example.com\r\nSubject: Re: test\r\n\r\n".to_vec();
+            let rewritten = b"Message-ID: <r@example.com>\r\nDate: Tue, 10 Nov 2026 19:02:38 +0100 (CET)\r\nFrom: a@example.com\r\nTo: b@example.com\r\nSubject: Re: test\r\n\r\n".to_vec();
+            assert!(!identity_matches(&proof_of(&proved), &(7, None, rewritten)));
+        }
+
+        #[test]
+        fn test_header_fetch_fields_reads_raw_header_block() {
+            assert_eq!(
+                email_to_markdown::contextual_export::HEADER_FETCH_FIELDS,
+                "BODY.PEEK[HEADER]"
+            );
+        }
     }
 
     mod gmail_plan_tests {
