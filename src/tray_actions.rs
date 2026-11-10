@@ -877,28 +877,34 @@ fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
 
 /// Import accounts from Thunderbird.
 ///
-/// Shows a Yes/No dialog asking whether to also extract passwords,
-/// then runs the import in a background thread.
+/// Shows a dialog whose buttons name what is imported (accounts with or
+/// without passwords, or nothing), then runs the import in a background
+/// thread. Yes/No buttons read as "import or not": "No" imported anyway.
 pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
+    const WITH_PASSWORDS: &str = "Comptes et mots de passe";
+    const ACCOUNTS_ONLY: &str = "Comptes seulement";
+    const NOTHING: &str = "Ne rien importer";
     let dialog_result = rfd::MessageDialog::new()
         .set_title("Import Thunderbird")
         .set_description(
-            "Importer les comptes depuis Thunderbird ?\n\n\
-             • Oui    — importer comptes + mots de passe\n\
-             • Non    — importer les comptes uniquement\n\
-             • Annuler — ne rien faire\n\n\
-             Les comptes déjà configurés sont conservés tels quels ; seuls les \
-             nouveaux sont ajoutés, et l'état précédent est sauvegardé dans \
+            "Ajouter les comptes IMAP de Thunderbird qui ne sont pas encore \
+             configurés ?\n\n\
+             Les comptes déjà configurés (même serveur et même identifiant) \
+             sont conservés tels quels ; l'état précédent est sauvegardé dans \
              accounts.yaml.bak.\n\n\
              (Thunderbird doit être fermé pour extraire les mots de passe)",
         )
-        .set_buttons(rfd::MessageButtons::YesNoCancel)
+        .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+            WITH_PASSWORDS.to_string(),
+            ACCOUNTS_ONLY.to_string(),
+            NOTHING.to_string(),
+        ))
         .show();
 
     let extract_passwords = match dialog_result {
-        rfd::MessageDialogResult::Yes => true,
-        rfd::MessageDialogResult::No => false,
-        _ => return, // Annuler
+        rfd::MessageDialogResult::Custom(label) if label == WITH_PASSWORDS => true,
+        rfd::MessageDialogResult::Custom(label) if label == ACCOUNTS_ONLY => false,
+        _ => return, // Ne rien importer, or the dialog closed
     };
 
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
@@ -1237,7 +1243,12 @@ pub fn action_clean_server(account_name: String, result_sender: Sender<ActionRes
                 &clean_confirmation_text(account, count, is_gmail),
             )
         };
-        let result = match clean_server(&account_name, confirm) {
+        let on_step = |step: &str| {
+            let _ = crate::tray::send_command(crate::tray::AppCommand::SetTooltip(Some(format!(
+                "Nettoyage de {account_name} : {step}…"
+            ))));
+        };
+        let result = match clean_server(&account_name, confirm, &on_step) {
             Ok(message) => ActionResult::Success("Nettoyer le serveur".to_string(), message),
             Err(e) => ActionResult::Error(format!("Nettoyer le serveur : {:#}", e)),
         };
@@ -1309,11 +1320,16 @@ fn confirm_deletion(title: &str, text: &str) -> bool {
 
 /// Clean the server of the user's config directory: see
 /// `server_cleanup::clean_server_in`.
-fn clean_server(account_name: &str, confirm: impl Fn(&str, usize, bool) -> bool) -> Result<String> {
+fn clean_server(
+    account_name: &str,
+    confirm: impl Fn(&str, usize, bool) -> bool,
+    on_step: &dyn Fn(&str),
+) -> Result<String> {
     crate::server_cleanup::clean_server_in(
         &crate::config::AppPaths::from_app_config(),
         account_name,
         confirm,
+        on_step,
     )
 }
 

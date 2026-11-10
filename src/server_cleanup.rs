@@ -39,11 +39,27 @@ pub struct CleanupPlan {
     pub targets: Vec<LocalSourceProof>,
     /// Legacy handled messages without a proof: left on the server.
     pub untargetable: usize,
+    /// Handled messages whose proof targets them: never cleaned here, the
+    /// export purge deletes them. Counted once per `Message-ID`.
+    pub proved: usize,
 }
 
 /// Cleanup plan from the census entries. A Gmail message seen under several
 /// labels is one target, not several.
 pub fn plan(entries: &[AuditEntry]) -> CleanupPlan {
+    let mut proved_ids = std::collections::HashSet::new();
+    let mut proved = 0;
+    for e in entries
+        .iter()
+        .filter(|e| e.status == ServerStatus::HandledWithProof)
+    {
+        if e.message_id
+            .as_ref()
+            .is_none_or(|id| proved_ids.insert(id.clone()))
+        {
+            proved += 1;
+        }
+    }
     CleanupPlan {
         targets: crate::server_audit::legacy_proofs(entries),
         untargetable: entries
@@ -51,18 +67,26 @@ pub fn plan(entries: &[AuditEntry]) -> CleanupPlan {
             .filter(|e| e.status == ServerStatus::HandledLegacy)
             .filter(|e| e.proof.is_none())
             .count(),
+        proved,
     }
 }
 
 /// Suffix appended to every summary: proofs completed from the notes and
 /// messages left on the server.
-pub fn notes_suffix(completed: usize, untargetable: usize) -> String {
+pub fn notes_suffix(completed: usize, plan: &CleanupPlan) -> String {
     let mut notes = Vec::new();
     if completed > 0 {
         notes.push(format!(
             "{completed} preuve(s) retrouvée(s) dans les notes, purgées au prochain export"
         ));
     }
+    if plan.proved > 0 {
+        notes.push(format!(
+            "{} message(s) traité(s) avec preuve, supprimés par l'export (lancer Exporter)",
+            plan.proved
+        ));
+    }
+    let untargetable = plan.untargetable;
     if untargetable > 0 {
         notes.push(format!(
             "{untargetable} message(s) impossibles à cibler exactement, laissés sur le serveur"
@@ -97,45 +121,65 @@ pub fn record_results(paths: &AppPaths, results: &[MessageDeletionResult], notes
     )
 }
 
-/// Complete the ledger from the routed notes, list the legacy handled
-/// messages still on the server, and delete them once `confirm` agrees;
-/// `confirm` receives the account name, the message count and whether the
-/// server is Gmail.
+/// Status of every message of `account` on the server, from the ledger as
+/// it stands now.
+fn census(paths: &AppPaths, account: &Account, on_step: &dyn Fn(&str)) -> Result<Vec<AuditEntry>> {
+    let handled = crate::handled::load_from(&paths.ledger, &account.name);
+    let ledger = crate::handled::load_proofs_from(&paths.ledger, &account.name);
+    on_step("connexion au serveur");
+    let mut exporter = ImapExporter::new(account.clone(), false);
+    exporter
+        .connect()
+        .context("Connexion au serveur impossible")?;
+    let entries = exporter.audit_server(None, &handled, &ledger, on_step);
+    exporter.disconnect().ok();
+    entries
+}
+
+/// List the handled messages still on the server, complete the ledger from
+/// the routed notes when some lack a proof, and delete the legacy ones once
+/// `confirm` agrees; `confirm` receives the account name, the message count
+/// and whether the server is Gmail. `on_step` receives a French line per
+/// step, for a long census to show it is alive.
 /// Successful deletions are recorded in the ledger with their proof.
 pub fn clean_server_in(
     paths: &AppPaths,
     account_name: &str,
     confirm: impl Fn(&str, usize, bool) -> bool,
+    on_step: &dyn Fn(&str),
 ) -> Result<String> {
     dotenvy::from_path(&paths.env).ok();
     let config = Config::load_with_settings(&paths.accounts, &paths.settings)
         .context("Lecture de la configuration impossible")?;
     let account = cleanup_account(&config, account_name, &paths.env)?;
 
-    // Routed notes may still carry the proof the ledger lacks.
-    let completed = match Settings::load(&paths.settings)
-        .context("Lecture des réglages impossible")?
-        .notes_dir
+    let mut entries = census(paths, &account, on_step)?;
+    // Routed notes may still carry the proof the ledger lacks. `notes_dir`
+    // may span a whole documents tree: walk it only when the server holds a
+    // handled message without proof, then census again with the new proofs.
+    let mut completed = 0;
+    if entries
+        .iter()
+        .any(|e| e.status == ServerStatus::HandledLegacy)
     {
-        Some(notes_dir) => crate::handled::complete_from_notes_to(
-            &paths.ledger,
-            Path::new(&notes_dir),
-            &account.name,
-        )
-        .context("Complément du registre depuis les notes impossible")?,
-        None => 0,
-    };
-
-    let handled = crate::handled::load_from(&paths.ledger, &account.name);
-    let ledger = crate::handled::load_proofs_from(&paths.ledger, &account.name);
-    let mut exporter = ImapExporter::new(account.clone(), false);
-    exporter
-        .connect()
-        .context("Connexion au serveur impossible")?;
-    let entries = exporter.audit_server(None, &handled, &ledger);
-    exporter.disconnect().ok();
-    let plan = plan(&entries?);
-    let notes = notes_suffix(completed, plan.untargetable);
+        if let Some(notes_dir) = Settings::load(&paths.settings)
+            .context("Lecture des réglages impossible")?
+            .notes_dir
+        {
+            on_step("recherche des preuves dans les notes");
+            completed = crate::handled::complete_from_notes_to(
+                &paths.ledger,
+                Path::new(&notes_dir),
+                &account.name,
+            )
+            .context("Complément du registre depuis les notes impossible")?;
+            if completed > 0 {
+                entries = census(paths, &account, on_step)?;
+            }
+        }
+    }
+    let plan = plan(&entries);
+    let notes = notes_suffix(completed, &plan);
 
     if plan.targets.is_empty() {
         return Ok(format!("Rien à nettoyer pour {account_name}{notes}"));
@@ -146,6 +190,7 @@ pub fn clean_server_in(
     }
 
     // The proofs carry UIDVALIDITY: reconnecting after the dialog is safe.
+    on_step(&format!("suppression de {} message(s)", plan.targets.len()));
     let mut exporter = ImapExporter::new(account.clone(), false);
     exporter
         .connect()
@@ -337,12 +382,41 @@ mod tests {
 
     #[test]
     fn test_notes_suffix_lists_each_non_zero_count() {
-        assert_eq!(notes_suffix(0, 0), "");
+        let counts = |untargetable, proved| CleanupPlan {
+            targets: Vec::new(),
+            untargetable,
+            proved,
+        };
+        assert_eq!(notes_suffix(0, &counts(0, 0)), "");
         assert_eq!(
-            notes_suffix(2, 1),
+            notes_suffix(2, &counts(1, 3)),
             " — 2 preuve(s) retrouvée(s) dans les notes, purgées au prochain export \
+             — 3 message(s) traité(s) avec preuve, supprimés par l'export (lancer Exporter) \
              — 1 message(s) impossibles à cibler exactement, laissés sur le serveur"
         );
+    }
+
+    #[test]
+    fn test_plan_counts_proved_message_once_across_labels() {
+        let mut inbox = entry(
+            "INBOX",
+            1,
+            ServerStatus::HandledWithProof,
+            Some(proof(1, None)),
+        );
+        inbox.message_id = Some("same@example.com".into());
+        let mut all_mail = inbox.clone();
+        all_mail.folder = "[Gmail]/All Mail".into();
+        all_mail.uid = 9;
+        let other = entry(
+            "INBOX",
+            2,
+            ServerStatus::HandledWithProof,
+            Some(proof(2, None)),
+        );
+        let plan = plan(&[inbox, all_mail, other]);
+        assert_eq!(plan.proved, 2);
+        assert!(plan.targets.is_empty());
     }
 
     #[test]

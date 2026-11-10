@@ -3723,6 +3723,22 @@ body
     }
 
     #[test]
+    fn test_proof_is_complete_without_message_id() {
+        let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
+        proof.identity.message_id = None;
+        proof.identity.provider_id = None;
+        assert!(proof_is_complete(&proof));
+    }
+
+    #[test]
+    fn test_proof_is_complete_without_uid_validity() {
+        let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
+        proof.identity.message_id = None;
+        proof.location.uid_validity = 0;
+        assert!(!proof_is_complete(&proof));
+    }
+
+    #[test]
     fn test_proof_is_complete_with_non_numeric_provider_id() {
         let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
         for id in ["", "12 OR ALL", "12\r\nA1 EXPUNGE"] {

@@ -193,6 +193,11 @@ enum Commands {
         #[arg(long)]
         details: bool,
 
+        /// Compare the identity of one message read from RFC822 and from its
+        /// header block (requires --folder)
+        #[arg(long, requires = "folder")]
+        uid: Option<u32>,
+
         /// Path to config file (default: platform config dir)
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -590,6 +595,7 @@ fn main() -> Result<()> {
             account,
             folder,
             details,
+            uid,
             config,
         } => {
             let config_path = config.unwrap_or_else(config::accounts_yaml_path);
@@ -604,7 +610,13 @@ fn main() -> Result<()> {
             let ledger = email_to_markdown::handled::load_proofs(&account.name);
             let mut exporter = ImapExporter::new(account.clone(), false);
             exporter.connect().context("failed to connect")?;
-            let entries = exporter.audit_server(folder.as_deref(), &handled, &ledger);
+            if let (Some(uid), Some(folder)) = (uid, folder.as_deref()) {
+                let report = exporter.compare_identity(folder, uid);
+                exporter.disconnect().ok();
+                print!("{}", report?);
+                return Ok(());
+            }
+            let entries = exporter.audit_server(folder.as_deref(), &handled, &ledger, &|_| {});
             exporter.disconnect().ok();
             print!(
                 "{}",

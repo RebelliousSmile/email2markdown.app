@@ -1803,8 +1803,9 @@ fn imap_set(ids: &[u32]) -> String {
     ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
 }
 
-/// Messages of one body FETCH, by sequence number, with their UID.
-type FetchedBodies = HashMap<u32, (Option<u32>, Vec<u8>)>;
+/// Messages of one body FETCH, by sequence number: UID, full message and
+/// header block.
+type FetchedBodies = HashMap<u32, (Option<u32>, Vec<u8>, Option<Vec<u8>>)>;
 
 /// FETCH the full messages at sequence numbers `seqs` with one command, keyed
 /// by sequence number with their UID. A message the server no longer returns
@@ -1815,12 +1816,15 @@ fn fetch_bodies(
     network_config: &NetworkConfig,
 ) -> Result<FetchedBodies, Box<imap::Error>> {
     let fetches = with_retry(network_config, "fetch", || {
-        session.fetch(imap_set(seqs), "(UID RFC822)")
+        session.fetch(imap_set(seqs), "(UID RFC822 BODY.PEEK[HEADER])")
     })
     .map_err(Box::new)?;
     Ok(fetches
         .iter()
-        .filter_map(|fetch| Some((fetch.message, (fetch.uid, fetch.body()?.to_vec()))))
+        .filter_map(|fetch| {
+            let header = fetch.header().map(<[u8]>::to_vec);
+            Some((fetch.message, (fetch.uid, fetch.body()?.to_vec(), header)))
+        })
         .collect())
 }
 
@@ -2475,14 +2479,77 @@ impl ImapExporter {
         Ok(merge_candidates(candidates))
     }
 
+    /// Read-only: the identity of one message computed from its full RFC822
+    /// body and from its header block (export proof and deletion check).
+    /// A difference shows a server that rebuilds the header block.
+    pub fn compare_identity(&mut self, folder: &str, uid: u32) -> Result<String> {
+        use crate::contextual_export::{parse_header_candidate, MessageLocation};
+
+        let session = self.session.as_mut().context("Not connected")?;
+        let uid_validity = session
+            .examine(folder)
+            .with_context(|| format!("examine {folder}"))?
+            .uid_validity
+            .unwrap_or_default();
+        let location = MessageLocation {
+            folder_raw: folder.to_string(),
+            folder_display: folder.to_string(),
+            uid_validity,
+            uid,
+        };
+        let header = fetch_headers_by_uid(session, folder, &[uid], false)?
+            .into_iter()
+            .next()
+            .map(|(_, _, header)| header)
+            .context("no header block for this UID")?;
+        let body = session
+            .uid_fetch(uid.to_string(), "(UID RFC822)")
+            .context("UID FETCH RFC822")?
+            .iter()
+            .find_map(|fetch| fetch.body().map(<[u8]>::to_vec))
+            .context("no RFC822 body for this UID")?;
+        let mut out = format!("UIDVALIDITY {uid_validity} UID {uid}\n");
+        for (label, raw) in [
+            ("RFC822", &body),
+            ("HEADER (preuve et suppression)", &header),
+        ] {
+            let candidate =
+                parse_header_candidate(&self.account.name, location.clone(), raw, None)?;
+            out.push_str(&format!(
+                "\n[{label}]\nfingerprint: {}\nmessage_id: {:?}\ndate: {:?}\nfrom: {:?}\nto: {:?}\ncc: {:?}\nbcc: {:?}\nsubject: {:?}\n",
+                candidate.source.header_fingerprint,
+                candidate.source.message_id,
+                candidate.date,
+                candidate.from,
+                candidate.to,
+                candidate.cc,
+                candidate.bcc,
+                candidate.subject,
+            ));
+        }
+        let body_header = body
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map_or(&body[..], |end| &body[..end + 4]);
+        for (label, raw) in [("RFC822", body_header), ("HEADER", &header[..])] {
+            out.push_str(&format!(
+                "\n[en-tetes bruts {label}]\n{:?}\n",
+                String::from_utf8_lossy(raw)
+            ));
+        }
+        Ok(out)
+    }
+
     /// Read-only census: status of every message of the eligible folders
     /// (or of `only_folder`). `EXAMINE` and `BODY.PEEK` only; nothing stored.
     /// On Gmail, a message seen in several labels is counted once.
+    /// `on_step` receives a French line per folder and per header batch.
     pub fn audit_server(
         &mut self,
         only_folder: Option<&str>,
         handled: &HashSet<String>,
         ledger: &crate::handled::LedgerProofs,
+        on_step: &dyn Fn(&str),
     ) -> Result<Vec<crate::server_audit::AuditEntry>> {
         use crate::server_audit::{classify, confirm_proof, mark_held, AuditEntry};
 
@@ -2527,9 +2594,25 @@ impl ImapExporter {
                 .collect();
             uids.sort_unstable();
 
-            for (uid, provider_id, header) in
-                fetch_headers_by_uid(session, &folder.display, &uids, gmail_extension)?
+            let mut fetched = Vec::with_capacity(uids.len());
+            for (batch, chunk) in uids
+                .chunks(crate::contextual_export::HEADER_UID_BATCH)
+                .enumerate()
             {
+                on_step(&format!(
+                    "audit de {} ({}/{} messages)",
+                    folder.display,
+                    batch * crate::contextual_export::HEADER_UID_BATCH,
+                    uids.len()
+                ));
+                fetched.extend(fetch_headers_by_uid(
+                    session,
+                    &folder.display,
+                    chunk,
+                    gmail_extension,
+                )?);
+            }
+            for (uid, provider_id, header) in fetched {
                 if let Some(id) = &provider_id {
                     if !seen_provider_ids.insert(id.clone()) {
                         continue;
@@ -3218,14 +3301,17 @@ impl ImapExporter {
                             None
                         };
 
-                        if let Some((message_uid, body)) = fetched {
+                        if let Some((message_uid, body, header)) = fetched {
                             let body = body.as_slice();
+                            // The proof is taken from the header block the deletion
+                            // check reads again: MAILO rebuilds it for some messages
+                            // (raw 8-bit Subject), unlike the header of RFC822.
                             let source_proof = build_global_source_proof(
                                 &self.account.name,
                                 folder,
                                 mailbox_uid_validity,
                                 message_uid,
-                                body,
+                                header.as_deref().unwrap_or(body),
                                 provider_id.clone(),
                                 self.is_gmail,
                             );
@@ -3720,6 +3806,43 @@ pub struct FolderName {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const NO_MESSAGE_ID: &[u8] = b"From: Promo <promo@example.com>\r\nTo: me@example.org\r\nSubject: Offre\r\nDate: Mon, 9 Nov 2026 10:00:00 +0100\r\n\r\nCorps\r\n";
+
+    fn inbox() -> FolderName {
+        FolderName {
+            raw: "INBOX".to_string(),
+            display: "INBOX".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_build_global_source_proof_without_message_id() {
+        let proof = build_global_source_proof(
+            "acct",
+            &inbox(),
+            Some(7),
+            Some(12),
+            NO_MESSAGE_ID,
+            None,
+            false,
+        );
+        assert!(proof.is_some_and(|p| p.identity.message_id.is_none()));
+    }
+
+    #[test]
+    fn test_build_global_source_proof_gmail_without_provider_id() {
+        let proof = build_global_source_proof(
+            "acct",
+            &inbox(),
+            Some(7),
+            Some(12),
+            NO_MESSAGE_ID,
+            None,
+            true,
+        );
+        assert!(proof.is_none());
+    }
 
     #[test]
     fn test_counts_summary_splits_staged_from_handled() {

@@ -276,10 +276,15 @@ fn clean_server_accepted_deletes_legacy_messages_and_records_proofs() {
     require_fixture();
     let (_temp, paths) = cleanup_dir("clean-accepted", "CleanAccepted");
     let asked = Cell::new(None);
-    let summary = clean_server_in(&paths, "CleanAccepted", |_, count, _| {
-        asked.set(Some(count));
-        true
-    })
+    let summary = clean_server_in(
+        &paths,
+        "CleanAccepted",
+        |_, count, _| {
+            asked.set(Some(count));
+            true
+        },
+        &|_| {},
+    )
     .unwrap();
 
     assert_eq!(asked.get(), Some(2));
@@ -307,7 +312,7 @@ fn clean_server_refused_deletes_nothing() {
     require_fixture();
     let (_temp, paths) = cleanup_dir("clean-refused", "CleanRefused");
     let ledger_before = std::fs::read(&paths.ledger).unwrap();
-    let summary = clean_server_in(&paths, "CleanRefused", |_, _, _| false).unwrap();
+    let summary = clean_server_in(&paths, "CleanRefused", |_, _, _| false, &|_| {}).unwrap();
 
     assert_eq!(summary, "Nettoyage annulé, rien n'a été supprimé");
     assert_eq!(inbox_message_ids("clean-refused"), SEEDED_IDS.to_vec());

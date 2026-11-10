@@ -509,12 +509,17 @@ pub fn proof_target_key(proof: &LocalSourceProof) -> String {
     })
 }
 
+/// A proof targets one message: UIDVALIDITY + UID locate it exactly, the
+/// header fingerprint confirms it before deletion. A `Message-ID` is not
+/// required: some messages (spam, phishing) have none, and without a proof
+/// discarding them would drop the note but leave the message, exported
+/// again at every run. Gmail deletion needs the provider id; it reports a
+/// proof without one as to retry.
 pub fn proof_is_complete(proof: &LocalSourceProof) -> bool {
     !proof.identity.account.trim().is_empty()
         && !proof.identity.header_fingerprint.trim().is_empty()
         && proof.location.uid > 0
         && proof.location.uid_validity > 0
-        && (proof.identity.provider_id.is_some() || proof.identity.message_id.is_some())
         // The provider id is sent as `X-GM-MSGID <id>` in a server search.
         && proof
             .identity
