@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-11
+
+### Added
+
+- **Comparer l'identité d'un message** : `audit-server <COMPTE> --folder <DOSSIER> --uid <N>` affiche, en lecture seule, l'identité d'un message calculée depuis le message complet et depuis son bloc d'en-têtes. Une différence explique une suppression refusée pour identité non concordante.
+
+### Changed
+
+- **Validation de routage plus rapide** : appliquer une décision dans la fenêtre de revue ne relit plus toutes les notes du coffre pour relier les messages cités. Seules les notes nouvelles ou modifiées sont relues, et l'index est construit en arrière-plan dès l'ouverture de la fenêtre.
+- **Nettoyage du serveur** : le recensement précède le parcours de l'arbre des notes, et l'infobulle du tray affiche l'étape en cours.
+
+### Fixed
+
+- **Images Gmail jamais perdues sans trace** (#14, #15) : chaque image est écrite ou mise en quarantaine, même sans `Content-Disposition`. Les marqueurs `[image: …]` de Gmail sont reliés à leurs images, y compris quand ils sont coupés sur deux lignes. Quand une image annoncée n'est pas conservée, la note porte `keep_on_server` et le message n'est jamais supprimé du serveur.
+- **Rendu Gmail** : les liens dont l'URL contient des parenthèses, les listes imbriquées, les en-têtes de transfert et les noms de pièces jointes encodés (RFC 2231) restent intacts.
+- **Retours à la ligne** (#18) : un corps `format=flowed` est recollé selon la RFC 3676, et la suite d'un item de liste coupé est rattachée à son item.
+- **Note écrasée au rangement** : une réponse et un transfert de même sujet portaient le même nom, et ranger le second écrasait le premier. La seconde note reçoit désormais un suffixe.
+- **Suppression refusée sur certains serveurs** (lilo.org / MAILO) : l'identité vérifiée avant suppression est relue depuis le bloc d'en-têtes brut, que ces serveurs ne réécrivent pas, et la preuve d'export est calculée sur ce même bloc.
+- **Message sans Message-ID** : un message sans `Message-ID` (spam, hameçonnage) peut désormais être supprimé après export. Il est localisé par son UID et confirmé par l'empreinte de ses en-têtes.
+- **Import Thunderbird** : répondre « Non » importait quand même les comptes. Les boutons disent maintenant ce qu'ils importent (« Comptes et mots de passe », « Comptes seulement », « Ne rien importer »), et une boîte déjà configurée sous un autre nom (même serveur et même identifiant) n'est plus ajoutée une seconde fois.
+
+### Security
+
+- **openssl 0.10.82** : corrige les avis RUSTSEC signalés contre openssl 0.10.75.
+
 ## [0.27.0] - 2026-11-07
 
 ### Added
