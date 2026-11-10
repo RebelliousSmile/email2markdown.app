@@ -3255,6 +3255,59 @@ mod contextual_export_tests {
     }
 
     #[test]
+    fn test_convert_raw_contextual_with_shared_stem_quarantines_under_final_stem() {
+        // #19: two notes with the same base name; the second is installed with a
+        // stable-key suffix and its skipped logo must follow that final stem.
+        let temp = TempDir::new().unwrap();
+        let export = temp.path().join("export");
+        let target = export.join("Pro");
+        fs::create_dir_all(&target).unwrap();
+        let mut account = account(&export);
+        account.skip_signature_images = true;
+        account.delete_after_export = true;
+        let logo = "L".repeat(20 * 1024);
+        let mut stems = Vec::new();
+        for (n, message_id) in ["one@example.com", "two@example.com"].iter().enumerate() {
+            let raw = format!(
+                "Message-ID: <{message_id}>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Devis\r\nContent-Type: multipart/mixed; boundary=BOUND\r\n\r\n--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody\r\n--BOUND\r\nContent-Type: image/png; name=logo.png\r\nContent-Disposition: inline; filename=logo.png\r\n\r\n{logo}\r\n--BOUND--\r\n"
+            )
+            .into_bytes();
+            let location = location("INBOX", 42 + n as u32);
+            let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+            let status = convert_raw_contextual(
+                &target,
+                &account,
+                &candidate,
+                &location,
+                &raw,
+                DateLayout::None,
+            )
+            .unwrap();
+            match status {
+                ConversionStatus::Written { markdown, .. } => {
+                    stems.push(markdown.file_stem().unwrap().to_owned())
+                }
+                other => panic!("expected write, got {other:?}"),
+            }
+        }
+
+        let skipped = export.join("_skipped");
+        assert_ne!(stems[0], stems[1]);
+        for stem in &stems {
+            assert!(skipped.join(stem).join("logo.png").exists(), "{stem:?}");
+            assert!(!skipped.join(stem).join("logo_2.png").exists(), "{stem:?}");
+        }
+        let mut dirs: Vec<_> = fs::read_dir(&skipped)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        dirs.sort();
+        let mut expected = stems.clone();
+        expected.sort();
+        assert_eq!(dirs, expected);
+    }
+
+    #[test]
     fn test_convert_raw_contextual_without_deletion_quarantines_nothing() {
         // #14 reopening, third path: the quarantine exists only with
         // `delete_after_export`; without it the server keeps the logo.
@@ -6081,9 +6134,6 @@ mod gmail_seed_tests {
     }
 
     #[test]
-    // Observed: `Recette_(informatique)` becomes `Recette_/(informatique/` and a stray
-    // `)` follows the link; the nested `<ul>` item is indented by one space only.
-    #[ignore = "#19 URL with parentheses corrupted, nested list flattened"]
     fn test_gmail_seed_c1_m1_html_lists_links_signature() {
         check("seed-c1-m1");
     }
@@ -6104,8 +6154,6 @@ mod gmail_seed_tests {
     }
 
     #[test]
-    // Observed: attachment written as `2026-11-04_UTF-8''capture%20d%27%C3%A9cran%20%C3%A9t%C3%A9.png`.
-    #[ignore = "#19 RFC 2231 attachment name not decoded"]
     fn test_gmail_seed_c2_m5_attachments_and_accented_name() {
         check("seed-c2-m5");
     }
@@ -6134,8 +6182,6 @@ mod gmail_seed_tests {
     }
 
     #[test]
-    // Observed: `De : **Claire Petit** <…>\> Date: … Subject: … To: …` on a single line.
-    #[ignore = "#19 forwarded header merged on one line"]
     fn test_gmail_seed_c4_m10_inline_forward_table() {
         check("seed-c4-m10");
     }

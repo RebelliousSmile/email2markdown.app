@@ -168,10 +168,11 @@ static MEDIA_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         // An image destination may be `<my photo.png>` (what `rewrite_cid_images`
         // writes for a name with spaces); `regex` forbids reusing a group name,
-        // hence the `_a` siblings.
-        r"\[!\[(?P<ialt>[^\]]*)\]\((?:<(?P<iurl_a>[^>]+)>|(?P<iurl>[^)\s]+))[^)]*\)\]\((?P<lurl>[^)\s]+)[^)]*\)",
+        // hence the `_a` siblings. A link destination may hold balanced
+        // parentheses: `https://fr.wikipedia.org/wiki/Recette_(informatique)` (#19).
+        r"\[!\[(?P<ialt>[^\]]*)\]\((?:<(?P<iurl_a>[^>]+)>|(?P<iurl>[^)\s]+))[^)]*\)\]\((?P<lurl>(?:[^()\s]|\([^()\s]*\))+)[^)]*\)",
         r"|!\[(?P<alt>[^\]]*)\]\((?:<(?P<src_a>[^>]+)>|(?P<src>[^)\s]+))[^)]*\)",
-        r"|\[(?P<text>[^\[\]]+)\]\((?P<href>[^)\s]+)[^)]*\)",
+        r"|\[(?P<text>[^\[\]]+)\]\((?P<href>(?:[^()\s]|\([^()\s]*\))+)[^)]*\)",
     ))
     .expect("static regex")
 });
@@ -507,6 +508,19 @@ mod tests {
                 ("devis".to_string(), "https://a.test/d".to_string()),
                 ("logo".to_string(), "https://a.test/home".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn test_body_media_with_parentheses_in_url_keeps_it_whole() {
+        let body = "la page [wiki][1] explique\n\n\
+                    [1]: https://fr.wikipedia.org/wiki/Recette_(informatique)";
+        assert_eq!(
+            body_media(body).links,
+            vec![(
+                "wiki".to_string(),
+                "https://fr.wikipedia.org/wiki/Recette_(informatique)".to_string()
+            )]
         );
     }
 

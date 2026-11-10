@@ -859,8 +859,17 @@ pub(crate) fn convert_raw_contextual_unlocked(
     ));
     fs::create_dir(&staging)?;
     // The staging directory is removed below: skipped images go to the account's
-    // real export directory instead, so they outlive the server copy.
+    // real export directory instead, so they outlive the server copy. They land
+    // in a pending directory first: the installed note may be renamed with a
+    // stable-key suffix, and its images must follow its final stem (#19).
     let quarantine_root = Path::new(&account.export_directory).join("_skipped");
+    let quarantine_pending = quarantine_root.join(format!(
+        ".pending-{}",
+        staging
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    ));
     let mut quarantined: Vec<PathBuf> = Vec::new();
 
     let result = (|| {
@@ -880,7 +889,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
             quarantine: account
                 .delete_after_export
                 .then(|| crate::email_export::Quarantine {
-                    root: &quarantine_root,
+                    root: &quarantine_pending,
                     written: &mut quarantined,
                 }),
         };
@@ -904,11 +913,50 @@ pub(crate) fn convert_raw_contextual_unlocked(
         )
     })();
     let _ = fs::remove_dir_all(&staging);
+    let result = result.and_then(|status| {
+        if let ConversionStatus::Written { markdown, .. } = &status {
+            settle_quarantine(&quarantine_root, markdown, &mut quarantined)
+                .context("move quarantined images under the note stem")?;
+        }
+        Ok(status)
+    });
     if result.is_err() {
         // No note was installed: its quarantined images would be orphans.
         crate::email_export::discard_quarantined(&mut quarantined, 0);
     }
+    // Only an empty pending tree is removed; a leftover is never deleted blind.
+    if let Ok(entries) = fs::read_dir(&quarantine_pending) {
+        for entry in entries.flatten() {
+            let _ = fs::remove_dir(entry.path());
+        }
+    }
+    let _ = fs::remove_dir(&quarantine_pending);
     result
+}
+
+/// Moves the images quarantined for one note into `<root>/<note stem>/`,
+/// the stem of the note as installed (#19).
+fn settle_quarantine(root: &Path, markdown: &Path, quarantined: &mut [PathBuf]) -> Result<()> {
+    if quarantined.is_empty() {
+        return Ok(());
+    }
+    let stem = markdown
+        .file_stem()
+        .context("installed note has no file stem")?;
+    let destination = root.join(stem);
+    fs::create_dir_all(&destination)?;
+    for path in quarantined.iter_mut() {
+        let name = path
+            .file_name()
+            .context("quarantined image has no file name")?
+            .to_string_lossy()
+            .into_owned();
+        let moved = destination.join(crate::email_export::unique_file_name(&destination, &name));
+        fs::rename(&*path, &moved)
+            .with_context(|| format!("move quarantined image {}", moved.display()))?;
+        *path = moved;
+    }
+    Ok(())
 }
 
 fn install_staged(

@@ -1351,7 +1351,7 @@ fn extract_attachments(
 
 /// `base` when it is free in `dir`, otherwise `base` with a numeric suffix
 /// inserted before the extension: `invoice.pdf` → `invoice_2.pdf`, not `invoice.pdf_2`.
-fn unique_file_name(dir: &Path, base: &str) -> String {
+pub(crate) fn unique_file_name(dir: &Path, base: &str) -> String {
     let mut name = base.to_string();
     let mut suffix = 2u32;
     while dir.join(&name).exists() {
@@ -1366,7 +1366,20 @@ fn unique_file_name(dir: &Path, base: &str) -> String {
 
 /// Extract filename from an attachment part.
 fn extract_attachment_filename(part: &ParsedMail) -> Option<String> {
-    // Try Content-Disposition header first
+    // mailparse decodes RFC 2231 parameters (`filename*=UTF-8''capture%20d%27…`,
+    // continuations) into the plain key (#19).
+    let decoded = part
+        .get_content_disposition()
+        .params
+        .get("filename")
+        .or_else(|| part.ctype.params.get("name"))
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+    if decoded.is_some() {
+        return decoded;
+    }
+
+    // Fallback: raw header scan, Content-Disposition first
     if let Some(disposition) = part.headers.get_first_value("Content-Disposition") {
         if let Some(filename) = extract_filename_from_header(&disposition) {
             return Some(filename);
@@ -5321,6 +5334,43 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             result.as_deref(),
             Some("invoice.pdf"),
             "name= parameter should be extracted from Content-Type"
+        );
+    }
+
+    fn first_subpart(raw: &str) -> String {
+        let mail = mailparse::parse_mail(raw.as_bytes()).expect("parse");
+        extract_attachment_filename(&mail.subparts[0]).unwrap_or_default()
+    }
+
+    const RFC2231_MAIL: &str = "Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+        --b\r\n{part}\r\n\r\nxx\r\n--b--\r\n";
+
+    #[test]
+    fn test_extract_attachment_filename_with_rfc2231_disposition_decoded() {
+        let part = "Content-Type: image/png\r\nContent-Disposition: attachment;\r\n \
+                    filename*=UTF-8''capture%20d%27%C3%A9cran%20%C3%A9t%C3%A9.png";
+        assert_eq!(
+            first_subpart(&RFC2231_MAIL.replace("{part}", part)),
+            "capture d'écran été.png"
+        );
+    }
+
+    #[test]
+    fn test_extract_attachment_filename_with_rfc2231_content_type_name_decoded() {
+        let part = "Content-Type: image/png; name*=UTF-8''%C3%A9t%C3%A9.png";
+        assert_eq!(
+            first_subpart(&RFC2231_MAIL.replace("{part}", part)),
+            "été.png"
+        );
+    }
+
+    #[test]
+    fn test_extract_attachment_filename_with_ascii_name_unchanged() {
+        let part = "Content-Type: application/pdf\r\n\
+                    Content-Disposition: attachment; filename=\"report.pdf\"";
+        assert_eq!(
+            first_subpart(&RFC2231_MAIL.replace("{part}", part)),
+            "report.pdf"
         );
     }
 

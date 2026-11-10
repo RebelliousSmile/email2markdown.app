@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Instruction : rendu HTML, noms de pièces jointes et quarantaine
@@ -115,3 +115,10 @@ Chaque défaut suit le même déroulé : localiser l'étape fautive par un test 
 | 4 | L'en-tête de transfert de C4-M10 tient sur quatre lignes ; la prose coupée reste recollée |
 | 5 | Dans un export partagé, la quarantaine de chaque note est sous son propre stem |
 | 6 | `cargo test` est vert sans `#[ignore]` marqué `#19` |
+
+## Écarts et notes
+
+- **Liens** : la cause n'était pas une normalisation de chemins. htmd échappe les parenthèses de la destination, `extract_links` coupait à la première `)`, et l'URL tronquée `Recette_\(informatique\` passait par WHATWG qui transforme `\` en `/`. `MEDIA_RE` (`email_block.rs`) acceptait déjà mal les parenthèses : corrigé aussi.
+- **Listes** : la cause était `collapse_whitespace`, qui réduisait toute suite d'espaces, indentation comprise. L'indentation est recalculée d'après le parent, pas recopiée depuis htmd (qui indente de 4 espaces, risque de bloc de code).
+- **En-tête de transfert** : la cause est `unwrap_lines`. Une ligne qui commence par un champ d'en-tête (`HEADER_FIELD_RE` : `De`, `From`, `Date`, `Subject`, `Objet`, `To`, `À`, `Cc`, `Sent`, `Envoyé`) est désormais préservée. **Pour la phase 4** : cette protection doit rester active quand `unwrap_lines` apprendra à recoller les items de liste et le `format=flowed`.
+- **Quarantaine** : la cause est l'installation par l'export contextuel (`unique_stable_path` suffixe la note après coup). Plutôt que de deviner le nom final avant l'installation, les images sont écrites dans `_skipped/.pending-<staging>/`, puis déplacées sous `_skipped/<stem final>/` par `settle_quarantine`. Le dossier d'attente n'est supprimé que s'il est vide.

@@ -522,7 +522,10 @@ pub fn assert_seed_note(
         .iter()
         .filter_map(|name| std::fs::read(dir.join(name)).ok())
         .collect();
-    let skipped_files: Vec<Vec<u8>> = files_under(skipped_dir)
+    // Each note's quarantine lives under `_skipped/<note stem>/`, never in a
+    // folder shared with another note of the same base name (#19).
+    let own_skipped = skipped_dir.join(note_path.file_stem().expect("note has a stem"));
+    let skipped_files: Vec<Vec<u8>> = files_under(&own_skipped)
         .iter()
         .filter_map(|p| std::fs::read(p).ok())
         .collect();
