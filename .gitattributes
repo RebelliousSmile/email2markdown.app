@@ -1,0 +1,2 @@
+# Gmail seed corpus: CRLF bytes compared to the generator output, never normalized.
+tests/fixtures/imap/seed/gmail/*.eml -text

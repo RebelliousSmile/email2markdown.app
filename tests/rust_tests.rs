@@ -5811,3 +5811,246 @@ mod env_file_tests {
         assert_eq!(mode & 0o777, 0o600);
     }
 }
+
+mod common;
+
+mod gmail_seed_tests {
+    //! Gmail seed corpus (issues #14, #15, #18, #19): every message is converted into
+    //! one shared export directory, as a real run would, then checked against
+    //! `common::gmail_seed::CATALOGUE`. Ignored tests reproduce an open bug.
+    use super::common::gmail_seed::*;
+    use email_to_markdown::config::Account;
+    use email_to_markdown::contextual_export::{
+        convert_raw_contextual, parse_header_candidate, ConversionStatus, MessageLocation,
+    };
+    use email_to_markdown::date_layout::DateLayout;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    struct Exported {
+        _tmp: TempDir,
+        export: PathBuf,
+        notes: Vec<(&'static str, PathBuf, usize, Vec<u8>)>,
+    }
+
+    fn seed_account(export: &std::path::Path) -> Account {
+        Account {
+            name: "Seed".into(),
+            server: "imap.example.com".into(),
+            port: 993,
+            username: "bob@example.com".into(),
+            password: Some("unused".into()),
+            ignored_folders: vec![],
+            export_directory: export.to_string_lossy().into_owned(),
+            quote_depth: 5,
+            skip_existing: false,
+            collect_contacts: false,
+            skip_signature_images: true,
+            delete_after_export: true,
+            cleanup_empty_dirs: true,
+            batch_size: 0,
+        }
+    }
+
+    /// Convert the 12 seed messages, in corpus order, into one export directory.
+    fn export_seed() -> Exported {
+        let tmp = TempDir::new().unwrap();
+        let export = tmp.path().join("export");
+        std::fs::create_dir_all(&export).unwrap();
+        let account = seed_account(&export);
+        let notes = CATALOGUE
+            .iter()
+            .enumerate()
+            .map(|(i, exp)| {
+                let raw = load(exp.file);
+                let location = MessageLocation {
+                    folder_raw: "INBOX".into(),
+                    folder_display: "INBOX".into(),
+                    uid_validity: 1,
+                    uid: i as u32 + 1,
+                };
+                let candidate =
+                    parse_header_candidate("Seed", location.clone(), &raw, None).unwrap();
+                let status = convert_raw_contextual(
+                    &export,
+                    &account,
+                    &candidate,
+                    &location,
+                    &raw,
+                    DateLayout::None,
+                )
+                .unwrap();
+                let ConversionStatus::Written {
+                    markdown,
+                    quarantined,
+                    ..
+                } = status
+                else {
+                    panic!("{}: not written: {status:?}", exp.key);
+                };
+                (exp.key, markdown, quarantined, raw)
+            })
+            .collect();
+        Exported {
+            _tmp: tmp,
+            export,
+            notes,
+        }
+    }
+
+    fn check(key: &str) {
+        let exported = export_seed();
+        let (_, note, quarantined, raw) = exported
+            .notes
+            .iter()
+            .find(|(k, ..)| *k == key)
+            .unwrap_or_else(|| panic!("{key} not exported"));
+        assert_seed_note(
+            note,
+            raw,
+            *quarantined,
+            &exported.export.join("_skipped"),
+            expectation(key),
+        );
+    }
+
+    #[test]
+    // Observed: `Recette_(informatique)` becomes `Recette_/(informatique/` and a stray
+    // `)` follows the link; the nested `<ul>` item is indented by one space only.
+    #[ignore = "#19 URL with parentheses corrupted, nested list flattened"]
+    fn test_gmail_seed_c1_m1_html_lists_links_signature() {
+        check("seed-c1-m1");
+    }
+
+    #[test]
+    fn test_gmail_seed_c1_m2_quoted_captures() {
+        check("seed-c1-m2");
+    }
+
+    #[test]
+    fn test_gmail_seed_c1_m3_cid_referenced_twice() {
+        check("seed-c1-m3");
+    }
+
+    #[test]
+    fn test_gmail_seed_c2_m4_related_root_without_disposition() {
+        check("seed-c2-m4");
+    }
+
+    #[test]
+    // Observed: attachment written as `2026-11-04_UTF-8''capture%20d%27%C3%A9cran%20%C3%A9t%C3%A9.png`.
+    #[ignore = "#19 RFC 2231 attachment name not decoded"]
+    fn test_gmail_seed_c2_m5_attachments_and_accented_name() {
+        check("seed-c2-m5");
+    }
+
+    #[test]
+    fn test_gmail_seed_c2_m6_gif_only() {
+        check("seed-c2-m6");
+    }
+
+    #[test]
+    // Observed: list items keep the soft breaks (`fiche` / `annonce`), a line starts with `«`.
+    #[ignore = "#18 format=flowed list items and guillemets cut"]
+    fn test_gmail_seed_c3_m7_flowed_plain_text() {
+        check("seed-c3-m7");
+    }
+
+    #[test]
+    // Observed: both `[image: image.png]` stay in the body, the scans are listed as attachments.
+    #[ignore = "#15 [image: …] markers not linked to the attached images"]
+    fn test_gmail_seed_c3_m8_image_markers() {
+        check("seed-c3-m8");
+    }
+
+    #[test]
+    fn test_gmail_seed_c3_m9_marker_without_image() {
+        check("seed-c3-m9");
+    }
+
+    #[test]
+    // Observed: `De : **Claire Petit** <…>\> Date: … Subject: … To: …` on a single line.
+    #[ignore = "#19 forwarded header merged on one line"]
+    fn test_gmail_seed_c4_m10_inline_forward_table() {
+        check("seed-c4-m10");
+    }
+
+    #[test]
+    fn test_gmail_seed_c4_m11_forward_as_attachment() {
+        check("seed-c4-m11");
+    }
+
+    #[test]
+    // Observed: the HTML has no `cid:`, the `text/plain` part is kept with its
+    // `[image: logo.png]` markers, one of them cut as `[image:` / `x.png]`.
+    #[ignore = "#15 [image: …] markers of a remote signature left in the plain body"]
+    fn test_gmail_seed_c4_m12_encoded_subject_long_url() {
+        check("seed-c4-m12");
+    }
+
+    #[test]
+    fn test_gmail_seed_substitute_headers_only() {
+        let raw = load("c1-m2-re-retours-recette.eml");
+        let out = substitute(
+            &raw,
+            "20261110T120000",
+            "A <a@test.invalid>",
+            "B <b@test.invalid>",
+        );
+        let text = String::from_utf8(out.clone()).unwrap();
+        let split = |b: &[u8]| b.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let (head, body) = text.split_at(split(&out));
+        assert!(head.contains("\r\nFrom: A <a@test.invalid>\r\n"));
+        assert!(head.contains("\r\nTo: B <b@test.invalid>\r\n"));
+        assert!(head.contains("[email-to-markdown seed 20261110T120000]"));
+        assert!(head.contains("<seed-c1-m2.20261110T120000@email-to-markdown.test>"));
+        assert!(head.contains("<seed-c1-m1.20261110T120000@email-to-markdown.test>"));
+        assert!(!head.contains(FIXTURE_ALICE) && !head.contains(FIXTURE_BOB));
+        assert!(!head.contains(".fixture@") && !head.contains("seed fixture]"));
+        assert_eq!(
+            body.as_bytes(),
+            &raw[split(&raw)..],
+            "body bytes must not change"
+        );
+    }
+
+    /// The versioned corpus is exactly what the generator produces.
+    #[test]
+    fn test_gmail_seed_corpus_matches_generator() {
+        let python = ["python3", "python"]
+            .into_iter()
+            .find(|exe| {
+                std::process::Command::new(exe)
+                    .arg("--version")
+                    .output()
+                    .is_ok_and(|o| o.status.success())
+            })
+            .expect("python3 or python is required to check the Gmail seed generator");
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new(python)
+            .arg("-I")
+            .arg(generator())
+            .arg(tmp.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "build_seed.py failed");
+        let mut names: Vec<String> = std::fs::read_dir(seed_dir())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let mut generated: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        generated.sort();
+        assert_eq!(names, generated, "file list differs from the generator");
+        for name in &names {
+            let want = std::fs::read(tmp.path().join(name)).unwrap();
+            assert!(
+                load(name) == want,
+                "{name} differs from build_seed.py output: regenerate"
+            );
+        }
+    }
+}

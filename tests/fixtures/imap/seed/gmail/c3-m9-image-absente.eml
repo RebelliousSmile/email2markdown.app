@@ -1,0 +1,18 @@
+MIME-Version: 1.0
+Date: Thu, 5 Nov 2026 13:40:00 +0100
+References: <seed-c3-m7.fixture@email-to-markdown.test> <seed-c3-m8.fixture@email-to-markdown.test>
+In-Reply-To: <seed-c3-m8.fixture@email-to-markdown.test>
+Message-ID: <seed-c3-m9.fixture@email-to-markdown.test>
+Subject: Re: [email-to-markdown seed fixture] =?UTF-8?Q?Notes_de_r=C3=A9union?=
+From: Bob Durand <bob@example.com>
+To: Alice Martin <alice@example.com>
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+Le plan de salle annot=C3=A9, comme promis :
+
+[image: image.png]
+
+--=20
+Bob Durand
+Chef de projet

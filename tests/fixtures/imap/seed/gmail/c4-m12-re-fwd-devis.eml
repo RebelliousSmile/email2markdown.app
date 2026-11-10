@@ -1,0 +1,52 @@
+MIME-Version: 1.0
+Date: Fri, 6 Nov 2026 11:00:00 +0100
+References: <seed-c4-m10.fixture@email-to-markdown.test>
+In-Reply-To: <seed-c4-m10.fixture@email-to-markdown.test>
+Message-ID: <seed-c4-m12.fixture@email-to-markdown.test>
+Subject: Re: Fwd: [email-to-markdown seed fixture] =?UTF-8?Q?Devis_r=C3=A9vis=C3=A9_=F0=9F=9A=80?=
+From: Alice Martin <alice@example.com>
+To: Bob Durand <bob@example.com>
+Content-Type: multipart/alternative; boundary="000000000000c4m12a0000000000"
+
+--000000000000c4m12a0000000000
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+Merci Bob. Je valide le *total* recalcul=C3=A9, mais le poste_recette doit =
+rester
+=C3=A0 3 jours. Liste de contr=C3=B4le :
+
+- [x] montants v=C3=A9rifi=C3=A9s
+- [ ] signature de Claire
+
+Le devis sign=C3=A9 sera d=C3=A9pos=C3=A9 ici :
+<https://compta.example.com/devis/2026/11/claire-petit/revision-2?format=3D=
+pdf&signature=3Dattendue&relance=3Dnon>
+
+--
+Alice Martin
+Responsable qualit=C3=A9
+[image: logo.png]
+[image: linkedin.png] <https://www.linkedin.com/company/example> [image:
+x.png] <https://x.com/example>
+--000000000000c4m12a0000000000
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr"><div>Merci Bob. Je valide le *total* recalcul=C3=A9, mais =
+le poste_recette doit rester =C3=A0 3 jours. Liste de contr=C3=B4le :</div>=
+<div><br></div><div>- [x] montants v=C3=A9rifi=C3=A9s</div><div>- [ ] signa=
+ture de Claire</div><div><br></div><div>Le devis sign=C3=A9 sera d=C3=A9pos=
+=C3=A9 ici :</div><div><a href=3D"https://compta.example.com/devis/2026/11/=
+claire-petit/revision-2?format=3Dpdf&amp;signature=3Dattendue&amp;relance=
+=3Dnon">https://compta.example.com/devis/2026/11/claire-petit/revision-2?fo=
+rmat=3Dpdf&amp;signature=3Dattendue&amp;relance=3Dnon</a></div><div><br></d=
+iv><span class=3D"gmail_signature_prefix">-- </span><br><div dir=3D"ltr" cl=
+ass=3D"gmail_signature" data-smartmail=3D"gmail_signature"><div dir=3D"ltr"=
+><div>Alice Martin</div><div>Responsable qualit=C3=A9</div><div><img src=3D=
+"https://example.com/sig/logo" alt=3D"logo.png" width=3D"96" height=3D"32">=
+</div><div><a href=3D"https://www.linkedin.com/company/example"><img src=3D=
+"https://example.com/sig/in" alt=3D"linkedin.png" width=3D"16" height=3D"16=
+"></a> <a href=3D"https://x.com/example"><img src=3D"https://example.com/si=
+g/x" alt=3D"x.png" width=3D"16" height=3D"16"></a></div></div></div></div>
+--000000000000c4m12a0000000000--
