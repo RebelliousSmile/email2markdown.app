@@ -334,10 +334,14 @@ pub fn write_accounts_merged(accounts: &[Account], path: &Path) -> Result<Import
     };
 
     for account in accounts {
-        if !merged
-            .iter()
-            .any(|raw| raw.name.eq_ignore_ascii_case(&account.name))
-        {
+        // Same mailbox under another name ("Pro" vs "pro@example.com") is
+        // already configured: importing it would export it twice.
+        let configured = merged.iter().any(|raw| {
+            raw.name.eq_ignore_ascii_case(&account.name)
+                || (raw.server.eq_ignore_ascii_case(&account.server)
+                    && raw.username.eq_ignore_ascii_case(&account.username))
+        });
+        if !configured {
             merged.push(crate::config::RawAccount {
                 name: account.name.clone(),
                 server: account.server.clone(),
@@ -805,6 +809,20 @@ mod tests {
                 ("travail", absolute, true),
             ]
         );
+    }
+
+    #[test]
+    fn test_write_accounts_merged_with_same_mailbox_under_another_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("accounts.yaml");
+        let before = "accounts:\n- name: Pro\n  server: IMAP.example\n  port: 993\n  username: Pro@example.com\n";
+        fs::write(&path, before).unwrap();
+        let mut same_mailbox = imported("pro@example.com", "imap.example");
+        same_mailbox.username = "pro@example.com".to_string();
+
+        let summary = write_accounts_merged(&[same_mailbox], &path).unwrap();
+
+        assert_eq!(summary.added, 0);
     }
 
     #[test]

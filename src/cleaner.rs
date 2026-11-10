@@ -71,22 +71,15 @@ pub fn clean(body: &str) -> CleanResult {
     CleanResult { body, social_links }
 }
 
-/// Collapse runs of horizontal whitespace (ASCII space, tab, U+00A0) into a
-/// single ASCII space. Newlines are preserved verbatim and runs are NOT
-/// collapsed across line boundaries.
-pub fn collapse_whitespace(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    let is_collapsible = |c: char| c == ' ' || c == '\t' || c == '\u{00A0}';
+fn is_collapsible(c: char) -> bool {
+    c == ' ' || c == '\t' || c == '\u{00A0}'
+}
 
-    let mut out = String::with_capacity(s.len());
+/// Collapse runs of horizontal whitespace inside one line into one space.
+fn collapse_line(line: &str, out: &mut String) {
     let mut prev_was_ws = false;
-    for c in s.chars() {
-        if c == '\n' {
-            out.push('\n');
-            prev_was_ws = false;
-        } else if is_collapsible(c) {
+    for c in line.chars() {
+        if is_collapsible(c) {
             if !prev_was_ws {
                 out.push(' ');
                 prev_was_ws = true;
@@ -95,6 +88,82 @@ pub fn collapse_whitespace(s: &str) -> String {
             out.push(c);
             prev_was_ws = false;
         }
+    }
+}
+
+/// `(quote prefix, leading whitespace, list marker, rest)` of a list item line.
+static LIST_ITEM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^((?:> ?)*)([ \t\u{00A0}]*)([*+-]|\d{1,9}[.)])([ \t\u{00A0}].*)$")
+        .expect("static regex")
+});
+
+/// Nesting of the list being collapsed: `(raw indent, output indent, marker)`
+/// per open level, reset by any line that is neither a list item nor blank.
+#[derive(Default)]
+struct ListNesting {
+    quote: String,
+    levels: Vec<(usize, usize, usize)>,
+}
+
+impl ListNesting {
+    /// Output indentation of an item indented by `raw` columns: 0 for the
+    /// first level, the parent's content column for a nested one, so the
+    /// nesting survives (Obsidian needs 2 spaces under `-`, 3 under `1.`).
+    fn indent(&mut self, quote: &str, raw: usize, marker: usize) -> usize {
+        if self.quote != quote {
+            self.quote = quote.to_string();
+            self.levels.clear();
+        }
+        while self.levels.last().is_some_and(|&(r, ..)| r > raw) {
+            self.levels.pop();
+        }
+        let indent = match self.levels.last() {
+            Some(&(r, out, _)) if r == raw => {
+                self.levels.pop();
+                out
+            }
+            Some(&(_, out, parent_marker)) => out + parent_marker + 1,
+            None => 0,
+        };
+        self.levels.push((raw, indent, marker));
+        indent
+    }
+}
+
+/// Collapse runs of horizontal whitespace (ASCII space, tab, U+00A0) into a
+/// single ASCII space. Newlines are preserved verbatim and runs are NOT
+/// collapsed across line boundaries.
+///
+/// A list item keeps its nesting: its indentation is rewritten to the parent
+/// item's content column instead of collapsing to one space (#19, an HTML
+/// `<ul>` inside `<li>` that htmd indents by 4 spaces).
+pub fn collapse_whitespace(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut nesting = ListNesting::default();
+    for (i, line) in s.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if let Some(caps) = LIST_ITEM_RE.captures(line) {
+            let raw = caps[2].chars().map(|c| if c == '\t' { 4 } else { 1 }).sum();
+            let marker = &caps[3];
+            let indent = nesting.indent(caps[1].trim_end(), raw, marker.len());
+            out.push_str(&caps[1]);
+            out.push_str(&" ".repeat(indent));
+            out.push_str(marker);
+            collapse_line(&caps[4], &mut out);
+            continue;
+        }
+        if !line
+            .trim_matches(|c: char| is_collapsible(c) || c == '>')
+            .is_empty()
+        {
+            nesting = ListNesting::default();
+        }
+        collapse_line(line, &mut out);
     }
     out
 }
@@ -459,8 +528,20 @@ pub fn extract_social_footer(s: &str) -> (String, Option<BTreeMap<String, String
     (new_body, Some(map))
 }
 
-static INLINE_LINK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^\)]+)\)").expect("static regex"));
+/// The destination accepts escaped (`\(`) and balanced parentheses, what htmd
+/// emits for `https://fr.wikipedia.org/wiki/Recette_(informatique)` (#19).
+static INLINE_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[([^\]]+)\]\(((?:\\.|\([^()\s]*\)|[^()\\])+)\)").expect("static regex")
+});
+
+static MD_ESCAPE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\\([!-/:-@\[-`{-~])").expect("static regex"));
+
+/// Drop the Markdown backslash escapes of a link destination: `Url::parse`
+/// would read `\(` as a path separator (`Recette_/(informatique/`).
+fn unescape_destination(url: &str) -> String {
+    MD_ESCAPE_RE.replace_all(url, "$1").into_owned()
+}
 
 /// Rewrite inline markdown links `[text](url)` to numbered reference form
 /// `[text][N]` and append a `[N]: url` block at the bottom of the body.
@@ -487,16 +568,16 @@ pub fn extract_links(s: &str) -> String {
         let text = &caps[1];
         let raw = &caps[2];
         // Strip optional Markdown title attribute: [text](url "title") → url
-        let url = raw.split_whitespace().next().unwrap_or(raw).trim();
+        let url = unescape_destination(raw.split_whitespace().next().unwrap_or(raw).trim());
         // Fragment-only or relative links are valid — keep as-is silently
         if url.starts_with('#') || !url.contains("://") {
             return caps[0].to_string();
         }
-        match Url::parse(url) {
+        match Url::parse(&url) {
             Ok(_) => {
                 counter += 1;
                 let n = counter;
-                refs.push((n, url.to_string()));
+                refs.push((n, url));
                 format!("[{}][{}]", text, n)
             }
             Err(_) => {
@@ -599,17 +680,68 @@ const UNWRAP_MIN_LEN: usize = 60;
 /// next line by the unwrap heuristic.
 const UNWRAP_TERMINAL_CHARS: &[char] = &['.', '!', '?', ':', '\u{2026}', ')', '"', '\u{00BB}'];
 
+/// True if the trimmed line ends a sentence. A closing `»` ends one only after
+/// sentence punctuation (`« Fin. »`): `« Mentions »` mid-sentence does not (#18).
+fn ends_sentence(trimmed: &str) -> bool {
+    let mut chars = trimmed.chars().rev();
+    match chars.next() {
+        Some('\u{00BB}') => chars
+            .find(|c| !is_collapsible(*c) && *c != '\u{202F}')
+            .is_some_and(|c| matches!(c, '.' | '!' | '?' | '\u{2026}')),
+        Some(last) => UNWRAP_TERMINAL_CHARS.contains(&last),
+        None => true,
+    }
+}
+
+/// Reflow a `text/plain; format=flowed` body (RFC 3676).
+///
+/// A line ending with a space is soft: it is joined with the next line of the
+/// same quote depth, and the trailing space is dropped when `delsp` is set.
+/// The signature separator `-- ` is never soft. One space-stuffing space after
+/// the quote marks is removed. Quote lines are rebuilt as `>… content`.
+pub fn unflow(text: &str, delsp: bool) -> String {
+    let mut out: Vec<String> = Vec::new();
+    // Quote depth of the paragraph being joined, when the last line was soft.
+    let mut open: Option<usize> = None;
+    for raw in text.split('\n') {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        let depth = line.chars().take_while(|c| *c == '>').count();
+        let content = &line[depth..];
+        let content = content.strip_prefix(' ').unwrap_or(content);
+        let soft = content.ends_with(' ') && content != "-- ";
+        let piece = if soft && delsp {
+            &content[..content.len() - 1]
+        } else {
+            content
+        };
+        match (open, out.last_mut()) {
+            (Some(open_depth), Some(last)) if open_depth == depth => last.push_str(piece),
+            _ => {
+                let mut fresh = ">".repeat(depth);
+                if depth > 0 && !piece.is_empty() {
+                    fresh.push(' ');
+                }
+                fresh.push_str(piece);
+                out.push(fresh);
+            }
+        }
+        open = soft.then_some(depth);
+    }
+    out.join("\n")
+}
+
 static LONE_LINK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[.+\]\(.+\)$").expect("static regex"));
 
-/// True if `line` is a structural / preserved line that must NOT be joined
-/// to its previous or next neighbour by `unwrap_lines`.
-///
-/// Covers markdown list items, blockquotes, table rows, headings, horizontal
-/// rules, and lines whose trimmed content is a single markdown link
-/// `[text](url)`. Fenced-code-block tracking and signature-block tracking are
-/// stateful and handled directly inside `unwrap_lines`.
-fn is_preserved_line(line: &str) -> bool {
+/// A field line of a forwarded or quoted message header (`De : …`,
+/// `Date: …`), one per line in Gmail's `div.gmail_attr` (#19).
+static HEADER_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:De|From|Date|Subject|Objet|To|À|Cc|Sent|Envoyé)[ \u{00A0}]?: \S")
+        .expect("static regex")
+});
+
+/// True if `line` is a Markdown list item (`- `, `* `, `+ `, `1. `, `12) `).
+fn is_list_item(line: &str) -> bool {
     let trimmed = line.trim_start();
 
     // Markdown unordered list: "- ", "* ", "+ "
@@ -635,6 +767,29 @@ fn is_preserved_line(line: &str) -> bool {
                 return true;
             }
         }
+    }
+    false
+}
+
+/// True if `line` is a structural / preserved line that must NOT be joined
+/// to its previous or next neighbour by `unwrap_lines`.
+///
+/// Covers forwarded header fields, markdown list items, blockquotes, table
+/// rows, headings, horizontal rules, and lines whose trimmed content is a
+/// single markdown link `[text](url)`. Fenced-code-block tracking and
+/// signature-block tracking are stateful and handled directly inside
+/// `unwrap_lines`. A list item still accepts its own wrapped continuation
+/// (see `unwrap_lines`).
+fn is_preserved_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+
+    // Forwarded / quoted header field
+    if HEADER_FIELD_RE.is_match(trimmed) {
+        return true;
+    }
+
+    if is_list_item(line) {
+        return true;
     }
 
     // Blockquote, table row, heading
@@ -666,8 +821,14 @@ fn is_preserved_line(line: &str) -> bool {
 /// - previous line trimmed length ≥ `UNWRAP_MIN_LEN` (soft gate against
 ///   over-joining naturally short lines like greetings)
 /// - neither the previous nor the current line is a preserved structural line
-///   (list, quote, table, heading, hr, lone-link, fenced code, signature tail)
+///   (list, quote, table, heading, hr, lone-link, fenced code, signature tail);
+///   a list item is the exception as a previous line: it takes its wrapped
+///   continuation (#18)
 /// - current line is not empty
+///
+/// A line starting with `»` is always joined to a non-empty previous line
+/// (outside fences and signature): the closing guillemet was wrapped (#18).
+/// A closing `»` ends a sentence only after `.`, `!`, `?` or `…`.
 ///
 /// Otherwise lines are kept on separate lines.
 ///
@@ -705,10 +866,9 @@ pub fn unwrap_lines(s: &str) -> String {
     let mut in_fence = false;
     let mut after_signature = false;
 
-    // Tracks whether the most recently emitted output line was itself the
-    // result of a "preserved" classification — used so the next iteration
-    // knows not to glue onto it.
-    let mut prev_was_preserved = true;
+    // Whether the most recently emitted output line accepts a continuation:
+    // prose, or a list item (#18). Other preserved lines never do.
+    let mut prev_accepts = false;
 
     for line in working {
         let trimmed_full = line.trim();
@@ -729,18 +889,22 @@ pub fn unwrap_lines(s: &str) -> String {
             || line.is_empty()
             || is_preserved_line(line);
 
+        // A wrapped closing guillemet always belongs to the previous line.
+        let closes_quote = !in_fence
+            && !after_signature
+            && line.trim_start().starts_with('\u{00BB}')
+            && out.last().is_some_and(|prev| !prev.trim().is_empty());
+
         // Determine whether this line should be joined onto the previous out line.
-        let should_join = !preserved
-            && !prev_was_preserved
-            && out.last().is_some_and(|prev| {
-                let prev_trimmed = prev.trim_end();
-                !prev_trimmed.is_empty()
-                    && prev_trimmed.chars().count() >= UNWRAP_MIN_LEN
-                    && prev_trimmed
-                        .chars()
-                        .last()
-                        .is_some_and(|last_char| !UNWRAP_TERMINAL_CHARS.contains(&last_char))
-            });
+        let should_join = closes_quote
+            || (!preserved
+                && prev_accepts
+                && out.last().is_some_and(|prev| {
+                    let prev_trimmed = prev.trim_end();
+                    !prev_trimmed.is_empty()
+                        && prev_trimmed.chars().count() >= UNWRAP_MIN_LEN
+                        && !ends_sentence(prev_trimmed)
+                }));
 
         if should_join {
             // Safe: should_join only true when out.last() is Some.
@@ -761,7 +925,10 @@ pub fn unwrap_lines(s: &str) -> String {
             after_signature = true;
         }
 
-        prev_was_preserved = preserved;
+        if !should_join {
+            prev_accepts = !preserved
+                || (!in_fence && !after_signature && !is_fence_toggle && is_list_item(line));
+        }
     }
 
     let mut joined = out.join("\n");
@@ -795,6 +962,153 @@ mod tests {
         assert_eq!(
             collapse_whitespace("Line one\n    indented"),
             "Line one\n indented"
+        );
+    }
+
+    #[test]
+    fn test_collapse_whitespace_with_nested_bullet_list_keeps_nesting() {
+        assert_eq!(
+            collapse_whitespace("*   Affichage\n    *   menu\n    *   police\n*   Doc"),
+            "* Affichage\n  * menu\n  * police\n* Doc"
+        );
+    }
+
+    #[test]
+    fn test_collapse_whitespace_with_nested_ordered_list_indents_three() {
+        assert_eq!(
+            collapse_whitespace("1.  Un\n    1.  sous\n2.  Deux"),
+            "1. Un\n   1. sous\n2. Deux"
+        );
+    }
+
+    #[test]
+    fn test_collapse_whitespace_with_quoted_nested_list_keeps_nesting() {
+        assert_eq!(
+            collapse_whitespace("> *   Affichage\n>     *   menu"),
+            "> * Affichage\n>   * menu"
+        );
+    }
+
+    #[test]
+    fn test_collapse_whitespace_with_lone_indented_item_not_code_block() {
+        assert_eq!(
+            collapse_whitespace("Texte\n\n    - item"),
+            "Texte\n\n- item"
+        );
+    }
+
+    #[test]
+    fn test_collapse_whitespace_with_paragraph_resets_nesting() {
+        assert_eq!(
+            collapse_whitespace("* a\n    * b\nTexte\n    * c"),
+            "* a\n  * b\nTexte\n* c"
+        );
+    }
+
+    #[test]
+    fn test_unflow_with_delsp_joins_without_extra_space() {
+        assert_eq!(
+            unflow("Les annonces restent  \ndisponibles ici.\r\nFin.", true),
+            "Les annonces restent disponibles ici.\nFin."
+        );
+    }
+
+    #[test]
+    fn test_unflow_without_delsp_keeps_soft_space() {
+        assert_eq!(unflow("un mot \nsuivant", false), "un mot suivant");
+    }
+
+    #[test]
+    fn test_unflow_with_quote_depth_change_not_joined() {
+        assert_eq!(
+            unflow("> cité \n>> plus cité \n>> suite\nfin", false),
+            "> cité \n>> plus cité suite\nfin"
+        );
+    }
+
+    #[test]
+    fn test_unflow_with_signature_separator_kept() {
+        assert_eq!(
+            unflow("Merci.\n-- \nAlice Martin\nResponsable qualité", true),
+            "Merci.\n-- \nAlice Martin\nResponsable qualité"
+        );
+    }
+
+    #[test]
+    fn test_unflow_with_space_stuffing_removed() {
+        assert_eq!(
+            unflow(" From here\n>From there", false),
+            "From here\n> From there"
+        );
+    }
+
+    const ISSUE_18: &str =
+        "1. La page de connexion affiche une erreur quand on valide le formulaire, et\n\
+        le message reste affiché même après avoir corrigé le mot de passe.\n\
+        \n\
+        2. Sur mobile, ajouter « Mes documents » et « Mes paramètres du compte\n\
+        » dans le menu du haut, et déplacer « Aide », « Contact » et « Mentions »\n\
+        vers le pied de page.";
+
+    #[test]
+    fn test_unwrap_lines_with_wrapped_list_item_joined() {
+        let out = unwrap_lines(ISSUE_18);
+        assert!(out.contains(
+            "1. La page de connexion affiche une erreur quand on valide le formulaire, et le message reste affiché même après avoir corrigé le mot de passe."
+        ), "{out}");
+    }
+
+    #[test]
+    fn test_unwrap_lines_with_wrapped_guillemet_joined() {
+        let out = unwrap_lines(ISSUE_18);
+        assert!(out.contains(
+            "2. Sur mobile, ajouter « Mes documents » et « Mes paramètres du compte » dans le menu du haut, et déplacer « Aide », « Contact » et « Mentions » vers le pied de page."
+        ), "{out}");
+        assert!(!out.contains("\n»"), "{out}");
+    }
+
+    #[test]
+    fn test_unwrap_lines_with_guillemet_after_period_ends_sentence() {
+        let input =
+            "Il a conclu la réunion en répétant sa formule préférée : « On livre. »\nEnsuite";
+        assert_eq!(unwrap_lines(input), input);
+    }
+
+    #[test]
+    fn test_unwrap_lines_with_short_list_item_not_joined() {
+        let input = "- Lait\nPain";
+        assert_eq!(unwrap_lines(input), input);
+    }
+
+    #[test]
+    fn test_unwrap_lines_with_address_and_signature_kept() {
+        let input = "Adresse du comité :\nSalle Garonne\n12 rue des Lilas\n31000 Toulouse\n\n-- \nAlice Martin\nResponsable qualité";
+        assert_eq!(unwrap_lines(input), input);
+    }
+
+    #[test]
+    fn test_unwrap_lines_with_forwarded_header_keeps_one_field_per_line() {
+        let input = "---------- Forwarded message ---------\n\
+                     De : **Claire Petit** <[claire@example.org](mailto:claire@example.org)\\>\n\
+                     Date: lun. 2 nov. 2026 à 17:45\n\
+                     Subject: Devis révisé\n\
+                     To: Bob <[bob@example.com](mailto:bob@example.com)\\>";
+        assert_eq!(unwrap_lines(input), input);
+    }
+
+    #[test]
+    fn test_unwrap_lines_with_french_header_fields_kept() {
+        let input = "Envoyé : lundi 2 novembre 2026 17:45\nÀ : Bob Durand\nObjet : Devis révisé";
+        assert_eq!(unwrap_lines(input), input);
+    }
+
+    #[test]
+    fn test_unwrap_lines_with_wrapped_prose_still_joined() {
+        assert_eq!(
+            unwrap_lines(
+                "Alice, je te transfère le devis révisé de Claire avec la nouvelle\ncapture du total"
+            ),
+            "Alice, je te transfère le devis révisé de Claire avec la nouvelle capture du total"
         );
     }
 
@@ -1544,6 +1858,32 @@ More text after.";
             out,
             "Read [the full guide][1] here.\n\n[1]: https://example.com/guide\n"
         );
+    }
+
+    #[test]
+    fn test_extract_links_with_escaped_parentheses_keeps_url_whole() {
+        let out = extract_links(
+            r"la page [https://fr.wikipedia.org/wiki/Recette\_(informatique)](https://fr.wikipedia.org/wiki/Recette_\(informatique\)) explique",
+        );
+        assert!(
+            out.contains("[https://fr.wikipedia.org/wiki/Recette\\_(informatique)][1] explique")
+        );
+        assert!(out.contains("[1]: https://fr.wikipedia.org/wiki/Recette_(informatique)\n"));
+        assert!(!out.contains("[1])"));
+    }
+
+    #[test]
+    fn test_extract_links_with_balanced_parentheses_keeps_url_whole() {
+        let out = extract_links("[w](https://x.example/a_(b)) fin");
+        assert!(out.contains("[w][1] fin"));
+        assert!(out.contains("[1]: https://x.example/a_(b)\n"));
+    }
+
+    #[test]
+    fn test_clean_with_escaped_parentheses_url_not_rewritten_as_path() {
+        let out = clean(r"[t](https://fr.wikipedia.org/wiki/Recette_\(informatique\))").body;
+        assert!(out.contains("[1]: https://fr.wikipedia.org/wiki/Recette_(informatique)"));
+        assert!(!out.contains("Recette_/("));
     }
 
     #[test]

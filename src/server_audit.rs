@@ -17,6 +17,8 @@ pub enum ServerStatus {
     /// In the ledger by `Message-ID` only, or with a proof targeting another
     /// message (stale proof).
     HandledLegacy,
+    /// In the ledger as held: its note keeps it on the server, never deleted.
+    Held,
     /// A note of the export folder matches it: not routed yet.
     Staged,
     /// Never exported.
@@ -28,6 +30,7 @@ impl ServerStatus {
         match self {
             Self::HandledWithProof => "traité, avec preuve",
             Self::HandledLegacy => "traité, sans preuve",
+            Self::Held => "retenu, image non conservée",
             Self::Staged => "note en attente de tri",
             Self::Unknown => "jamais exporté",
         }
@@ -75,6 +78,23 @@ pub fn confirm_proof(
         crate::handled::PurgeMatch::Purge(_) => ServerStatus::HandledWithProof,
         _ => ServerStatus::HandledLegacy,
     }
+}
+
+/// `Held` for a handled message the ledger marks as held: neither the export
+/// purge nor the server cleanup may target it.
+pub fn mark_held(
+    status: ServerStatus,
+    message_id: Option<&str>,
+    ledger: &crate::handled::LedgerProofs,
+) -> ServerStatus {
+    let handled = matches!(
+        status,
+        ServerStatus::HandledWithProof | ServerStatus::HandledLegacy
+    );
+    if handled && message_id.is_some_and(|id| ledger.held.contains(id)) {
+        return ServerStatus::Held;
+    }
+    status
 }
 
 /// One server message and its status.
@@ -214,6 +234,36 @@ mod tests {
         let mut ledger = crate::handled::LedgerProofs::default();
         ledger.proofs.insert("a@x".into(), stored);
         ledger
+    }
+
+    fn held_ledger() -> crate::handled::LedgerProofs {
+        let mut ledger = crate::handled::LedgerProofs::default();
+        ledger.held.insert("a@x".into());
+        ledger
+    }
+
+    #[test]
+    fn test_mark_held_with_held_legacy_message_is_held() {
+        assert_eq!(
+            mark_held(ServerStatus::HandledLegacy, Some("a@x"), &held_ledger()),
+            ServerStatus::Held
+        );
+    }
+
+    #[test]
+    fn test_mark_held_with_other_message_unchanged() {
+        assert_eq!(
+            mark_held(ServerStatus::HandledLegacy, Some("b@x"), &held_ledger()),
+            ServerStatus::HandledLegacy
+        );
+    }
+
+    #[test]
+    fn test_mark_held_with_staged_note_unchanged() {
+        assert_eq!(
+            mark_held(ServerStatus::Staged, Some("a@x"), &held_ledger()),
+            ServerStatus::Staged
+        );
     }
 
     #[test]

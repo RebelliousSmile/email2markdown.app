@@ -352,6 +352,45 @@ les deux noms peuvent différer. Si l'écriture de la note échoue, ses images
 sont retirées de la quarantaine, pour qu'une nouvelle tentative ne les duplique
 pas.
 
+Une image jointe sans `Content-Disposition` ni nom de fichier, comme une capture
+collée dans un message Gmail en texte brut, est traitée comme les autres : elle
+est enregistrée sous le nom `image.<extension>`, ou mise en quarantaine si elle
+ressemble à une signature. Aucune partie image n'est ignorée sans laisser de
+trace.
+
+#### Marqueurs `[image: …]` de Gmail
+
+Quand la note reprend la partie texte d'un message Gmail, chaque image y est
+remplacée par un marqueur `[image: nom]`. L'export remplace ces marqueurs par
+les images qu'ils désignent, dans l'ordre, en les associant aux balises `<img>`
+de la partie HTML ou, faute de HTML, aux images jointes :
+
+| Image désignée | Résultat dans la note |
+| --- | --- |
+| Image enregistrée à côté de la note | Image intégrée, listée sous `### Images :` |
+| Image de signature écartée | Marqueur retiré |
+| Image distante de signature, avec `skip_signature_images` | Marqueur retiré |
+| Autre image distante | Lien simple `[nom](url)`, jamais intégré |
+
+Si le nombre de marqueurs ne correspond pas au nombre d'images, l'association
+serait une supposition : le texte est laissé tel quel.
+
+#### Garde-fou de suppression
+
+Avec `delete_after_export`, un message n'est jamais supprimé du serveur si une
+image qu'il annonce n'a été ni enregistrée ni mise en quarantaine : partie image
+illisible, `<img>` du HTML sans partie correspondante, ou marqueur `[image: …]`
+resté sans image. La note porte alors la clé `keep_on_server` avec la raison, le
+rapport d'export le signale, et chaque chemin de suppression (lot contextuel,
+revue du tri, purge des messages déjà traités) laisse le message sur le serveur.
+Un message rangé depuis la revue est mémorisé comme traité et marqué « retenu »
+dans `handled_messages.txt` (troisième colonne `held`) : il n'est plus proposé à
+l'export, la purge le compte à part (« retenu(s) sur le serveur, image non
+conservée »), le recensement du serveur l'affiche « retenu, image non conservée »
+et « Nettoyer le serveur » ne le vise jamais. Le supprimer reste une décision
+manuelle, une fois l'image récupérée. Seul un message rejeté dans la revue
+échappe au garde-fou : le rejet demande explicitement sa suppression.
+
 ### `destinations.yaml` — Arborescence de rangement
 
 Fichier YAML décrivant les chemins valides de votre second cerveau et les règles de correspondance. Édité à la main ou via la sous-commande `dest`.

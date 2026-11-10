@@ -9,9 +9,13 @@
 //! Line format: `account\tmessage_id[\tproof]`. The optional third column is
 //! the `LocalSourceProof` as one-line JSON: it targets the exact server message,
 //! so it can be deleted safely. Lines without it are legacy entries.
+//!
+//! A third column holding [`HELD_MARK`] records a message whose note keeps it
+//! on the server (`keep_on_server`): handled, but never deleted, neither by the
+//! export purge nor by the server cleanup. It wins over any other line.
 
 use crate::contextual_export::{
-    proof_is_complete, read_source_proof, LocalSourceProof, MessageLocation,
+    proof_is_complete, read_note_head, LocalSourceProof, MessageLocation,
 };
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -19,6 +23,9 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+
+/// Third column of a held line, never valid proof JSON.
+pub const HELD_MARK: &str = "held";
 
 /// Ledger file next to `accounts.yaml`.
 pub fn ledger_path() -> PathBuf {
@@ -53,10 +60,13 @@ pub struct LedgerProofs {
     pub proofs: HashMap<String, LocalSourceProof>,
     /// `Message-ID`s recorded without any readable proof.
     pub legacy: HashSet<String>,
+    /// `Message-ID`s held on the server by their note: never deleted.
+    pub held: HashSet<String>,
 }
 
 /// Proofs recorded for `account` in the ledger at `path`. An unreadable
-/// proof counts as a legacy line; a proof on any line wins over legacy lines.
+/// proof counts as a legacy line; a proof on any line wins over legacy lines;
+/// a held line wins over both.
 pub fn load_proofs_from(path: &Path, account: &str) -> LedgerProofs {
     let mut ledger = LedgerProofs::default();
     let Ok(content) = fs::read_to_string(path) else {
@@ -70,9 +80,12 @@ pub fn load_proofs_from(path: &Path, account: &str) -> LedgerProofs {
         if !name.eq_ignore_ascii_case(account) {
             continue;
         }
-        let proof = columns
-            .next()
-            .and_then(|json| serde_json::from_str::<LocalSourceProof>(json).ok());
+        let third = columns.next();
+        if third == Some(HELD_MARK) {
+            ledger.held.insert(id.to_string());
+            continue;
+        }
+        let proof = third.and_then(|json| serde_json::from_str::<LocalSourceProof>(json).ok());
         match proof {
             Some(proof) => {
                 ledger.proofs.insert(id.to_string(), proof);
@@ -83,6 +96,8 @@ pub fn load_proofs_from(path: &Path, account: &str) -> LedgerProofs {
         }
     }
     ledger.legacy.retain(|id| !ledger.proofs.contains_key(id));
+    ledger.legacy.retain(|id| !ledger.held.contains(id));
+    ledger.proofs.retain(|id, _| !ledger.held.contains(id));
     ledger
 }
 
@@ -108,6 +123,8 @@ pub enum PurgeMatch {
     Purge(LocalSourceProof),
     /// Recorded without proof: left to the explicit server cleanup.
     Legacy,
+    /// Held on the server by its note: never deleted.
+    Held,
     /// The stored proof targets another message: kept.
     Stale,
 }
@@ -116,7 +133,12 @@ impl LedgerProofs {
     /// Every `Message-ID` recorded for the account, with or without proof:
     /// the set `load` reads, from the same single read of the ledger.
     pub fn message_ids(&self) -> HashSet<String> {
-        self.proofs.keys().chain(&self.legacy).cloned().collect()
+        self.proofs
+            .keys()
+            .chain(&self.legacy)
+            .chain(&self.held)
+            .cloned()
+            .collect()
     }
 
     /// Match a handled message seen at `current` against its stored proof.
@@ -131,6 +153,9 @@ impl LedgerProofs {
         current: &MessageLocation,
         gmail: bool,
     ) -> PurgeMatch {
+        if self.held.contains(&seen.message_id) {
+            return PurgeMatch::Held;
+        }
         let Some(stored) = self.proofs.get(&seen.message_id) else {
             return PurgeMatch::Legacy;
         };
@@ -169,6 +194,11 @@ pub fn record_to(path: &Path, entries: &[LedgerEntry]) -> Result<()> {
         }
         lines.push('\n');
     }
+    append_lines(path, &lines)
+}
+
+/// Append ready-made ledger lines to the ledger at `path`.
+fn append_lines(path: &Path, lines: &str) -> Result<()> {
     if lines.is_empty() {
         return Ok(());
     }
@@ -212,9 +242,33 @@ pub fn record_proofs_to<'a>(path: &Path, proofs: impl IntoIterator<Item = &'a Lo
     }
 }
 
+/// Remember messages whose note holds them on the server (`keep_on_server`):
+/// handled, so not proposed again, but marked [`HELD_MARK`] so neither the
+/// export purge nor the server cleanup ever deletes them. Best effort, like
+/// `record_proofs`.
+pub fn record_held(proofs: &[LocalSourceProof]) {
+    record_held_to(&ledger_path(), proofs);
+}
+
+/// `record_held` on the ledger at `path`.
+pub fn record_held_to(path: &Path, proofs: &[LocalSourceProof]) {
+    let lines: String = proofs
+        .iter()
+        .filter_map(|proof| {
+            let id = proof.identity.message_id.as_deref()?;
+            let account = proof.identity.account.as_str();
+            (clean(account) && clean(id)).then(|| format!("{account}\t{id}\t{HELD_MARK}\n"))
+        })
+        .collect();
+    if let Err(error) = append_lines(path, &lines) {
+        eprintln!("warning: handled messages ledger not updated: {error:#}");
+    }
+}
+
 /// Give a proof to the legacy entries of `account` whose routed note is
 /// still under `notes_dir`. Appends lines only, never rewrites. Returns the
-/// number of entries completed.
+/// number of entries completed. A note holding its message on the server
+/// (`keep_on_server`) never gives a proof.
 ///
 /// Walks `notes_dir` once, without following symlinks, skipping `.*` and `_*`
 /// directories, reading only `email_*.md` files. `notes_dir` may span a whole
@@ -245,7 +299,11 @@ pub fn complete_from_notes_to(ledger: &Path, notes_dir: &Path, account: &str) ->
         if !entry.file_type().is_file() || !name.starts_with("email_") || !name.ends_with(".md") {
             continue;
         }
-        let Ok(Some(proof)) = read_source_proof(entry.path()) else {
+        let Ok(Some(head)) = read_note_head(entry.path()) else {
+            continue;
+        };
+        // A held note keeps its message on the server: never give it a proof.
+        let (Some(proof), None) = (head.source, head.keep_on_server) else {
             continue;
         };
         if !proof.identity.account.eq_ignore_ascii_case(account) || !proof_is_complete(&proof) {
@@ -494,6 +552,80 @@ mod tests {
         assert_eq!(complete_from_notes_to(&ledger, &notes, "Perso").unwrap(), 1);
         assert_eq!(complete_from_notes_to(&ledger, &notes, "Perso").unwrap(), 0);
         assert_eq!(fs::read_to_string(&ledger).unwrap().lines().count(), 2);
+    }
+
+    #[test]
+    fn test_record_held_to_writes_a_held_line() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("handled.txt");
+        record_held_to(&path, &[proof("Perso", "a@x", 3)]);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "Perso\ta@x\theld\n");
+    }
+
+    #[test]
+    fn test_load_proofs_from_with_held_line_wins_over_proof_and_legacy() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("handled.txt");
+        record_to(
+            &path,
+            &[
+                ("Perso".into(), "a@x".into(), Some(proof("Perso", "a@x", 1))),
+                ("Perso".into(), "b@x".into(), None),
+            ],
+        )
+        .unwrap();
+        record_held_to(&path, &[proof("Perso", "a@x", 1), proof("Perso", "b@x", 2)]);
+        let ledger = load_proofs_from(&path, "Perso");
+        assert_eq!(
+            (ledger.proofs.len(), ledger.legacy.len(), ledger.held.len()),
+            (0, 0, 2)
+        );
+    }
+
+    #[test]
+    fn test_match_seen_with_held_line_is_held() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("handled.txt");
+        record_held_to(&path, &[proof("Perso", "a@x", 1)]);
+        let ledger = load_proofs_from(&path, "Perso");
+        let stored = proof("Perso", "a@x", 1);
+        let seen = SeenHandled {
+            message_id: "a@x".into(),
+            uid: 1,
+            provider_id: None,
+        };
+        assert_eq!(
+            ledger.match_seen(&seen, &stored.location, false),
+            PurgeMatch::Held
+        );
+    }
+
+    #[test]
+    fn test_message_ids_with_held_line_skips_reexport() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("handled.txt");
+        record_held_to(&path, &[proof("Perso", "a@x", 1)]);
+        assert!(load_proofs_from(&path, "Perso")
+            .message_ids()
+            .contains("a@x"));
+    }
+
+    #[test]
+    fn test_complete_from_notes_to_skips_held_note() {
+        let temp = TempDir::new().unwrap();
+        let ledger = temp.path().join("handled.txt");
+        let notes = temp.path().join("notes");
+        record_to(&ledger, &[("Perso".into(), "a@x".into(), None)]).unwrap();
+        let path = notes.join("email_a.md");
+        note(&path, &proof("Perso", "a@x", 1));
+        let held = fs::read_to_string(&path).unwrap().replacen(
+            "---\n",
+            "---\nkeep_on_server: partie image illisible\n",
+            1,
+        );
+        fs::write(&path, held).unwrap();
+
+        assert_eq!(complete_from_notes_to(&ledger, &notes, "Perso").unwrap(), 0);
     }
 
     #[test]

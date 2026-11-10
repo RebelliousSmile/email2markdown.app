@@ -22,8 +22,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const SEARCH_RULE_BATCH: usize = 50;
 pub const HEADER_UID_BATCH: usize = 500;
-pub const HEADER_FETCH_FIELDS: &str =
-    "BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE FROM TO CC BCC SUBJECT)]";
+/// Headers read to rebuild a message identity on the server: the raw header block.
+/// Proofs are fingerprinted on the full message at export, so the server side must
+/// read the same bytes. `HEADER.FIELDS (…)` is not enough: some servers (lilo.org,
+/// banner `MAILO`) synthesize it, rewriting `Date` to local time and mis-decoding an
+/// 8-bit `Subject`, so every deletion was rejected as an identity mismatch.
+pub const HEADER_FETCH_FIELDS: &str = "BODY.PEEK[HEADER]";
 
 static HEADER_ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#)
@@ -454,13 +458,18 @@ pub struct DeletionRequest {
 }
 
 /// Why a purge request must not delete its message, `None` when it may: the
-/// note must still exist and carry this very proof.
+/// note must still exist, carry this very proof, and not hold its message
+/// on the server (`keep_on_server`).
 pub fn deletion_rejection(request: &DeletionRequest) -> Result<Option<&'static str>> {
     if !request.markdown.is_file() {
         return Ok(Some("note absente"));
     }
-    if read_source_proof(&request.markdown)?.as_ref() != Some(&request.proof) {
+    let head = read_note_head(&request.markdown)?.unwrap_or_default();
+    if head.source.as_ref() != Some(&request.proof) {
         return Ok(Some("la note porte une autre preuve"));
+    }
+    if head.keep_on_server.is_some() {
+        return Ok(Some("image annoncée non conservée, message gardé"));
     }
     Ok(None)
 }
@@ -475,7 +484,9 @@ pub fn build_deletion_batch(results: &[MessageConversionResult]) -> Vec<Deletion
             | Some(ConversionStatus::AlreadyPresent { markdown, proof })
                 if proof_is_complete(proof)
                     && markdown.is_file()
-                    && read_source_proof(markdown).ok().flatten().as_ref() == Some(proof) =>
+                    && read_note_head(markdown).ok().flatten().is_some_and(|head| {
+                        head.source.as_ref() == Some(proof) && head.keep_on_server.is_none()
+                    }) =>
             {
                 Some(DeletionRequest {
                     markdown: markdown.clone(),
@@ -498,12 +509,17 @@ pub fn proof_target_key(proof: &LocalSourceProof) -> String {
     })
 }
 
+/// A proof targets one message: UIDVALIDITY + UID locate it exactly, the
+/// header fingerprint confirms it before deletion. A `Message-ID` is not
+/// required: some messages (spam, phishing) have none, and without a proof
+/// discarding them would drop the note but leave the message, exported
+/// again at every run. Gmail deletion needs the provider id; it reports a
+/// proof without one as to retry.
 pub fn proof_is_complete(proof: &LocalSourceProof) -> bool {
     !proof.identity.account.trim().is_empty()
         && !proof.identity.header_fingerprint.trim().is_empty()
         && proof.location.uid > 0
         && proof.location.uid_validity > 0
-        && (proof.identity.provider_id.is_some() || proof.identity.message_id.is_some())
         // The provider id is sent as `X-GM-MSGID <id>` in a server search.
         && proof
             .identity
@@ -713,12 +729,20 @@ pub fn proof_matches_candidate(proof: &LocalSourceProof, candidate: &ContextualC
         && proof.identity.header_fingerprint == candidate.source.header_fingerprint
 }
 
-pub fn read_source_proof(path: &Path) -> Result<Option<LocalSourceProof>> {
-    #[derive(Deserialize)]
-    struct ProofHead {
-        #[serde(default)]
-        source: Option<LocalSourceProof>,
-    }
+/// Frontmatter keys every deletion path reads from a note.
+#[derive(Debug, Default, Deserialize)]
+pub struct NoteHead {
+    #[serde(default)]
+    pub source: Option<LocalSourceProof>,
+    /// Set by the export when an announced image was not kept: the server
+    /// copy is the only complete one and must stay.
+    #[serde(default)]
+    pub keep_on_server: Option<String>,
+}
+
+/// Deletion-relevant frontmatter of the note at `path`; `None` without a
+/// readable frontmatter.
+pub fn read_note_head(path: &Path) -> Result<Option<NoteHead>> {
     let content = fs::read_to_string(path)?;
     let Some(rest) = content.strip_prefix("---\n") else {
         return Ok(None);
@@ -726,9 +750,16 @@ pub fn read_source_proof(path: &Path) -> Result<Option<LocalSourceProof>> {
     let Some(end) = rest.find("\n---") else {
         return Ok(None);
     };
-    Ok(serde_yaml::from_str::<ProofHead>(&rest[..end])
-        .ok()
-        .and_then(|head| head.source))
+    Ok(serde_yaml::from_str::<NoteHead>(&rest[..end]).ok())
+}
+
+pub fn read_source_proof(path: &Path) -> Result<Option<LocalSourceProof>> {
+    Ok(read_note_head(path)?.and_then(|head| head.source))
+}
+
+/// Why the note at `path` holds its message on the server, if it does.
+pub fn read_server_hold(path: &Path) -> Result<Option<String>> {
+    Ok(read_note_head(path)?.and_then(|head| head.keep_on_server))
 }
 
 /// Resolves the effective on-disk folder for `candidate` under `target`, mirroring
@@ -837,8 +868,17 @@ pub(crate) fn convert_raw_contextual_unlocked(
     ));
     fs::create_dir(&staging)?;
     // The staging directory is removed below: skipped images go to the account's
-    // real export directory instead, so they outlive the server copy.
+    // real export directory instead, so they outlive the server copy. They land
+    // in a pending directory first: the installed note may be renamed with a
+    // stable-key suffix, and its images must follow its final stem (#19).
     let quarantine_root = Path::new(&account.export_directory).join("_skipped");
+    let quarantine_pending = quarantine_root.join(format!(
+        ".pending-{}",
+        staging
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    ));
     let mut quarantined: Vec<PathBuf> = Vec::new();
 
     let result = (|| {
@@ -858,7 +898,7 @@ pub(crate) fn convert_raw_contextual_unlocked(
             quarantine: account
                 .delete_after_export
                 .then(|| crate::email_export::Quarantine {
-                    root: &quarantine_root,
+                    root: &quarantine_pending,
                     written: &mut quarantined,
                 }),
         };
@@ -882,11 +922,50 @@ pub(crate) fn convert_raw_contextual_unlocked(
         )
     })();
     let _ = fs::remove_dir_all(&staging);
+    let result = result.and_then(|status| {
+        if let ConversionStatus::Written { markdown, .. } = &status {
+            settle_quarantine(&quarantine_root, markdown, &mut quarantined)
+                .context("move quarantined images under the note stem")?;
+        }
+        Ok(status)
+    });
     if result.is_err() {
         // No note was installed: its quarantined images would be orphans.
         crate::email_export::discard_quarantined(&mut quarantined, 0);
     }
+    // Only an empty pending tree is removed; a leftover is never deleted blind.
+    if let Ok(entries) = fs::read_dir(&quarantine_pending) {
+        for entry in entries.flatten() {
+            let _ = fs::remove_dir(entry.path());
+        }
+    }
+    let _ = fs::remove_dir(&quarantine_pending);
     result
+}
+
+/// Moves the images quarantined for one note into `<root>/<note stem>/`,
+/// the stem of the note as installed (#19).
+fn settle_quarantine(root: &Path, markdown: &Path, quarantined: &mut [PathBuf]) -> Result<()> {
+    if quarantined.is_empty() {
+        return Ok(());
+    }
+    let stem = markdown
+        .file_stem()
+        .context("installed note has no file stem")?;
+    let destination = root.join(stem);
+    fs::create_dir_all(&destination)?;
+    for path in quarantined.iter_mut() {
+        let name = path
+            .file_name()
+            .context("quarantined image has no file name")?
+            .to_string_lossy()
+            .into_owned();
+        let moved = destination.join(crate::email_export::unique_file_name(&destination, &name));
+        fs::rename(&*path, &moved)
+            .with_context(|| format!("move quarantined image {}", moved.display()))?;
+        *path = moved;
+    }
+    Ok(())
 }
 
 fn install_staged(

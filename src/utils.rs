@@ -334,7 +334,7 @@ fn base64_decode_simple(input: &str) -> Option<Vec<u8>> {
 
 /// True when `filename_lower` carries a typical signature/logo name and the
 /// payload stays under that name's size limit.
-fn has_signature_name(filename_lower: &str, payload_size: usize) -> bool {
+pub(crate) fn has_signature_name(filename_lower: &str, payload_size: usize) -> bool {
     let signature_patterns = [
         "signature",
         "logo",

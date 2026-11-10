@@ -797,6 +797,7 @@ mod email_export_tests {
             tags: vec!["inbox".to_string()],
             attachments: vec![],
             source: None,
+            keep_on_server: None,
             email_type: None,
             social_links: Some(links),
         };
@@ -830,6 +831,7 @@ mod email_export_tests {
             tags: vec![],
             attachments: vec![],
             source: None,
+            keep_on_server: None,
             email_type: None,
             social_links: None,
         };
@@ -853,6 +855,7 @@ mod email_export_tests {
             tags: vec!["INBOX".to_string()],
             attachments: vec![],
             source: None,
+            keep_on_server: None,
             email_type: Some("newsletter".to_string()),
             social_links: None,
         };
@@ -876,6 +879,7 @@ mod email_export_tests {
             tags: vec![],
             attachments: vec![],
             source: None,
+            keep_on_server: None,
             email_type: None,
             social_links: None,
         };
@@ -2022,6 +2026,50 @@ attachments:
         assert!(a_content.contains("- 2026-06-25_image.png\n"));
     }
 
+    // A reply and a forward of one thread get the same note name (the `Re:` / `Fwd:`
+    // prefix is dropped). Routed into one folder, the second note must be suffixed —
+    // never overwrite the first — and the returned path must be the suffixed one.
+    #[test]
+    fn test_move_email_suffixes_colliding_note_in_dest() {
+        let temp = TempDir::new().unwrap();
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&dst_dir).unwrap();
+        let name = "email_2026-11-10_FxTnn_test.md";
+        let note = |subject: &str, body: &str| {
+            format!("---\nsubject: {subject}\nattachments:\n  - 2026-11-10_shot.jpg\n---\n{body}\n")
+        };
+
+        let src_a = temp.path().join("stagingA");
+        fs::create_dir_all(&src_a).unwrap();
+        fs::write(src_a.join("2026-11-10_shot.jpg"), b"AAA").unwrap();
+        fs::write(src_a.join(name), note("A", "reply")).unwrap();
+
+        let src_b = temp.path().join("stagingB");
+        fs::create_dir_all(&src_b).unwrap();
+        fs::write(src_b.join("2026-11-10_shot.jpg"), b"BBB").unwrap();
+        fs::write(src_b.join(name), note("B", "forward")).unwrap();
+
+        let routed_a = move_email(&src_a.join(name), &dst_dir).unwrap();
+        let routed_b = move_email(&src_b.join(name), &dst_dir).unwrap();
+
+        assert_eq!(routed_a, dst_dir.join(name));
+        assert_eq!(routed_b, dst_dir.join("email_2026-11-10_FxTnn_test_2.md"));
+        let a = fs::read_to_string(&routed_a).unwrap();
+        let b = fs::read_to_string(&routed_b).unwrap();
+        assert_eq!(a, note("A", "reply"), "first note overwritten");
+        assert!(b.contains("forward") && !b.contains("reply"));
+        assert!(b.contains("- 2026-11-10_shot_2.jpg\n"));
+        assert!(!b.contains("- 2026-11-10_shot.jpg\n"));
+        assert_eq!(
+            fs::read(dst_dir.join("2026-11-10_shot.jpg")).unwrap(),
+            b"AAA"
+        );
+        assert_eq!(
+            fs::read(dst_dir.join("2026-11-10_shot_2.jpg")).unwrap(),
+            b"BBB"
+        );
+    }
+
     // --- move_email: legacy centralized attachment path resolved from account root ---
     // Attachment stored at account_root/attachments/Sent/email_…pdf; .md references it as
     // "attachments/Sent/email_…pdf" (relative to account root, not to md_dir).
@@ -2775,6 +2823,33 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         assert!(!md_src.exists(), "original .md must not remain at staging");
     }
 
+    // The deletion request is built from the returned path: it must be the suffixed
+    // note, never the earlier note that owns the plain name.
+    #[test]
+    fn test_apply_decision_returns_suffixed_path_on_collision() {
+        const EARLIER: &str = "---\nsubject: Earlier\n---\nearlier\n";
+        const LATER: &str = "---\nsubject: Later\n---\nlater\n";
+        let temp = TempDir::new().unwrap();
+        let notes_dir = temp.path().join("notes");
+        let folder = notes_dir.join("Perso").join("2026").join("11");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("email.md"), EARLIER).unwrap();
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        let md_src = staging.join("email.md");
+        fs::write(&md_src, LATER).unwrap();
+
+        let routed = apply_decision(&md_src, "Perso/2026/11", &notes_dir).unwrap();
+
+        assert_eq!(routed, folder.join("email_2.md"));
+        assert_eq!(fs::read_to_string(&routed).unwrap(), LATER);
+        assert_eq!(
+            fs::read_to_string(folder.join("email.md")).unwrap(),
+            EARLIER,
+            "the earlier note must stay untouched"
+        );
+    }
+
     // ── apply_decision — links quoted messages already in the vault ───────────
 
     const QUOTED_TEXT: &str = "Bonjour Thibaut, voici le devis demandé pour la rénovation.";
@@ -3151,9 +3226,10 @@ mod contextual_export_tests {
     use email_to_markdown::contextual_export::{
         build_deletion_batch, build_search_batches, candidate_matches_rules, cleanup_stale_staging,
         convert_raw_contextual, deletion_rejection, evaluate_deletion_preflight, merge_candidates,
-        parse_header_candidate, parse_uid_fetch_response, proof_is_complete, read_source_proof,
-        validate_uidvalidity, ContextualLock, ConversionStatus, DeletionProvider, DeletionRequest,
-        LocalSourceProof, MessageConversionResult, MessageLocation, SourceIdentity,
+        parse_header_candidate, parse_uid_fetch_response, proof_is_complete, read_server_hold,
+        read_source_proof, validate_uidvalidity, ContextualLock, ConversionStatus,
+        DeletionProvider, DeletionRequest, LocalSourceProof, MessageConversionResult,
+        MessageLocation, SourceIdentity,
     };
     use email_to_markdown::date_layout::DateLayout;
     use email_to_markdown::route::MatchRule;
@@ -3247,6 +3323,184 @@ mod contextual_export_tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".email-to-markdown-tmp-")));
+    }
+
+    #[test]
+    fn test_convert_raw_contextual_with_shared_stem_quarantines_under_final_stem() {
+        // #19: two notes with the same base name; the second is installed with a
+        // stable-key suffix and its skipped logo must follow that final stem.
+        let temp = TempDir::new().unwrap();
+        let export = temp.path().join("export");
+        let target = export.join("Pro");
+        fs::create_dir_all(&target).unwrap();
+        let mut account = account(&export);
+        account.skip_signature_images = true;
+        account.delete_after_export = true;
+        let logo = "L".repeat(20 * 1024);
+        let mut stems = Vec::new();
+        for (n, message_id) in ["one@example.com", "two@example.com"].iter().enumerate() {
+            let raw = format!(
+                "Message-ID: <{message_id}>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Devis\r\nContent-Type: multipart/mixed; boundary=BOUND\r\n\r\n--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody\r\n--BOUND\r\nContent-Type: image/png; name=logo.png\r\nContent-Disposition: inline; filename=logo.png\r\n\r\n{logo}\r\n--BOUND--\r\n"
+            )
+            .into_bytes();
+            let location = location("INBOX", 42 + n as u32);
+            let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+            let status = convert_raw_contextual(
+                &target,
+                &account,
+                &candidate,
+                &location,
+                &raw,
+                DateLayout::None,
+            )
+            .unwrap();
+            match status {
+                ConversionStatus::Written { markdown, .. } => {
+                    stems.push(markdown.file_stem().unwrap().to_owned())
+                }
+                other => panic!("expected write, got {other:?}"),
+            }
+        }
+
+        let skipped = export.join("_skipped");
+        assert_ne!(stems[0], stems[1]);
+        for stem in &stems {
+            assert!(skipped.join(stem).join("logo.png").exists(), "{stem:?}");
+            assert!(!skipped.join(stem).join("logo_2.png").exists(), "{stem:?}");
+        }
+        let mut dirs: Vec<_> = fs::read_dir(&skipped)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        dirs.sort();
+        let mut expected = stems.clone();
+        expected.sort();
+        assert_eq!(dirs, expected);
+    }
+
+    #[test]
+    fn test_convert_raw_contextual_without_deletion_quarantines_nothing() {
+        // #14 reopening, third path: the quarantine exists only with
+        // `delete_after_export`; without it the server keeps the logo.
+        let temp = TempDir::new().unwrap();
+        let export = temp.path().join("export");
+        fs::create_dir_all(&export).unwrap();
+        let mut account = account(&export);
+        account.skip_signature_images = true;
+        let logo = "L".repeat(20 * 1024);
+        let raw = format!(
+            "Message-ID: <keep-logo@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Devis\r\nContent-Type: multipart/mixed; boundary=BOUND\r\n\r\n--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody\r\n--BOUND\r\nContent-Type: image/png; name=logo.png\r\nContent-Disposition: inline; filename=logo.png\r\n\r\n{logo}\r\n--BOUND--\r\n"
+        )
+        .into_bytes();
+        let location = location("INBOX", 43);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+        let status = convert_raw_contextual(
+            &export,
+            &account,
+            &candidate,
+            &location,
+            &raw,
+            DateLayout::None,
+        )
+        .unwrap();
+        assert!(
+            matches!(status, ConversionStatus::Written { quarantined: 0, .. })
+                && !export.join("_skipped").exists(),
+            "{status:?}"
+        );
+    }
+
+    /// Convert `body` (a full MIME body with its Content-Type header) with
+    /// deletion active, as one batch candidate.
+    fn convert_for_deletion(
+        target: &std::path::Path,
+        message_id: &str,
+        mime: &str,
+    ) -> MessageConversionResult {
+        let mut account = account(target);
+        account.skip_signature_images = true;
+        account.delete_after_export = true;
+        let raw = format!(
+            "Message-ID: <{message_id}>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Captures\r\n{mime}"
+        )
+        .into_bytes();
+        let location = location("INBOX", 44);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+        let status = convert_raw_contextual(
+            target,
+            &account,
+            &candidate,
+            &location,
+            &raw,
+            DateLayout::None,
+        )
+        .unwrap();
+        MessageConversionResult {
+            candidate_key: candidate.logical_key(),
+            status: Some(status),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn test_build_deletion_batch_with_marker_without_image_holds() {
+        let temp = TempDir::new().unwrap();
+        let result = convert_for_deletion(
+            temp.path(),
+            "held@example.com",
+            "Content-Type: text/plain; charset=utf-8\r\n\r\nLe QR code : [image: image.png]\r\n",
+        );
+        let Some(ConversionStatus::Written { markdown, .. }) = &result.status else {
+            panic!("expected write, got {:?}", result.status);
+        };
+        assert!(
+            read_server_hold(markdown).unwrap().is_some()
+                && build_deletion_batch(std::slice::from_ref(&result)).is_empty()
+        );
+    }
+
+    #[test]
+    fn test_convert_raw_contextual_with_one_of_two_images_unreadable_refuses() {
+        // One image of two lost: with deletion active the conversion is
+        // refused, no note is written, so nothing is ever deletable.
+        let temp = TempDir::new().unwrap();
+        let mut account = account(temp.path());
+        account.delete_after_export = true;
+        let image = "A".repeat(200 * 1024);
+        let raw = format!(
+            "Message-ID: <half@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Captures\r\nContent-Type: multipart/mixed; boundary=B\r\n\r\n--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nDeux captures.\r\n--B\r\nContent-Type: image/png; name=recto.png\r\nContent-Disposition: attachment; filename=recto.png\r\n\r\n{image}\r\n--B\r\nContent-Type: image/png; name=verso.png\r\nContent-Disposition: attachment; filename=verso.png\r\nContent-Transfer-Encoding: base64\r\n\r\n!!!! not base64 !!!!\r\n--B--\r\n"
+        )
+        .into_bytes();
+        let location = location("INBOX", 45);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+        let status = convert_raw_contextual(
+            temp.path(),
+            &account,
+            &candidate,
+            &location,
+            &raw,
+            DateLayout::None,
+        );
+        assert!(
+            status.is_err()
+                && !fs::read_dir(temp.path()).unwrap().any(|entry| entry
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext == "md")),
+            "{status:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_deletion_batch_with_complete_images_releases() {
+        let temp = TempDir::new().unwrap();
+        let image = "A".repeat(200 * 1024);
+        let mime = format!(
+            "Content-Type: multipart/mixed; boundary=B\r\n\r\n--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nRecto [image: recto.png]\r\n--B\r\nContent-Type: image/png; name=recto.png\r\nContent-Disposition: attachment; filename=recto.png\r\n\r\n{image}\r\n--B--\r\n"
+        );
+        let result = convert_for_deletion(temp.path(), "whole@example.com", &mime);
+        assert_eq!(build_deletion_batch(&[result]).len(), 1);
     }
 
     #[test]
@@ -3469,6 +3723,22 @@ body
     }
 
     #[test]
+    fn test_proof_is_complete_without_message_id() {
+        let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
+        proof.identity.message_id = None;
+        proof.identity.provider_id = None;
+        assert!(proof_is_complete(&proof));
+    }
+
+    #[test]
+    fn test_proof_is_complete_without_uid_validity() {
+        let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
+        proof.identity.message_id = None;
+        proof.location.uid_validity = 0;
+        assert!(!proof_is_complete(&proof));
+    }
+
+    #[test]
     fn test_proof_is_complete_with_non_numeric_provider_id() {
         let mut proof = deletion_request(std::path::PathBuf::from("n.md"), 5).proof;
         for id in ["", "12 OR ALL", "12\r\nA1 EXPUNGE"] {
@@ -3513,6 +3783,31 @@ body
         assert_eq!(
             deletion_rejection(&deletion_request(markdown, 5)).unwrap(),
             Some("la note porte une autre preuve")
+        );
+    }
+
+    #[test]
+    fn test_deletion_rejection_note_held_on_server() {
+        let temp = TempDir::new().unwrap();
+        let markdown = temp.path().join("email_note.md");
+        let request = deletion_request(markdown.clone(), 5);
+        write_proved_note(&markdown, &request.proof);
+        let note = fs::read_to_string(&markdown).unwrap();
+        fs::write(
+            &markdown,
+            note.replacen(
+                "---
+",
+                "---
+keep_on_server: partie image illisible
+",
+                1,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            deletion_rejection(&request).unwrap(),
+            Some("image annoncée non conservée, message gardé")
         );
     }
 
@@ -3880,6 +4175,33 @@ body
             let fields = b"Message-ID: <report@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Project report\r\n\r\n".to_vec();
             assert!(identity_matches(&proof_of(&full), &(7, None, fields)));
         }
+
+        /// The server check reads `BODY[HEADER]`: the raw header block of the very
+        /// message the proof was built on must match it.
+        #[test]
+        fn test_identity_matches_full_message_proof_with_raw_header_block() {
+            let full = multipart_raw("report@example.com");
+            let end = full.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+            let header_block = full[..end].to_vec();
+            assert!(identity_matches(&proof_of(&full), &(7, None, header_block)));
+        }
+
+        /// What lilo.org (`MAILO`) returned for `HEADER.FIELDS`: `Date` rewritten
+        /// to local time. Such a header must never pass for the proved message.
+        #[test]
+        fn test_identity_matches_server_rewritten_date_invalid() {
+            let proved = b"Message-ID: <r@example.com>\r\nDate: Tue, 10 Nov 2026 18:02:38 +0000\r\nFrom: a@example.com\r\nTo: b@example.com\r\nSubject: Re: test\r\n\r\n".to_vec();
+            let rewritten = b"Message-ID: <r@example.com>\r\nDate: Tue, 10 Nov 2026 19:02:38 +0100 (CET)\r\nFrom: a@example.com\r\nTo: b@example.com\r\nSubject: Re: test\r\n\r\n".to_vec();
+            assert!(!identity_matches(&proof_of(&proved), &(7, None, rewritten)));
+        }
+
+        #[test]
+        fn test_header_fetch_fields_reads_raw_header_block() {
+            assert_eq!(
+                email_to_markdown::contextual_export::HEADER_FETCH_FIELDS,
+                "BODY.PEEK[HEADER]"
+            );
+        }
     }
 
     mod gmail_plan_tests {
@@ -4163,6 +4485,17 @@ mod handled_purge_tests {
         assert_eq!(ids, load_from(&ledger, "Perso"));
         assert!(ids.contains("legacy@x") && ids.contains("proved@x"));
         assert!(!ids.contains("other@x"));
+    }
+
+    #[test]
+    fn test_purge_summary_with_held_messages() {
+        let stats = [ExportStats {
+            held_on_server: 2,
+            ..ExportStats::default()
+        }];
+        let summary = purge_summary(&stats);
+        assert!(summary.contains("2 message(s) retenu(s) sur le serveur, image non conservée"));
+        assert!(!summary.contains("Nettoyer le serveur"));
     }
 
     #[test]
@@ -5432,6 +5765,69 @@ mod quote_link_tests {
     }
 
     #[test]
+    fn test_vault_refresh_with_changed_note_indexes_it_once() {
+        let (vault, dir) = pro_vault();
+        let path = dir.join("Devis original.md");
+        std::fs::write(&path, original()).unwrap();
+        let mut index = Vault::open(vault.path(), &["Pro".to_string()]);
+        // Edited in Obsidian: another length, so another stamp.
+        std::fs::write(&path, format!("{}\nRelu.\n", original())).unwrap();
+
+        index.refresh(&["Pro".to_string()]);
+        let out = link_note(&reply(), "Reponse.md", &index.index);
+
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
+    }
+
+    #[test]
+    fn test_vault_refresh_with_changed_note_drops_its_old_content() {
+        let (vault, dir) = pro_vault();
+        let path = dir.join("Devis original.md");
+        std::fs::write(&path, original()).unwrap();
+        let mut index = Vault::open(vault.path(), &["Pro".to_string()]);
+        std::fs::write(
+            &path,
+            note(
+                "Mano <mano@example.com>",
+                "2022-07-11T10:56:00Z",
+                OLDER_BODY,
+            ),
+        )
+        .unwrap();
+
+        index.refresh(&["Pro".to_string()]);
+        let out = link_note(&reply(), "Reponse.md", &index.index);
+
+        assert_eq!(out.left, vec![Left::NoNote]);
+    }
+
+    #[test]
+    fn test_index_remove_with_shared_stem_links_by_stem() {
+        let mut index = index_of(&[
+            ("a/Devis original.md", original()),
+            (
+                "b/Devis original.md",
+                note("X <x@example.com>", "2020-01-01T00:00:00Z", OLDER_BODY),
+            ),
+        ]);
+
+        index.remove("b/Devis original.md");
+        let out = link_note(&reply(), "Reponse.md", &index);
+
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
+    }
+
+    #[test]
+    fn test_index_remove_forgets_note() {
+        let mut index = index_of(&[("a/Devis original.md", original())]);
+
+        index.remove("a\\Devis original.md");
+        let out = link_note(&reply(), "Reponse.md", &index);
+
+        assert_eq!(out.left, vec![Left::NoNote]);
+    }
+
+    #[test]
     fn test_link_note_without_note_reports_reason() {
         let out = link_note(&reply(), "Reponse.md", &Index::build([]));
         assert_eq!(out.left, vec![Left::NoNote]);
@@ -5809,5 +6205,251 @@ mod env_file_tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+}
+
+mod common;
+
+mod gmail_seed_tests {
+    //! Gmail seed corpus (issues #14, #15, #18, #19): every message is converted into
+    //! one shared export directory, as a real run would, then checked against
+    //! `common::gmail_seed::CATALOGUE`. Ignored tests reproduce an open bug.
+    use super::common::gmail_seed::*;
+    use email_to_markdown::config::Account;
+    use email_to_markdown::contextual_export::{
+        convert_raw_contextual, parse_header_candidate, ConversionStatus, MessageLocation,
+    };
+    use email_to_markdown::date_layout::DateLayout;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    struct Exported {
+        _tmp: TempDir,
+        export: PathBuf,
+        notes: Vec<(&'static str, PathBuf, usize, Vec<u8>)>,
+    }
+
+    fn seed_account(export: &std::path::Path) -> Account {
+        Account {
+            name: "Seed".into(),
+            server: "imap.example.com".into(),
+            port: 993,
+            username: "bob@example.com".into(),
+            password: Some("unused".into()),
+            ignored_folders: vec![],
+            export_directory: export.to_string_lossy().into_owned(),
+            quote_depth: 5,
+            skip_existing: false,
+            collect_contacts: false,
+            skip_signature_images: true,
+            delete_after_export: true,
+            cleanup_empty_dirs: true,
+            batch_size: 0,
+        }
+    }
+
+    /// Convert the seed messages, in corpus order, into one export directory.
+    fn export_seed() -> Exported {
+        let tmp = TempDir::new().unwrap();
+        let export = tmp.path().join("export");
+        std::fs::create_dir_all(&export).unwrap();
+        let account = seed_account(&export);
+        let notes = CATALOGUE
+            .iter()
+            .enumerate()
+            .map(|(i, exp)| {
+                let raw = load(exp.file);
+                let location = MessageLocation {
+                    folder_raw: "INBOX".into(),
+                    folder_display: "INBOX".into(),
+                    uid_validity: 1,
+                    uid: i as u32 + 1,
+                };
+                let candidate =
+                    parse_header_candidate("Seed", location.clone(), &raw, None).unwrap();
+                let status = convert_raw_contextual(
+                    &export,
+                    &account,
+                    &candidate,
+                    &location,
+                    &raw,
+                    DateLayout::None,
+                )
+                .unwrap();
+                let ConversionStatus::Written {
+                    markdown,
+                    quarantined,
+                    ..
+                } = status
+                else {
+                    panic!("{}: not written: {status:?}", exp.key);
+                };
+                (exp.key, markdown, quarantined, raw)
+            })
+            .collect();
+        Exported {
+            _tmp: tmp,
+            export,
+            notes,
+        }
+    }
+
+    fn check(key: &str) {
+        let exported = export_seed();
+        let (_, note, quarantined, raw) = exported
+            .notes
+            .iter()
+            .find(|(k, ..)| *k == key)
+            .unwrap_or_else(|| panic!("{key} not exported"));
+        assert_seed_note(
+            note,
+            raw,
+            *quarantined,
+            &exported.export.join("_skipped"),
+            expectation(key),
+        );
+    }
+
+    #[test]
+    fn test_gmail_seed_c1_m1_html_lists_links_signature() {
+        check("seed-c1-m1");
+    }
+
+    #[test]
+    fn test_gmail_seed_c1_m2_quoted_captures() {
+        check("seed-c1-m2");
+    }
+
+    #[test]
+    fn test_gmail_seed_c1_m3_cid_referenced_twice() {
+        check("seed-c1-m3");
+    }
+
+    #[test]
+    fn test_gmail_seed_c2_m4_related_root_without_disposition() {
+        check("seed-c2-m4");
+    }
+
+    #[test]
+    fn test_gmail_seed_c2_m5_attachments_and_accented_name() {
+        check("seed-c2-m5");
+    }
+
+    #[test]
+    fn test_gmail_seed_c2_m6_gif_only() {
+        check("seed-c2-m6");
+    }
+
+    #[test]
+    fn test_gmail_seed_c3_m7_flowed_plain_text() {
+        check("seed-c3-m7");
+    }
+
+    #[test]
+    // No HTML: the two markers pair with the two image parts, in MIME order.
+    fn test_gmail_seed_c3_m8_image_markers() {
+        check("seed-c3-m8");
+    }
+
+    #[test]
+    fn test_gmail_seed_c3_m9_marker_without_image() {
+        check("seed-c3-m9");
+    }
+
+    #[test]
+    fn test_gmail_seed_c4_m10_inline_forward_table() {
+        check("seed-c4-m10");
+    }
+
+    #[test]
+    fn test_gmail_seed_c4_m11_forward_as_attachment() {
+        check("seed-c4-m11");
+    }
+
+    #[test]
+    // The HTML has no `cid:`, so the `text/plain` part is kept: its three
+    // markers, one cut as `[image:` / `x.png]`, pair with the three remote
+    // signature `<img>` and are dropped (`skip_signature_images`).
+    fn test_gmail_seed_c4_m12_encoded_subject_long_url() {
+        check("seed-c4-m12");
+    }
+
+    #[test]
+    // Cause of the #14 reopening, reproduced here:
+    // - the body references no `cid:`, so the `text/plain` part is kept;
+    // - the capture has a Content-ID but no Content-Disposition nor filename;
+    // - `extract_attachments` skipped every part without disposition as a
+    //   body part, images included: no file, no quarantine, marker left.
+    // Other paths checked (unit tests in `email_export` / `contextual_export`):
+    // - an HTML whose conversion loses its `cid:` falls back to this case;
+    // - contextual quarantine is active with `delete_after_export` only.
+    fn test_gmail_seed_c5_m13_image_without_disposition() {
+        check("seed-c5-m13");
+    }
+
+    #[test]
+    fn test_gmail_seed_substitute_headers_only() {
+        let raw = load("c1-m2-re-retours-recette.eml");
+        let out = substitute(
+            &raw,
+            "20261110T120000",
+            "A <a@test.invalid>",
+            "B <b@test.invalid>",
+        );
+        let text = String::from_utf8(out.clone()).unwrap();
+        let split = |b: &[u8]| b.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let (head, body) = text.split_at(split(&out));
+        assert!(head.contains("\r\nFrom: A <a@test.invalid>\r\n"));
+        assert!(head.contains("\r\nTo: B <b@test.invalid>\r\n"));
+        assert!(head.contains("[email-to-markdown seed 20261110T120000]"));
+        assert!(head.contains("<seed-c1-m2.20261110T120000@email-to-markdown.test>"));
+        assert!(head.contains("<seed-c1-m1.20261110T120000@email-to-markdown.test>"));
+        assert!(!head.contains(FIXTURE_ALICE) && !head.contains(FIXTURE_BOB));
+        assert!(!head.contains(".fixture@") && !head.contains("seed fixture]"));
+        assert_eq!(
+            body.as_bytes(),
+            &raw[split(&raw)..],
+            "body bytes must not change"
+        );
+    }
+
+    /// The versioned corpus is exactly what the generator produces.
+    #[test]
+    fn test_gmail_seed_corpus_matches_generator() {
+        let python = ["python3", "python"]
+            .into_iter()
+            .find(|exe| {
+                std::process::Command::new(exe)
+                    .arg("--version")
+                    .output()
+                    .is_ok_and(|o| o.status.success())
+            })
+            .expect("python3 or python is required to check the Gmail seed generator");
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new(python)
+            .arg("-I")
+            .arg(generator())
+            .arg(tmp.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "build_seed.py failed");
+        let mut names: Vec<String> = std::fs::read_dir(seed_dir())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let mut generated: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        generated.sort();
+        assert_eq!(names, generated, "file list differs from the generator");
+        for name in &names {
+            let want = std::fs::read(tmp.path().join(name)).unwrap();
+            assert!(
+                load(name) == want,
+                "{name} differs from build_seed.py output: regenerate"
+            );
+        }
     }
 }

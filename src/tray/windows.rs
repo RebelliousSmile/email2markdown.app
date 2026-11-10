@@ -664,6 +664,8 @@ pub(super) fn build_route_window(
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("notes"));
+    // Index the vault for quote links while the user reviews, not after "Appliquer".
+    crate::route::warm_quote_index(&notes_dir);
 
     let destinations = crate::route::load_destinations()?;
     // Collect known paths from destinations.yaml for the datalist autocomplete.
@@ -893,6 +895,8 @@ fn apply_review(
     // Sorted notes leave the export folder: remember them so the
     // next export does not propose them again.
     crate::handled::record_proofs(report.deletions.iter().map(|d| &d.proof));
+    // Held notes: remembered without proof, so no purge ever targets them.
+    crate::handled::record_held(&report.held);
     // Sorted notes: remove their server copy (background).
     tray_actions::spawn_server_deletions(std::mem::take(&mut report.deletions));
     Ok(report)
