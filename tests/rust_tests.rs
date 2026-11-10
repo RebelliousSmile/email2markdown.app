@@ -797,6 +797,7 @@ mod email_export_tests {
             tags: vec!["inbox".to_string()],
             attachments: vec![],
             source: None,
+            keep_on_server: None,
             email_type: None,
             social_links: Some(links),
         };
@@ -830,6 +831,7 @@ mod email_export_tests {
             tags: vec![],
             attachments: vec![],
             source: None,
+            keep_on_server: None,
             email_type: None,
             social_links: None,
         };
@@ -853,6 +855,7 @@ mod email_export_tests {
             tags: vec!["INBOX".to_string()],
             attachments: vec![],
             source: None,
+            keep_on_server: None,
             email_type: Some("newsletter".to_string()),
             social_links: None,
         };
@@ -876,6 +879,7 @@ mod email_export_tests {
             tags: vec![],
             attachments: vec![],
             source: None,
+            keep_on_server: None,
             email_type: None,
             social_links: None,
         };
@@ -3151,9 +3155,10 @@ mod contextual_export_tests {
     use email_to_markdown::contextual_export::{
         build_deletion_batch, build_search_batches, candidate_matches_rules, cleanup_stale_staging,
         convert_raw_contextual, deletion_rejection, evaluate_deletion_preflight, merge_candidates,
-        parse_header_candidate, parse_uid_fetch_response, proof_is_complete, read_source_proof,
-        validate_uidvalidity, ContextualLock, ConversionStatus, DeletionProvider, DeletionRequest,
-        LocalSourceProof, MessageConversionResult, MessageLocation, SourceIdentity,
+        parse_header_candidate, parse_uid_fetch_response, proof_is_complete, read_server_hold,
+        read_source_proof, validate_uidvalidity, ContextualLock, ConversionStatus,
+        DeletionProvider, DeletionRequest, LocalSourceProof, MessageConversionResult,
+        MessageLocation, SourceIdentity,
     };
     use email_to_markdown::date_layout::DateLayout;
     use email_to_markdown::route::MatchRule;
@@ -3247,6 +3252,131 @@ mod contextual_export_tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".email-to-markdown-tmp-")));
+    }
+
+    #[test]
+    fn test_convert_raw_contextual_without_deletion_quarantines_nothing() {
+        // #14 reopening, third path: the quarantine exists only with
+        // `delete_after_export`; without it the server keeps the logo.
+        let temp = TempDir::new().unwrap();
+        let export = temp.path().join("export");
+        fs::create_dir_all(&export).unwrap();
+        let mut account = account(&export);
+        account.skip_signature_images = true;
+        let logo = "L".repeat(20 * 1024);
+        let raw = format!(
+            "Message-ID: <keep-logo@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Devis\r\nContent-Type: multipart/mixed; boundary=BOUND\r\n\r\n--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody\r\n--BOUND\r\nContent-Type: image/png; name=logo.png\r\nContent-Disposition: inline; filename=logo.png\r\n\r\n{logo}\r\n--BOUND--\r\n"
+        )
+        .into_bytes();
+        let location = location("INBOX", 43);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+        let status = convert_raw_contextual(
+            &export,
+            &account,
+            &candidate,
+            &location,
+            &raw,
+            DateLayout::None,
+        )
+        .unwrap();
+        assert!(
+            matches!(status, ConversionStatus::Written { quarantined: 0, .. })
+                && !export.join("_skipped").exists(),
+            "{status:?}"
+        );
+    }
+
+    /// Convert `body` (a full MIME body with its Content-Type header) with
+    /// deletion active, as one batch candidate.
+    fn convert_for_deletion(
+        target: &std::path::Path,
+        message_id: &str,
+        mime: &str,
+    ) -> MessageConversionResult {
+        let mut account = account(target);
+        account.skip_signature_images = true;
+        account.delete_after_export = true;
+        let raw = format!(
+            "Message-ID: <{message_id}>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Captures\r\n{mime}"
+        )
+        .into_bytes();
+        let location = location("INBOX", 44);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+        let status = convert_raw_contextual(
+            target,
+            &account,
+            &candidate,
+            &location,
+            &raw,
+            DateLayout::None,
+        )
+        .unwrap();
+        MessageConversionResult {
+            candidate_key: candidate.logical_key(),
+            status: Some(status),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn test_build_deletion_batch_with_marker_without_image_holds() {
+        let temp = TempDir::new().unwrap();
+        let result = convert_for_deletion(
+            temp.path(),
+            "held@example.com",
+            "Content-Type: text/plain; charset=utf-8\r\n\r\nLe QR code : [image: image.png]\r\n",
+        );
+        let Some(ConversionStatus::Written { markdown, .. }) = &result.status else {
+            panic!("expected write, got {:?}", result.status);
+        };
+        assert!(
+            read_server_hold(markdown).unwrap().is_some()
+                && build_deletion_batch(std::slice::from_ref(&result)).is_empty()
+        );
+    }
+
+    #[test]
+    fn test_convert_raw_contextual_with_one_of_two_images_unreadable_refuses() {
+        // One image of two lost: with deletion active the conversion is
+        // refused, no note is written, so nothing is ever deletable.
+        let temp = TempDir::new().unwrap();
+        let mut account = account(temp.path());
+        account.delete_after_export = true;
+        let image = "A".repeat(200 * 1024);
+        let raw = format!(
+            "Message-ID: <half@example.com>\r\nDate: Tue, 01 Sep 2026 08:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Captures\r\nContent-Type: multipart/mixed; boundary=B\r\n\r\n--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nDeux captures.\r\n--B\r\nContent-Type: image/png; name=recto.png\r\nContent-Disposition: attachment; filename=recto.png\r\n\r\n{image}\r\n--B\r\nContent-Type: image/png; name=verso.png\r\nContent-Disposition: attachment; filename=verso.png\r\nContent-Transfer-Encoding: base64\r\n\r\n!!!! not base64 !!!!\r\n--B--\r\n"
+        )
+        .into_bytes();
+        let location = location("INBOX", 45);
+        let candidate = parse_header_candidate("Work", location.clone(), &raw, None).unwrap();
+        let status = convert_raw_contextual(
+            temp.path(),
+            &account,
+            &candidate,
+            &location,
+            &raw,
+            DateLayout::None,
+        );
+        assert!(
+            status.is_err()
+                && !fs::read_dir(temp.path()).unwrap().any(|entry| entry
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext == "md")),
+            "{status:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_deletion_batch_with_complete_images_releases() {
+        let temp = TempDir::new().unwrap();
+        let image = "A".repeat(200 * 1024);
+        let mime = format!(
+            "Content-Type: multipart/mixed; boundary=B\r\n\r\n--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nRecto [image: recto.png]\r\n--B\r\nContent-Type: image/png; name=recto.png\r\nContent-Disposition: attachment; filename=recto.png\r\n\r\n{image}\r\n--B--\r\n"
+        );
+        let result = convert_for_deletion(temp.path(), "whole@example.com", &mime);
+        assert_eq!(build_deletion_batch(&[result]).len(), 1);
     }
 
     #[test]
@@ -3513,6 +3643,31 @@ body
         assert_eq!(
             deletion_rejection(&deletion_request(markdown, 5)).unwrap(),
             Some("la note porte une autre preuve")
+        );
+    }
+
+    #[test]
+    fn test_deletion_rejection_note_held_on_server() {
+        let temp = TempDir::new().unwrap();
+        let markdown = temp.path().join("email_note.md");
+        let request = deletion_request(markdown.clone(), 5);
+        write_proved_note(&markdown, &request.proof);
+        let note = fs::read_to_string(&markdown).unwrap();
+        fs::write(
+            &markdown,
+            note.replacen(
+                "---
+",
+                "---
+keep_on_server: partie image illisible
+",
+                1,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            deletion_rejection(&request).unwrap(),
+            Some("image annoncée non conservée, message gardé")
         );
     }
 
@@ -4163,6 +4318,17 @@ mod handled_purge_tests {
         assert_eq!(ids, load_from(&ledger, "Perso"));
         assert!(ids.contains("legacy@x") && ids.contains("proved@x"));
         assert!(!ids.contains("other@x"));
+    }
+
+    #[test]
+    fn test_purge_summary_with_held_messages() {
+        let stats = [ExportStats {
+            held_on_server: 2,
+            ..ExportStats::default()
+        }];
+        let summary = purge_summary(&stats);
+        assert!(summary.contains("2 message(s) retenu(s) sur le serveur, image non conservée"));
+        assert!(!summary.contains("Nettoyer le serveur"));
     }
 
     #[test]
@@ -5852,7 +6018,7 @@ mod gmail_seed_tests {
         }
     }
 
-    /// Convert the 12 seed messages, in corpus order, into one export directory.
+    /// Convert the seed messages, in corpus order, into one export directory.
     fn export_seed() -> Exported {
         let tmp = TempDir::new().unwrap();
         let export = tmp.path().join("export");
@@ -5957,8 +6123,7 @@ mod gmail_seed_tests {
     }
 
     #[test]
-    // Observed: both `[image: image.png]` stay in the body, the scans are listed as attachments.
-    #[ignore = "#15 [image: …] markers not linked to the attached images"]
+    // No HTML: the two markers pair with the two image parts, in MIME order.
     fn test_gmail_seed_c3_m8_image_markers() {
         check("seed-c3-m8");
     }
@@ -5981,11 +6146,24 @@ mod gmail_seed_tests {
     }
 
     #[test]
-    // Observed: the HTML has no `cid:`, the `text/plain` part is kept with its
-    // `[image: logo.png]` markers, one of them cut as `[image:` / `x.png]`.
-    #[ignore = "#15 [image: …] markers of a remote signature left in the plain body"]
+    // The HTML has no `cid:`, so the `text/plain` part is kept: its three
+    // markers, one cut as `[image:` / `x.png]`, pair with the three remote
+    // signature `<img>` and are dropped (`skip_signature_images`).
     fn test_gmail_seed_c4_m12_encoded_subject_long_url() {
         check("seed-c4-m12");
+    }
+
+    #[test]
+    // Cause of the #14 reopening, reproduced here:
+    // - the body references no `cid:`, so the `text/plain` part is kept;
+    // - the capture has a Content-ID but no Content-Disposition nor filename;
+    // - `extract_attachments` skipped every part without disposition as a
+    //   body part, images included: no file, no quarantine, marker left.
+    // Other paths checked (unit tests in `email_export` / `contextual_export`):
+    // - an HTML whose conversion loses its `cid:` falls back to this case;
+    // - contextual quarantine is active with `delete_after_export` only.
+    fn test_gmail_seed_c5_m13_image_without_disposition() {
+        check("seed-c5-m13");
     }
 
     #[test]

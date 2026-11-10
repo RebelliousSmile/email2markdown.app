@@ -824,6 +824,33 @@ def wrap_keep_urls(text):
     return "\n".join(line if line.startswith("<http") else wrap(line) for line in text.split("\n"))
 
 
+# --------------------------------------------------------------------------
+# Conversation 5: the loss of issue #14 (text body only, image without
+# Content-Disposition nor name, never referenced by a `cid:`).
+# --------------------------------------------------------------------------
+
+C5_SUBJECT = f"{TAG} QR code du badge"
+QR_BADGE = png(110 * 1024, 501)
+
+
+def c5_m13():
+    # The retained body is the text/plain: no `cid:` references the image, so
+    # an exporter that only keeps referenced or named parts drops it silently.
+    text = (
+        "Le QR code de ton badge pour le salon :\n\n[image: image.png]\n\n"
+        "-- \nAlice Martin\nResponsable qualité\n"
+    )
+    body = multipart(
+        "related",
+        "000000000000c5m13r0000000000",
+        [
+            text_part("plain", text),
+            image_part("image/png", "image.png", QR_BADGE, "ii_seed_c5m13_a", disposition=None),
+        ],
+    )
+    return message(5, 13, "Mon, 9 Nov 2026 09:15:00 +0100", ALICE, BOB, C5_SUBJECT, body)
+
+
 MESSAGES = [
     ("c1-m1-retours-recette.eml", c1_m1),
     ("c1-m2-re-retours-recette.eml", c1_m2),
@@ -837,6 +864,7 @@ MESSAGES = [
     ("c4-m10-fwd-devis.eml", c4_m10),
     ("c4-m11-fwd-piece-jointe.eml", c4_m11),
     ("c4-m12-re-fwd-devis.eml", c4_m12),
+    ("c5-m13-capture-texte-seul.eml", c5_m13),
 ]
 
 

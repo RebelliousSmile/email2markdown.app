@@ -490,6 +490,9 @@ pub(super) struct RouteApplyReport {
     pub(super) failed: Vec<(String, String)>,
     /// Moved notes carrying a source proof: their server copy can now be deleted.
     pub(super) deletions: Vec<crate::contextual_export::DeletionRequest>,
+    /// Moved notes whose frontmatter holds the message on the server
+    /// (`keep_on_server`): sorted, never deleted.
+    pub(super) held: Vec<crate::contextual_export::LocalSourceProof>,
 }
 
 impl RouteApplyReport {
@@ -604,15 +607,20 @@ pub(super) fn apply_route_decisions(
             continue;
         }
         // Read before the move: the proof travels in the note's frontmatter.
-        let proof = crate::contextual_export::read_source_proof(staging_md)
+        let head = crate::contextual_export::read_note_head(staging_md)
             .ok()
             .flatten()
+            .unwrap_or_default();
+        let proof = head
+            .source
             .filter(crate::contextual_export::proof_is_complete);
         match crate::route::apply_decision(staging_md, dest_path, notes_dir) {
             Ok(()) => {
                 allowed.remove(&row.file);
                 report.moved.push(row.file.clone());
-                if let (Some(proof), Some(name)) = (proof, staging_md.file_name()) {
+                if head.keep_on_server.is_some() {
+                    report.held.extend(proof);
+                } else if let (Some(proof), Some(name)) = (proof, staging_md.file_name()) {
                     if let Ok(dest_dir) = crate::route::join_safe_segments(notes_dir, dest_path) {
                         report
                             .deletions
@@ -1679,6 +1687,7 @@ hi
                 missing: vec![fx.files[1].clone()],
                 failed: vec![],
                 deletions: vec![],
+                held: vec![],
             }
         );
         assert_eq!(md_names(&fx.notes.join("Perso")), ["a.md", "c.md"]);
@@ -1735,6 +1744,7 @@ hi
             missing: vec!["b.md".to_string()],
             failed: vec![],
             deletions: vec![],
+            held: vec![],
         };
 
         let message = report.error_message().unwrap();

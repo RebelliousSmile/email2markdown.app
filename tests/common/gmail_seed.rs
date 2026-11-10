@@ -5,7 +5,7 @@
 //! expectation is the *wanted* result: a message whose export still differs is
 //! tested with `#[ignore = "#NN …"]` at the call site, never by weakening it here.
 
-use email_to_markdown::contextual_export::read_source_proof;
+use email_to_markdown::contextual_export::{read_server_hold, read_source_proof};
 use email_to_markdown::email_block;
 use std::path::{Path, PathBuf};
 
@@ -86,7 +86,7 @@ pub struct SeedExpectation {
     pub body_excludes: &'static [&'static str],
     /// A `[image: …]` marker without image part stays as is (C3-M9).
     pub keep_image_marker: bool,
-    /// The deletion guard keeps this message on the server (phase 2).
+    /// The note's `keep_on_server` holds this message on the server.
     pub held_by_guard: bool,
 }
 
@@ -291,6 +291,15 @@ pub const CATALOGUE: &[SeedExpectation] = &[
         body_excludes: &["revision-\n", "relance=\n"],
         ..BASE
     },
+    SeedExpectation {
+        key: "seed-c5-m13",
+        file: "c5-m13-capture-texte-seul.eml",
+        subject: "[email-to-markdown seed fixture] QR code du badge",
+        images: 1,
+        body_contains: &["Le QR code de ton badge pour le salon :"],
+        body_excludes: &["cid:"],
+        ..BASE
+    },
 ];
 
 pub fn expectation(key: &str) -> &'static SeedExpectation {
@@ -396,6 +405,14 @@ pub fn assert_seed_note(
     assert!(
         message_id.starts_with(&format!("{key}.")),
         "{key}: source.identity.message_id is {message_id:?}"
+    );
+    // Deletion guard: only the expected messages hold their server copy.
+    let hold = read_server_hold(note_path)
+        .unwrap_or_else(|e| panic!("{key}: unreadable frontmatter: {e}"));
+    assert_eq!(
+        hold.is_some(),
+        exp.held_by_guard,
+        "{key}: keep_on_server is {hold:?}"
     );
 
     let header = email_block::read_header(&note)

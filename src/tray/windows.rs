@@ -893,6 +893,8 @@ fn apply_review(
     // Sorted notes leave the export folder: remember them so the
     // next export does not propose them again.
     crate::handled::record_proofs(report.deletions.iter().map(|d| &d.proof));
+    // Held notes: remembered without proof, so no purge ever targets them.
+    crate::handled::record_held(&report.held);
     // Sorted notes: remove their server copy (background).
     tray_actions::spawn_server_deletions(std::mem::take(&mut report.deletions));
     Ok(report)

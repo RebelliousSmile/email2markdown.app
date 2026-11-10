@@ -304,6 +304,14 @@ mod tests {
     }
 
     #[test]
+    fn test_plan_with_held_message_targets_nothing() {
+        let entries = vec![entry("INBOX", 1, ServerStatus::Held, Some(proof(1, None)))];
+        let plan = plan(&entries);
+        assert!(plan.targets.is_empty());
+        assert_eq!(plan.untargetable, 0);
+    }
+
+    #[test]
     fn test_plan_gmail_message_under_several_labels_is_one_target() {
         let mut labelled = proof(9, Some("123"));
         labelled.location.folder_raw = "[Gmail]/All Mail".into();

@@ -1,6 +1,6 @@
 # Corpus Gmail seed
 
-Ce dossier produit le corpus de la campagne Gmail (issue #19, avec #14, #15 et #18). Il compte quatre conversations et douze messages. Ils ont la forme de ce que Gmail livre en IMAP : captures collées, signature avec logo, listes, liens, réponses, transferts et texte seul.
+Ce dossier produit le corpus de la campagne Gmail (issue #19, avec #14, #15 et #18). Il compte cinq conversations et treize messages. Ils ont la forme de ce que Gmail livre en IMAP : captures collées, signature avec logo, listes, liens, réponses, transferts et texte seul.
 
 - `build_seed.py` : générateur déterministe, bibliothèque standard Python uniquement.
 - `../seed/gmail/*.eml` : sa sortie, versionnée. Le sous-dossier n'est pas copié par la boucle `/seed/*.eml` de `compose.yaml`, donc Dovecot ne le voit pas.
@@ -38,11 +38,12 @@ Pour un envoi réel, `substitute(raw, run, from, to)` remplace `From`, `To` et l
 | C2-M5 | mixed > related + PDF + JPEG + PNG au nom RFC 2231 | pièces jointes, nom accentué | #19 | ignoré |
 | C2-M6 | related > alternative + GIF animé | corps réduit à une image | #19 | vert |
 | C3-M7 | `text/plain; format=flowed; delsp=yes` + PNG joint | items de liste sur deux lignes, guillemet en début de ligne, adresse sur trois lignes | #18 | ignoré |
-| C3-M8 | `text/plain` coupé à 72 colonnes + 2 PNG joints | deux marqueurs `[image: image.png]` | #15 | ignoré |
-| C3-M9 | `text/plain` seul | marqueur sans partie image (message tronqué) | garde-fou | vert |
+| C3-M8 | `text/plain` coupé à 72 colonnes + 2 PNG joints | deux marqueurs `[image: image.png]` | #15 | vert |
+| C3-M9 | `text/plain` seul | marqueur sans partie image (message tronqué), message retenu sur le serveur | garde-fou | vert |
 | C4-M10 | transfert en ligne, related + 2 captures | en-tête de transfert, tableau HTML | #19 | ignoré |
 | C4-M11 | mixed > alternative + `message/rfc822` qui contient une capture | transfert en pièce jointe | #19 | vert |
-| C4-M12 | réponse en `multipart/alternative` sans `cid:` | sujet en encoded-word avec emoji, URL de plus de 76 caractères, `*`, `_`, `[x]` | #15 | ignoré |
+| C4-M12 | réponse en `multipart/alternative` sans `cid:` | sujet en encoded-word avec emoji, URL de plus de 76 caractères, `*`, `_`, `[x]` | #15 | vert |
+| C5-M13 | related > `text/plain` + PNG sans `Content-Disposition` ni nom | capture d'un corps texte seul, sans `cid:` | #14 | vert |
 
 Un test ignoré reproduit un défaut constaté. Son attribut `#[ignore = "#NN …"]` nomme l'issue, et un commentaire au-dessus décrit l'échec observé. Les attentes du catalogue décrivent le résultat voulu : un correctif retire l'`#[ignore]`, sans jamais assouplir l'attente.
 
@@ -51,7 +52,17 @@ Un test ignoré reproduit un défaut constaté. Son attribut `#[ignore = "#NN �
 - **URL de C4-M12** : elle tient sur une seule ligne de plus de 76 caractères. Gmail ne coupe pas une URL dans le `text/plain`, c'est le reste du texte qui est coupé autour.
 - **Signature de C4-M12** : ses images sont distantes (`https://example.com/sig/…`) dans le HTML, et apparaissent comme `[image: logo.png]` dans le `text/plain`. Comme le HTML ne contient aucun `cid:`, l'export garde le `text/plain`, et les marqueurs y restent.
 - **C1-M3** ne réintègre pas les captures citées de M2. Leurs `cid:` restent sans partie, et l'export les retire sans bruit.
-- **C2-M4** ne reproduit pas la perte décrite dans #14 : la capture y est référencée par le HTML, donc écrite et liée. La cause de la réouverture de #14 reste à trouver avec une autre structure.
+- **C2-M4** ne reproduit pas la perte décrite dans #14 : la capture y est référencée par le HTML, donc écrite et liée. C5-M13, ajouté en phase 2, la reproduit.
+
+## Cause de #14 (phase 2)
+
+Dans C5-M13, aucun `cid:` ne référence la capture, donc l'export retient le `text/plain`. La capture porte un `Content-ID`, mais ni `Content-Disposition` ni nom. Or `extract_attachments` sautait toute partie sans disposition, images comprises. Il ne restait donc que le marqueur `[image: image.png]` : pas d'`attachments`, pas de `### Images :`, rien dans `_skipped/`. Avec `delete_after_export`, le message disparaissait du serveur.
+
+Depuis la phase 2 :
+
+- toute partie image est écrite à côté de la note, ou mise en quarantaine, même sans disposition ;
+- chaque marqueur `[image: …]` est relié à son image, dans l'ordre, ou retiré quand il désigne une image distante de signature ;
+- une image annoncée mais non conservée inscrit `keep_on_server` dans la note, et le message reste sur le serveur (C3-M9).
 
 ## Défauts constatés en phase 1
 
@@ -59,6 +70,6 @@ Un test ignoré reproduit un défaut constaté. Son attribut `#[ignore = "#NN �
 - **Liste imbriquée** (C1-M1) : le sous-item n'est indenté que d'un espace (` * menu`), et l'imbrication disparaît dans une citation.
 - **Nom RFC 2231** (C2-M5) : la pièce jointe est écrite sous `UTF-8''capture%20d%27%C3%A9cran%20%C3%A9t%C3%A9.png`.
 - **Format flowed** (C3-M7) : les items de liste gardent leurs coupures, et une ligne commence par `«`.
-- **Marqueurs `[image: …]`** (C3-M8, C4-M12) : ils ne sont pas reliés aux images, et un marqueur peut être coupé sur deux lignes.
+- **Marqueurs `[image: …]`** (C3-M8, C4-M12) : ils ne sont pas reliés aux images, et un marqueur peut être coupé sur deux lignes. Corrigé en phase 2.
 - **En-tête de transfert** (C4-M10) : `De :`, `Date:`, `Subject:` et `To:` fusionnent sur une seule ligne.
 - **Quarantaine dans un export partagé** : la quarantaine de C1-M3 va dans le dossier `_skipped/` du nom de base de C1-M1 (`logo_2.png`), et non dans celui de sa note suffixée. Rien n'est perdu, mais le rattachement est trompeur.

@@ -40,6 +40,10 @@ pub struct EmailFrontmatter {
     /// Stable proof tying this Markdown to one exact IMAP message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::contextual_export::LocalSourceProof>,
+    /// Why the server copy must stay: an image the message announces was
+    /// neither written nor quarantined. Every deletion path reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_on_server: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -502,6 +506,28 @@ struct AttachmentPolicy<'q> {
     quarantine: Option<(PathBuf, &'q mut Vec<PathBuf>)>,
     /// Attachments left out of the note because their payload is unreadable.
     errors: Vec<String>,
+    /// Every leaf `image/*` part met, in MIME order, with what became of it.
+    images: Vec<ImagePart>,
+}
+
+/// One leaf `image/*` part of the message and what became of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImagePart {
+    /// Normalized Content-ID, when the part has one.
+    content_id: Option<String>,
+    outcome: ImageOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ImageOutcome {
+    /// Written next to the note under this bare file name.
+    Written(String),
+    /// Dropped by the signature filter (quarantined when deletion is active).
+    Skipped,
+    /// Empty payload: nothing to keep.
+    Empty,
+    /// Unreadable payload: nothing written.
+    Unreadable,
 }
 
 /// Export a single email to Markdown with frontmatter.
@@ -633,6 +659,7 @@ pub fn export_to_markdown(
             .as_mut()
             .map(|q| (q.root.join(&note_stem), &mut *q.written)),
         errors: Vec::new(),
+        images: Vec::new(),
     };
     let extracted = extract_attachments(
         &mail,
@@ -644,6 +671,7 @@ pub fn export_to_markdown(
         &mut attachments,
     );
     let attachment_errors = policy.errors;
+    let image_parts = policy.images;
     // The server copy is deleted on the strength of the note: a note missing an
     // attachment must not be produced when that copy is the only one left.
     let extracted = extracted.and_then(|()| {
@@ -667,6 +695,40 @@ pub fn export_to_markdown(
     } else {
         rewrite_cid_images(&body, &inline_images)
     };
+
+    // `[image: …]` markers of a text body point at the HTML's `<img>` tags,
+    // or at the image parts when there is no HTML. Linked before `clean`, so
+    // `unwrap_lines` never glues prose to a marker.
+    let (body, marker_targets, html_image_count) = if image_marker_count(&body) == 0 {
+        (body, Vec::new(), 0)
+    } else {
+        let html = raw_html_body(&mail).map(|raw| html_images(&raw));
+        let targets: Vec<MarkerTarget> = match &html {
+            Some(images) => images
+                .iter()
+                .map(|image| {
+                    MarkerTarget::of_html(image, &image_parts, account.skip_signature_images)
+                })
+                .collect(),
+            None => image_parts
+                .iter()
+                .map(|part| MarkerTarget::of_part(&part.outcome))
+                .collect(),
+        };
+        let linked = link_image_markers(&body, &targets);
+        (linked, targets, html.map_or(0, |images| images.len()))
+    };
+    let keep_on_server = server_hold_reason(
+        &image_parts,
+        &marker_targets,
+        html_image_count,
+        image_marker_count(&body),
+    );
+    if let (Some(reason), Some(_)) = (&keep_on_server, &ctx.quarantine) {
+        ctx.errors.push(format!(
+            "Message conservé sur le serveur, image annoncée non conservée : {reason}"
+        ));
+    }
 
     // Normalize body and add attachments list
     let body = normalize_line_breaks(&body);
@@ -699,6 +761,7 @@ pub fn export_to_markdown(
         tags: vec!["email".to_string()],
         attachments: attachments.clone(),
         source: ctx.source_proof.cloned(),
+        keep_on_server,
         email_type: Some(email_type_str),
         social_links,
     };
@@ -1136,14 +1199,26 @@ fn extract_attachments(
             .get_first_value("Content-Disposition")
             .unwrap_or_default();
 
-        // Content-ID of this part when the body embeds it through `cid:<id>`.
-        let referenced_cid = part
+        let content_id = part
             .headers
             .get_first_value("Content-ID")
-            .map(|value| normalize_content_id(&value))
-            .filter(|id| referenced_cids.contains(id));
+            .map(|value| normalize_content_id(&value));
+        // Content-ID of this part when the body embeds it through `cid:<id>`.
+        let referenced_cid = content_id.clone().filter(|id| referenced_cids.contains(id));
+        // A leaf image is content even without disposition, name or `cid:`
+        // reference: Gmail's text-only body points at it by `[image: …]` (#14).
+        let is_image = part.subparts.is_empty()
+            && part
+                .ctype
+                .mimetype
+                .to_ascii_lowercase()
+                .starts_with("image/");
 
-        if content_disposition.is_empty() && part.subparts.is_empty() && referenced_cid.is_none() {
+        if content_disposition.is_empty()
+            && part.subparts.is_empty()
+            && referenced_cid.is_none()
+            && !is_image
+        {
             continue;
         }
 
@@ -1151,11 +1226,27 @@ fn extract_attachments(
         let has_attachment_disposition = content_disposition.to_lowercase().contains("attachment")
             || content_disposition.to_lowercase().contains("inline");
 
-        let filename = extract_attachment_filename(part).or_else(|| {
-            referenced_cid
-                .as_deref()
-                .and_then(|id| inline_image_name(part, id))
-        });
+        let filename = extract_attachment_filename(part)
+            .filter(|name| !name.trim().is_empty())
+            .or_else(|| {
+                referenced_cid
+                    .as_deref()
+                    .and_then(|id| inline_image_name(part, id))
+            })
+            .or_else(|| {
+                is_image.then(|| {
+                    inline_image_name(part, content_id.as_deref().unwrap_or(""))
+                        .unwrap_or_else(|| "image".to_string())
+                })
+            });
+        let record = |outcome: ImageOutcome, images: &mut Vec<ImagePart>| {
+            if is_image {
+                images.push(ImagePart {
+                    content_id: content_id.clone(),
+                    outcome,
+                });
+            }
+        };
 
         if let Some(filename) = filename {
             let decoded_filename = decode_mime_filename(&filename);
@@ -1172,6 +1263,7 @@ fn extract_attachments(
                         policy.errors.push(format!(
                             "Pièce jointe « {decoded_filename} » illisible, non enregistrée : {error}"
                         ));
+                        record(ImageOutcome::Unreadable, &mut policy.images);
                         continue;
                     }
                 };
@@ -1205,6 +1297,7 @@ fn extract_attachments(
                             written.push(path);
                         }
                     }
+                    record(ImageOutcome::Skipped, &mut policy.images);
                     continue;
                 }
 
@@ -1225,12 +1318,16 @@ fn extract_attachments(
                     if let Some(id) = &referenced_cid {
                         inline_images.insert(id.clone(), Some(bare_link.clone()));
                     }
+                    record(ImageOutcome::Written(bare_link.clone()), &mut policy.images);
                     attachments.push(bare_link);
-                } else if policy.debug_mode {
-                    println!(
-                        "    Skipping attachment '{}' with empty payload",
-                        decoded_filename
-                    );
+                } else {
+                    record(ImageOutcome::Empty, &mut policy.images);
+                    if policy.debug_mode {
+                        println!(
+                            "    Skipping attachment '{}' with empty payload",
+                            decoded_filename
+                        );
+                    }
                 }
             }
         }
@@ -1343,11 +1440,9 @@ fn inline_image_name(part: &ParsedMail, content_id: &str) -> Option<String> {
         .filter(|c| c.is_ascii_alphanumeric())
         .take(24)
         .collect();
-    let stem = if stem.is_empty() {
-        "image".to_string()
-    } else {
-        stem
-    };
+    if stem.is_empty() {
+        return Some(format!("image.{extension}"));
+    }
     Some(format!("inline_{stem}.{extension}"))
 }
 
@@ -1367,14 +1462,221 @@ fn rewrite_cid_images(body: &str, saved: &HashMap<String, Option<String>>) -> St
     CID_IMAGE_RE
         .replace_all(&body, |caps: &regex::Captures| {
             match saved.get(&normalize_content_id(&caps[2])) {
-                Some(Some(file)) if file.contains([' ', '(', ')']) => {
-                    format!("![{}](<{}>)", &caps[1], file)
-                }
-                Some(Some(file)) => format!("![{}]({})", &caps[1], file),
+                Some(Some(file)) => local_image(&caps[1], file),
                 _ => String::new(),
             }
         })
         .into_owned()
+}
+
+/// `![alt](file)` for a file next to the note, angle-bracketed when the name
+/// would break the destination.
+fn local_image(alt: &str, file: &str) -> String {
+    if file.contains([' ', '(', ')']) {
+        format!("![{alt}](<{file}>)")
+    } else {
+        format!("![{alt}]({file})")
+    }
+}
+
+/// Gmail's text stand-in for an image: `[image: name]`. The name may wrap
+/// onto the next line (`[image:\nlinkedin.png]`).
+static IMAGE_MARKER_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"\[image:\s*([^\]\n]*(?:\n[^\]\n]*)?)\]").expect("static regex")
+});
+
+/// Opening or closing `<div>` and `<img>` tags of an HTML body.
+static HTML_DIV_IMG_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)<(/?)(div|img)\b([^>]*)>").expect("static regex"));
+
+static HTML_SRC_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"(?i)\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).expect("static regex")
+});
+
+static HTML_ALT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"(?i)\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).expect("static regex")
+});
+
+/// `class` naming Gmail's signature block (not `gmail_signature_prefix`).
+static GMAIL_SIGNATURE_CLASS_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r#"(?i)\bclass\s*=\s*(?:"[^"]*\bgmail_signature\b[^"]*"|'[^']*\bgmail_signature\b[^']*')"#,
+    )
+    .expect("static regex")
+});
+
+/// One `<img>` of an HTML body, in document order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HtmlImage {
+    src: String,
+    alt: String,
+    /// Inside Gmail's `gmail_signature` block.
+    in_signature: bool,
+}
+
+/// Value of the attribute `re` matches in a tag's attributes, entities decoded.
+fn html_attribute(re: &regex::Regex, attributes: &str) -> String {
+    re.captures(attributes)
+        .and_then(|caps| caps.get(1).or_else(|| caps.get(2)).or_else(|| caps.get(3)))
+        .map(|m| {
+            m.as_str()
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&amp;", "&")
+        })
+        .unwrap_or_default()
+}
+
+/// The `<img>` tags of a raw HTML body, each marked when it sits inside a
+/// `gmail_signature` block.
+fn html_images(html: &str) -> Vec<HtmlImage> {
+    let mut divs: Vec<bool> = Vec::new();
+    let mut images = Vec::new();
+    for caps in HTML_DIV_IMG_RE.captures_iter(html) {
+        let closing = !caps[1].is_empty();
+        if caps[2].eq_ignore_ascii_case("div") {
+            if closing {
+                divs.pop();
+            } else {
+                divs.push(GMAIL_SIGNATURE_CLASS_RE.is_match(&caps[3]));
+            }
+        } else if !closing {
+            images.push(HtmlImage {
+                src: html_attribute(&HTML_SRC_RE, &caps[3]),
+                alt: html_attribute(&HTML_ALT_RE, &caps[3]),
+                in_signature: divs.iter().any(|signature| *signature),
+            });
+        }
+    }
+    images
+}
+
+/// The raw `text/html` body of the message, if it has one.
+fn raw_html_body(mail: &ParsedMail) -> Option<String> {
+    let mut plain = None;
+    let mut html = None;
+    collect_text_bodies(mail, &mut plain, &mut html);
+    html
+}
+
+/// What a `[image: …]` marker stands for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MarkerTarget {
+    /// Image written next to the note.
+    Local(String),
+    /// Image dropped on purpose (signature filter, empty part): marker removed.
+    Drop,
+    /// Remote image: a plain link, never an embed loading a remote resource.
+    Link { name: String, url: String },
+    /// Announced image the message does not carry: marker kept.
+    Missing,
+}
+
+impl MarkerTarget {
+    fn of_part(outcome: &ImageOutcome) -> Self {
+        match outcome {
+            ImageOutcome::Written(file) => Self::Local(file.clone()),
+            ImageOutcome::Skipped | ImageOutcome::Empty => Self::Drop,
+            ImageOutcome::Unreadable => Self::Missing,
+        }
+    }
+
+    fn of_html(image: &HtmlImage, parts: &[ImagePart], skip_signature_images: bool) -> Self {
+        let src = image.src.trim();
+        if let Some(cid) = src
+            .get(..4)
+            .filter(|scheme| scheme.eq_ignore_ascii_case("cid:"))
+            .map(|_| &src[4..])
+        {
+            let id = normalize_content_id(cid);
+            return parts
+                .iter()
+                .find(|part| part.content_id.as_deref() == Some(id.as_str()))
+                .map_or(Self::Missing, |part| Self::of_part(&part.outcome));
+        }
+        let lower = src.to_ascii_lowercase();
+        if !lower.starts_with("http://") && !lower.starts_with("https://") {
+            return Self::Missing;
+        }
+        let name = if image.alt.trim().is_empty() {
+            src.rsplit('/').next().unwrap_or(src).to_string()
+        } else {
+            image.alt.trim().to_string()
+        };
+        let signature =
+            image.in_signature || crate::utils::has_signature_name(&name.to_ascii_lowercase(), 0);
+        if skip_signature_images && signature {
+            return Self::Drop;
+        }
+        Self::Link {
+            name,
+            url: src.to_string(),
+        }
+    }
+}
+
+/// Number of `[image: …]` markers in `body`.
+fn image_marker_count(body: &str) -> usize {
+    IMAGE_MARKER_RE.find_iter(body).count()
+}
+
+/// Replace the n-th `[image: …]` marker of `body` by the n-th target. The
+/// caller guarantees one target per marker; otherwise the body is returned
+/// unchanged, since pairing would be a guess.
+fn link_image_markers(body: &str, targets: &[MarkerTarget]) -> String {
+    if image_marker_count(body) != targets.len() {
+        return body.to_string();
+    }
+    let mut targets = targets.iter();
+    IMAGE_MARKER_RE
+        .replace_all(body, |caps: &regex::Captures| match targets.next() {
+            Some(MarkerTarget::Local(file)) => local_image("", file),
+            Some(MarkerTarget::Link { name, url }) if url.contains([' ', '(', ')']) => {
+                format!("[{name}](<{url}>)")
+            }
+            Some(MarkerTarget::Link { name, url }) => format!("[{name}]({url})"),
+            Some(MarkerTarget::Drop) => String::new(),
+            Some(MarkerTarget::Missing) | None => caps[0].to_string(),
+        })
+        .into_owned()
+}
+
+/// Why the server copy of a message must stay, `None` when the note keeps
+/// every image the message announces.
+///
+/// - a leaf image part was unreadable;
+/// - an `<img>` of the HTML has no part (`MarkerTarget::Missing`);
+/// - more `[image: …]` markers remain than the message has images.
+///
+/// A `cid:` without any part is not a reason: Gmail replies quote the
+/// previous message's `cid:` images without attaching them, and the server
+/// copy lacks them too, so holding it would protect nothing. Every image part
+/// that does exist is written or quarantined (`extract_attachments`).
+fn server_hold_reason(
+    images: &[ImagePart],
+    targets: &[MarkerTarget],
+    html_image_count: usize,
+    remaining_markers: usize,
+) -> Option<String> {
+    let mut reasons = Vec::new();
+    if images
+        .iter()
+        .any(|part| part.outcome == ImageOutcome::Unreadable)
+    {
+        reasons.push("partie image illisible".to_string());
+    }
+    if targets.contains(&MarkerTarget::Missing) {
+        reasons.push("image du corps HTML absente du message".to_string());
+    }
+    if remaining_markers > images.len().max(html_image_count) {
+        reasons.push(format!(
+            "{remaining_markers} marqueur(s) [image: …] pour {} image(s) dans le message",
+            images.len().max(html_image_count)
+        ));
+    }
+    (!reasons.is_empty()).then(|| reasons.join(" ; "))
 }
 
 /// Resolution of the per-folder progress bar (steps reported per folder).
@@ -2155,7 +2457,7 @@ impl ImapExporter {
         handled: &HashSet<String>,
         ledger: &crate::handled::LedgerProofs,
     ) -> Result<Vec<crate::server_audit::AuditEntry>> {
-        use crate::server_audit::{classify, confirm_proof, AuditEntry};
+        use crate::server_audit::{classify, confirm_proof, mark_held, AuditEntry};
 
         let proved: HashSet<String> = ledger.proofs.keys().cloned().collect();
         let gmail_extension = self
@@ -2223,6 +2525,7 @@ impl ImapExporter {
                 );
                 let mut entry =
                     AuditEntry::from_headers(&folder.display, uid, provider_id, &header, status);
+                entry.status = mark_held(entry.status, entry.message_id.as_deref(), ledger);
                 entry.proof = proof;
                 entries.push(entry);
             }
@@ -3047,6 +3350,7 @@ impl ImapExporter {
                     match ledger_proofs.match_seen(seen, &current, self.is_gmail) {
                         crate::handled::PurgeMatch::Purge(proof) => purge.push(proof),
                         crate::handled::PurgeMatch::Legacy => stats.legacy_handled += 1,
+                        crate::handled::PurgeMatch::Held => stats.held_on_server += 1,
                         crate::handled::PurgeMatch::Stale => stats.stale_proof += 1,
                     }
                 }
@@ -3318,6 +3622,8 @@ pub struct ExportStats {
     pub legacy_handled: usize,
     /// Handled messages kept because their proof targets another message.
     pub stale_proof: usize,
+    /// Handled messages kept because their note holds them on the server.
+    pub held_on_server: usize,
 }
 
 /// French export counts. Skipped messages are split by reason: a note still
@@ -3344,11 +3650,12 @@ pub fn counts_summary<'a>(stats: impl IntoIterator<Item = &'a ExportStats>) -> S
 
 /// French summary of the purge of handled messages, empty when nothing to say.
 pub fn purge_summary<'a>(stats: impl IntoIterator<Item = &'a ExportStats>) -> String {
-    let (mut purged, mut legacy, mut stale) = (0, 0, 0);
+    let (mut purged, mut legacy, mut stale, mut held) = (0, 0, 0, 0);
     for s in stats {
         purged += s.purged;
         legacy += s.legacy_handled;
         stale += s.stale_proof;
+        held += s.held_on_server;
     }
     let mut parts = Vec::new();
     if purged > 0 {
@@ -3362,6 +3669,11 @@ pub fn purge_summary<'a>(stats: impl IntoIterator<Item = &'a ExportStats>) -> St
     if stale > 0 {
         parts.push(format!(
             "{stale} message(s) traité(s) à la preuve périmée, laissés sur le serveur"
+        ));
+    }
+    if held > 0 {
+        parts.push(format!(
+            "{held} message(s) retenu(s) sur le serveur, image non conservée"
         ));
     }
     parts.join(" — ")
@@ -3897,6 +4209,7 @@ abc123
             debug_mode: false,
             quarantine,
             errors: Vec::new(),
+            images: Vec::new(),
         }
     }
 
@@ -5122,5 +5435,122 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
         saved.insert("a@x".to_string(), Some("inline_a.png".to_string()));
         let out = rewrite_cid_images("[![x](cid:a@x)](https://x.test/u)", &saved);
         assert_eq!(out, "[![x](inline_a.png)](https://x.test/u)");
+    }
+
+    #[test]
+    fn test_extract_body_html_losing_its_cid_keeps_plain_text() {
+        // #14 reopening, second path: the HTML mentions `cid:` but its
+        // conversion keeps no reference, so the plain part (with its marker)
+        // is the body, as in C5-M13.
+        let raw = b"Content-Type: multipart/alternative; boundary=B\r\n\r\n--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nVoir [image: image.png]\r\n--B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Voir</p><!-- <img src=\"cid:lost\"> -->\r\n--B--\r\n";
+        let mail = mailparse::parse_mail(raw).unwrap();
+        assert_eq!(extract_body(&mail).trim(), "Voir [image: image.png]");
+    }
+
+    fn part(content_id: Option<&str>, outcome: ImageOutcome) -> ImagePart {
+        ImagePart {
+            content_id: content_id.map(str::to_string),
+            outcome,
+        }
+    }
+
+    #[test]
+    fn test_html_images_marks_gmail_signature() {
+        let html = r#"<div><img src="cid:a" alt="image.png"></div><div class="gmail_signature"><div>Alice</div><img src="https://example.com/sig/logo.png"></div><img src="https://x.test/p.png" alt="a &amp; b">"#;
+        let images: Vec<(String, String, bool)> = html_images(html)
+            .into_iter()
+            .map(|image| (image.src, image.alt, image.in_signature))
+            .collect();
+        assert_eq!(
+            images,
+            [
+                ("cid:a".into(), "image.png".into(), false),
+                (
+                    "https://example.com/sig/logo.png".into(),
+                    String::new(),
+                    true
+                ),
+                ("https://x.test/p.png".into(), "a & b".into(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_marker_target_of_html_remote_signature_dropped_or_linked() {
+        let image = HtmlImage {
+            src: "https://example.com/sig/linkedin.png".into(),
+            alt: String::new(),
+            in_signature: true,
+        };
+        assert_eq!(
+            (
+                MarkerTarget::of_html(&image, &[], true),
+                MarkerTarget::of_html(&image, &[], false)
+            ),
+            (
+                MarkerTarget::Drop,
+                MarkerTarget::Link {
+                    name: "linkedin.png".into(),
+                    url: "https://example.com/sig/linkedin.png".into()
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn test_link_image_markers_in_order_with_wrapped_marker() {
+        let body = "Recto [image: image.png]\nverso [image:\nimage.png] fin";
+        let targets = [
+            MarkerTarget::Local("a.png".into()),
+            MarkerTarget::Local("b c.png".into()),
+        ];
+        assert_eq!(
+            link_image_markers(body, &targets),
+            "Recto ![](a.png)\nverso ![](<b c.png>) fin"
+        );
+    }
+
+    #[test]
+    fn test_link_image_markers_with_mismatched_counts_unchanged() {
+        let body = "[image: a.png] [image: b.png] [image: c.png]";
+        let targets = [MarkerTarget::Drop, MarkerTarget::Drop];
+        assert_eq!(link_image_markers(body, &targets), body);
+    }
+
+    #[test]
+    fn test_server_hold_reason_marker_without_image_holds() {
+        // C3-M9: one marker, no part, no HTML.
+        assert!(server_hold_reason(&[], &[], 0, 1).is_some());
+    }
+
+    #[test]
+    fn test_server_hold_reason_one_of_two_images_lost_holds() {
+        let images = [
+            part(None, ImageOutcome::Written("a.png".into())),
+            part(None, ImageOutcome::Unreadable),
+        ];
+        assert!(server_hold_reason(&images, &[], 0, 0).is_some());
+    }
+
+    #[test]
+    fn test_server_hold_reason_html_image_without_part_holds() {
+        assert!(server_hold_reason(&[], &[MarkerTarget::Missing], 1, 1).is_some());
+    }
+
+    #[test]
+    fn test_server_hold_reason_remote_signature_markers_released() {
+        // C4-M12: three markers paired with three remote `<img>`, all dropped.
+        let targets = [MarkerTarget::Drop, MarkerTarget::Drop, MarkerTarget::Drop];
+        assert_eq!(server_hold_reason(&[], &targets, 3, 0), None);
+    }
+
+    #[test]
+    fn test_server_hold_reason_complete_message_released() {
+        let images = [
+            part(Some("a"), ImageOutcome::Written("a.png".into())),
+            part(Some("logo"), ImageOutcome::Skipped),
+            part(None, ImageOutcome::Empty),
+        ];
+        assert_eq!(server_hold_reason(&images, &[], 0, 0), None);
     }
 }

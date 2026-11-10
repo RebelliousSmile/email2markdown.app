@@ -454,13 +454,18 @@ pub struct DeletionRequest {
 }
 
 /// Why a purge request must not delete its message, `None` when it may: the
-/// note must still exist and carry this very proof.
+/// note must still exist, carry this very proof, and not hold its message
+/// on the server (`keep_on_server`).
 pub fn deletion_rejection(request: &DeletionRequest) -> Result<Option<&'static str>> {
     if !request.markdown.is_file() {
         return Ok(Some("note absente"));
     }
-    if read_source_proof(&request.markdown)?.as_ref() != Some(&request.proof) {
+    let head = read_note_head(&request.markdown)?.unwrap_or_default();
+    if head.source.as_ref() != Some(&request.proof) {
         return Ok(Some("la note porte une autre preuve"));
+    }
+    if head.keep_on_server.is_some() {
+        return Ok(Some("image annoncée non conservée, message gardé"));
     }
     Ok(None)
 }
@@ -475,7 +480,9 @@ pub fn build_deletion_batch(results: &[MessageConversionResult]) -> Vec<Deletion
             | Some(ConversionStatus::AlreadyPresent { markdown, proof })
                 if proof_is_complete(proof)
                     && markdown.is_file()
-                    && read_source_proof(markdown).ok().flatten().as_ref() == Some(proof) =>
+                    && read_note_head(markdown).ok().flatten().is_some_and(|head| {
+                        head.source.as_ref() == Some(proof) && head.keep_on_server.is_none()
+                    }) =>
             {
                 Some(DeletionRequest {
                     markdown: markdown.clone(),
@@ -713,12 +720,20 @@ pub fn proof_matches_candidate(proof: &LocalSourceProof, candidate: &ContextualC
         && proof.identity.header_fingerprint == candidate.source.header_fingerprint
 }
 
-pub fn read_source_proof(path: &Path) -> Result<Option<LocalSourceProof>> {
-    #[derive(Deserialize)]
-    struct ProofHead {
-        #[serde(default)]
-        source: Option<LocalSourceProof>,
-    }
+/// Frontmatter keys every deletion path reads from a note.
+#[derive(Debug, Default, Deserialize)]
+pub struct NoteHead {
+    #[serde(default)]
+    pub source: Option<LocalSourceProof>,
+    /// Set by the export when an announced image was not kept: the server
+    /// copy is the only complete one and must stay.
+    #[serde(default)]
+    pub keep_on_server: Option<String>,
+}
+
+/// Deletion-relevant frontmatter of the note at `path`; `None` without a
+/// readable frontmatter.
+pub fn read_note_head(path: &Path) -> Result<Option<NoteHead>> {
     let content = fs::read_to_string(path)?;
     let Some(rest) = content.strip_prefix("---\n") else {
         return Ok(None);
@@ -726,9 +741,16 @@ pub fn read_source_proof(path: &Path) -> Result<Option<LocalSourceProof>> {
     let Some(end) = rest.find("\n---") else {
         return Ok(None);
     };
-    Ok(serde_yaml::from_str::<ProofHead>(&rest[..end])
-        .ok()
-        .and_then(|head| head.source))
+    Ok(serde_yaml::from_str::<NoteHead>(&rest[..end]).ok())
+}
+
+pub fn read_source_proof(path: &Path) -> Result<Option<LocalSourceProof>> {
+    Ok(read_note_head(path)?.and_then(|head| head.source))
+}
+
+/// Why the note at `path` holds its message on the server, if it does.
+pub fn read_server_hold(path: &Path) -> Result<Option<String>> {
+    Ok(read_note_head(path)?.and_then(|head| head.keep_on_server))
 }
 
 /// Resolves the effective on-disk folder for `candidate` under `target`, mirroring
