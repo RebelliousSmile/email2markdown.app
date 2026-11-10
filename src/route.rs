@@ -181,12 +181,14 @@ fn parse_frontmatter_attachments(content: &str) -> Option<Result<Vec<String>>> {
 /// 1. Reject symlinks: if `md_path` is a symlink, return `Err` immediately (no FS mutation).
 /// 2. Read the `.md` content and extract the attachment list via `parse_frontmatter_attachments`.
 /// 3. Move each attachment from the source directory into `dest_dir`.
-/// 4. Move the `.md` itself into `dest_dir`.
+/// 4. Move the `.md` itself into `dest_dir`, suffixed (`…_2.md`) if the name is taken.
 /// 5. Rewrite attachment paths in the moved `.md` (same-folder bare links stay unchanged).
+///
+/// Returns the final path of the note, which differs from `dest_dir/<name>` on collision.
 ///
 /// The move is attempted with `fs::rename`; if that crosses device boundaries the
 /// fallback is `fs::copy` + `fs::remove_file`.
-pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
+pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<PathBuf> {
     // --- Symlink guard (project rule 02-rust-filesystem-safety) ---
     let meta = md_path
         .symlink_metadata()
@@ -329,11 +331,20 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
     }
 
     // --- Move the .md file ---
-    let md_dest = dest_dir.join(
-        md_path
-            .file_name()
-            .with_context(|| format!("md_path has no file name: {}", md_path.display()))?,
-    );
+    // Note names drop the `Re:` / `Fwd:` prefix, so a reply and a forward of the same
+    // thread routed into one folder share a name. `fs::rename` replaces an existing
+    // file on Windows: the earlier note would be lost while its message is purged from
+    // the server. A colliding note gets a free suffix, like its attachments.
+    let md_name = md_path
+        .file_name()
+        .with_context(|| format!("md_path has no file name: {}", md_path.display()))?
+        .to_string_lossy()
+        .into_owned();
+    let md_dest = if dest_dir.join(&md_name) == md_path {
+        md_path.to_path_buf()
+    } else {
+        dest_dir.join(unique_name_in(dest_dir, &md_name))
+    };
     if fs::rename(md_path, &md_dest).is_err() {
         fs::copy(md_path, &md_dest).with_context(|| {
             format!(
@@ -385,7 +396,7 @@ pub fn move_email(md_path: &Path, dest_dir: &Path) -> Result<()> {
         );
     }
 
-    Ok(())
+    Ok(md_dest)
 }
 
 /// Pick a file name inside `dir` that does not collide with an existing entry.
@@ -1252,25 +1263,24 @@ fn reject_symlink_path(notes_dir: &Path, target: &Path) -> Result<()> {
 /// `rel_path` is joined onto `notes_dir` via `join_safe_segments` (anti-traversal).
 /// Missing directories are created with `fs::create_dir_all` (D4).
 /// `move_email` handles the `.md` + its referenced attachment siblings.
-pub fn apply_decision(staging_md: &Path, rel_path: &str, notes_dir: &Path) -> Result<()> {
+/// Returns the final path of the routed note (suffixed when its name was taken).
+pub fn apply_decision(staging_md: &Path, rel_path: &str, notes_dir: &Path) -> Result<PathBuf> {
     let dest_dir = join_safe_segments(notes_dir, rel_path)
         .with_context(|| format!("invalid routing path {:?}", rel_path))?;
     fs::create_dir_all(&dest_dir)
         .with_context(|| format!("failed to create directory {}", dest_dir.display()))?;
-    move_email(staging_md, &dest_dir).with_context(|| {
+    let routed = move_email(staging_md, &dest_dir).with_context(|| {
         format!(
             "failed to move {} to {}",
             staging_md.display(),
             dest_dir.display()
         )
     })?;
-    if let Some(name) = staging_md.file_name() {
-        // A link failure never undoes the routing: the note stays, quotes stay as text.
-        if let Err(e) = link_routed_note(&dest_dir.join(name), notes_dir) {
-            eprintln!("warning: could not link quoted messages: {e:#}");
-        }
+    // A link failure never undoes the routing: the note stays, quotes stay as text.
+    if let Err(e) = link_routed_note(&routed, notes_dir) {
+        eprintln!("warning: could not link quoted messages: {e:#}");
     }
-    Ok(())
+    Ok(routed)
 }
 
 /// How long the vault index of [`link_routed_note`] is trusted before listing the vault

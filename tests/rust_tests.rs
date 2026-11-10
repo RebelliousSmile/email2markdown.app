@@ -2026,6 +2026,50 @@ attachments:
         assert!(a_content.contains("- 2026-06-25_image.png\n"));
     }
 
+    // A reply and a forward of one thread get the same note name (the `Re:` / `Fwd:`
+    // prefix is dropped). Routed into one folder, the second note must be suffixed —
+    // never overwrite the first — and the returned path must be the suffixed one.
+    #[test]
+    fn test_move_email_suffixes_colliding_note_in_dest() {
+        let temp = TempDir::new().unwrap();
+        let dst_dir = temp.path().join("dest");
+        fs::create_dir_all(&dst_dir).unwrap();
+        let name = "email_2026-11-10_FxTnn_test.md";
+        let note = |subject: &str, body: &str| {
+            format!("---\nsubject: {subject}\nattachments:\n  - 2026-11-10_shot.jpg\n---\n{body}\n")
+        };
+
+        let src_a = temp.path().join("stagingA");
+        fs::create_dir_all(&src_a).unwrap();
+        fs::write(src_a.join("2026-11-10_shot.jpg"), b"AAA").unwrap();
+        fs::write(src_a.join(name), note("A", "reply")).unwrap();
+
+        let src_b = temp.path().join("stagingB");
+        fs::create_dir_all(&src_b).unwrap();
+        fs::write(src_b.join("2026-11-10_shot.jpg"), b"BBB").unwrap();
+        fs::write(src_b.join(name), note("B", "forward")).unwrap();
+
+        let routed_a = move_email(&src_a.join(name), &dst_dir).unwrap();
+        let routed_b = move_email(&src_b.join(name), &dst_dir).unwrap();
+
+        assert_eq!(routed_a, dst_dir.join(name));
+        assert_eq!(routed_b, dst_dir.join("email_2026-11-10_FxTnn_test_2.md"));
+        let a = fs::read_to_string(&routed_a).unwrap();
+        let b = fs::read_to_string(&routed_b).unwrap();
+        assert_eq!(a, note("A", "reply"), "first note overwritten");
+        assert!(b.contains("forward") && !b.contains("reply"));
+        assert!(b.contains("- 2026-11-10_shot_2.jpg\n"));
+        assert!(!b.contains("- 2026-11-10_shot.jpg\n"));
+        assert_eq!(
+            fs::read(dst_dir.join("2026-11-10_shot.jpg")).unwrap(),
+            b"AAA"
+        );
+        assert_eq!(
+            fs::read(dst_dir.join("2026-11-10_shot_2.jpg")).unwrap(),
+            b"BBB"
+        );
+    }
+
     // --- move_email: legacy centralized attachment path resolved from account root ---
     // Attachment stored at account_root/attachments/Sent/email_…pdf; .md references it as
     // "attachments/Sent/email_…pdf" (relative to account root, not to md_dir).
@@ -2777,6 +2821,33 @@ Pro/Clients/Acme | from:billing@acme.com, subject:Invoice
         assert!(expected_md.exists(), "moved .md must exist at target");
         // Exclusive: original no longer at staging
         assert!(!md_src.exists(), "original .md must not remain at staging");
+    }
+
+    // The deletion request is built from the returned path: it must be the suffixed
+    // note, never the earlier note that owns the plain name.
+    #[test]
+    fn test_apply_decision_returns_suffixed_path_on_collision() {
+        const EARLIER: &str = "---\nsubject: Earlier\n---\nearlier\n";
+        const LATER: &str = "---\nsubject: Later\n---\nlater\n";
+        let temp = TempDir::new().unwrap();
+        let notes_dir = temp.path().join("notes");
+        let folder = notes_dir.join("Perso").join("2026").join("11");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("email.md"), EARLIER).unwrap();
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        let md_src = staging.join("email.md");
+        fs::write(&md_src, LATER).unwrap();
+
+        let routed = apply_decision(&md_src, "Perso/2026/11", &notes_dir).unwrap();
+
+        assert_eq!(routed, folder.join("email_2.md"));
+        assert_eq!(fs::read_to_string(&routed).unwrap(), LATER);
+        assert_eq!(
+            fs::read_to_string(folder.join("email.md")).unwrap(),
+            EARLIER,
+            "the earlier note must stay untouched"
+        );
     }
 
     // ── apply_decision — links quoted messages already in the vault ───────────

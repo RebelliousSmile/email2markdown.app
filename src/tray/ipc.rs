@@ -615,20 +615,20 @@ pub(super) fn apply_route_decisions(
             .source
             .filter(crate::contextual_export::proof_is_complete);
         match crate::route::apply_decision(staging_md, dest_path, notes_dir) {
-            Ok(()) => {
+            Ok(routed) => {
                 allowed.remove(&row.file);
                 report.moved.push(row.file.clone());
                 if head.keep_on_server.is_some() {
                     report.held.extend(proof);
-                } else if let (Some(proof), Some(name)) = (proof, staging_md.file_name()) {
-                    if let Ok(dest_dir) = crate::route::join_safe_segments(notes_dir, dest_path) {
-                        report
-                            .deletions
-                            .push(crate::contextual_export::DeletionRequest {
-                                markdown: dest_dir.join(name),
-                                proof,
-                            });
-                    }
+                } else if let Some(proof) = proof {
+                    // The routed path, not `dest_dir/<staging name>`: on a name collision
+                    // the latter is another message's note.
+                    report
+                        .deletions
+                        .push(crate::contextual_export::DeletionRequest {
+                            markdown: routed,
+                            proof,
+                        });
                 }
             }
             Err(e) => report.failed.push((row.file.clone(), format!("{:#}", e))),

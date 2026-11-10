@@ -468,7 +468,7 @@ fn main() -> Result<()> {
                                             &decision.rel_path,
                                             &notes_dir,
                                         ) {
-                                            Ok(()) => moved += 1,
+                                            Ok(_) => moved += 1,
                                             Err(e) => {
                                                 apply_errors += 1;
                                                 eprintln!(
