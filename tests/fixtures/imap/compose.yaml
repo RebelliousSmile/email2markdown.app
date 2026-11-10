@@ -13,6 +13,11 @@ services:
         done
         # Enough messages to cross a body fetch batch (BODY_FETCH_BATCH = 10).
         cp /seed/batch/*.eml /srv/mail/export-batch/Maildir/new/
+        # Gmail seed corpus only (#19), without the root messages above.
+        for user in gmail-seed gmail-seed-delete; do
+          mkdir -p /srv/mail/$$user/Maildir/cur /srv/mail/$$user/Maildir/new /srv/mail/$$user/Maildir/tmp
+          cp /seed/gmail/*.eml /srv/mail/$$user/Maildir/new/
+        done
         chmod -R a+rwX /srv/mail
     volumes:
       - mail:/srv/mail

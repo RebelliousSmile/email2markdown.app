@@ -7,6 +7,10 @@ use email_to_markdown::handled::{LedgerProofs, PurgeMatch, SeenHandled};
 use email_to_markdown::route::MatchRule;
 use email_to_markdown::server_cleanup::clean_server_in;
 use std::cell::Cell;
+use std::path::{Path, PathBuf};
+
+mod common;
+use common::gmail_seed;
 
 /// Fails instead of passing silently when an ignored test runs without the fixture.
 fn require_fixture() {
@@ -642,4 +646,150 @@ fn export_account_in_purges_only_proved_handled_messages() {
         inbox_message_ids("export-purge"),
         vec![SEEDED_IDS[0].to_string()]
     );
+}
+
+/// Export the Gmail seed corpus of `username` as a real run would: signature
+/// filter and deletion on, so the dropped images go to `_skipped/`.
+fn export_seed_corpus(
+    username: &str,
+) -> (
+    tempfile::TempDir,
+    AppPaths,
+    Account,
+    email_to_markdown::email_export::ExportStats,
+    Vec<PathBuf>,
+) {
+    let (temp, paths, mut fixture_account) = export_dir(username);
+    fixture_account.skip_signature_images = true;
+    fixture_account.delete_after_export = true;
+    fixture_account.skip_existing = true;
+    let mut exporter = ImapExporter::new(fixture_account.clone(), false);
+    exporter.connect().unwrap();
+    let (stats, decisions) = exporter
+        .export_account_in(&paths, None, None, None)
+        .unwrap();
+    exporter.disconnect().ok();
+    let total = stats.into_values().fold(
+        Default::default(),
+        |mut acc: email_to_markdown::email_export::ExportStats, s| {
+            acc.exported += s.exported;
+            acc.errors += s.errors;
+            acc
+        },
+    );
+    let notes = decisions.into_iter().map(|(note, _)| note).collect();
+    (temp, paths, fixture_account, total, notes)
+}
+
+/// `Message-ID` of a note's source proof, without chevrons.
+fn note_message_id(note: &Path) -> String {
+    email_to_markdown::contextual_export::read_source_proof(note)
+        .unwrap()
+        .and_then(|proof| proof.identity.message_id)
+        .unwrap_or_else(|| panic!("{}: no Message-ID in the source proof", note.display()))
+}
+
+/// Check every note of the corpus against `gmail_seed::CATALOGUE`, each found
+/// by the `seed-cN-mN.` prefix of its `Message-ID`.
+fn assert_seed_corpus(export: &Path, notes: &[PathBuf]) {
+    assert_eq!(
+        notes.len(),
+        gmail_seed::CATALOGUE.len(),
+        "one note per message"
+    );
+    let skipped = export.join("_skipped");
+    for exp in gmail_seed::CATALOGUE {
+        let prefix = format!("{}.", exp.key);
+        let note = notes
+            .iter()
+            .find(|note| note_message_id(note).starts_with(&prefix))
+            .unwrap_or_else(|| panic!("{}: no note", exp.key));
+        let own = skipped.join(note.file_stem().unwrap());
+        let quarantined = std::fs::read_dir(&own).map_or(0, |entries| entries.count());
+        gmail_seed::assert_seed_note(
+            note,
+            &gmail_seed::load(exp.file),
+            quarantined,
+            &skipped,
+            exp,
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn export_seed_corpus_keeps_every_image_and_text() {
+    require_fixture();
+    let before = inbox_message_ids("gmail-seed");
+    assert_eq!(before.len(), gmail_seed::CATALOGUE.len(), "seeded corpus");
+
+    let (_temp, _paths, fixture_account, stats, notes) = export_seed_corpus("gmail-seed");
+    assert_eq!(stats.exported, gmail_seed::CATALOGUE.len());
+    assert_seed_corpus(Path::new(&fixture_account.export_directory), &notes);
+    // Deletion only follows the sorting: the export itself deletes nothing.
+    assert_eq!(inbox_message_ids("gmail-seed"), before);
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn export_seed_corpus_with_deletion_quarantines_and_guards() {
+    require_fixture();
+    let (_temp, paths, fixture_account, stats, notes) = export_seed_corpus("gmail-seed-delete");
+    let export = PathBuf::from(&fixture_account.export_directory);
+    assert_seed_corpus(&export, &notes);
+
+    // The sorting records the notes as `apply_review` does: a proof for each,
+    // a held line for a note holding its message on the server.
+    let (mut proofs, mut held) = (Vec::new(), Vec::new());
+    for note in &notes {
+        let proof = email_to_markdown::contextual_export::read_source_proof(note)
+            .unwrap()
+            .unwrap();
+        match email_to_markdown::contextual_export::read_server_hold(note).unwrap() {
+            Some(_) => held.push(proof),
+            None => proofs.push(proof),
+        }
+    }
+    let wanted_held: Vec<&str> = gmail_seed::CATALOGUE
+        .iter()
+        .filter(|exp| exp.held_by_guard)
+        .map(|exp| exp.key)
+        .collect();
+    assert!(wanted_held.contains(&"seed-c3-m9"), "C3-M9 is held");
+    assert_eq!(held.len(), wanted_held.len(), "held notes");
+    // One warning per held message, reported at export.
+    assert_eq!(
+        stats.errors,
+        held.len(),
+        "one hold warning per held message"
+    );
+    email_to_markdown::handled::record_proofs_to(&paths.ledger, proofs.iter());
+    email_to_markdown::handled::record_held_to(&paths.ledger, &held);
+
+    // Next run: the proved messages are purged, the held ones stay.
+    let mut exporter = ImapExporter::new(fixture_account, false);
+    exporter.connect().unwrap();
+    let (stats, _) = exporter
+        .export_account_in(&paths, None, None, None)
+        .unwrap();
+    exporter.disconnect().ok();
+    assert_eq!(
+        stats.values().map(|s| s.purged).sum::<usize>(),
+        proofs.len()
+    );
+    assert_eq!(
+        stats.values().map(|s| s.held_on_server).sum::<usize>(),
+        held.len()
+    );
+    let summary = email_to_markdown::email_export::purge_summary(stats.values());
+    assert!(
+        summary.contains(&format!("{} message(s) retenu(s)", held.len())),
+        "hold reported: {summary}"
+    );
+    let mut wanted_ids: Vec<String> = held
+        .iter()
+        .map(|proof| format!("<{}>", proof.identity.message_id.as_deref().unwrap()))
+        .collect();
+    wanted_ids.sort();
+    assert_eq!(inbox_message_ids("gmail-seed-delete"), wanted_ids);
 }

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Instruction : export réel sur Dovecot avec `skip_signature_images: true`
@@ -75,3 +75,11 @@ journey
 | 1 | Après `up --wait`, les deux utilisateurs ont exactement les 13 messages du corpus |
 | 2 | Les deux tests passent localement et figurent dans la liste filtrée du job CI `dovecot` ; les autres tests Dovecot ne sont pas affectés |
 | 3 | `testing.md` cite les nouveaux tests et les utilisateurs `gmail-seed*` |
+
+## Écarts et notes
+
+- **Le premier test active aussi la suppression.** La quarantaine `_skipped/` n'existe qu'avec `delete_after_export: true` : avec `false`, le logo écarté n'est ni écrit ni mis à l'abri, et `assert_seed_note` ne pourrait pas vérifier l'invariant de #19. Les deux tests exportent donc avec `skip_signature_images: true` et `delete_after_export: true`. Le premier vérifie en plus que les 13 messages restent sur le serveur : l'export ne supprime jamais ce qu'il vient d'exporter.
+- **La suppression vient du tri, pas de l'export.** `export_account_in` ne supprime que les messages déjà traités dont le registre détient une preuve. Le second test rejoue donc le cycle réel : un premier export, puis l'enregistrement que fait `apply_review` (une preuve par note, une ligne `held` pour une note qui porte `keep_on_server`), puis un second export qui purge les messages prouvés. Seuls les messages retenus par le garde-fou restent dans l'INBOX (C3-M9).
+- **Avertissements.** Le premier export signale chaque message retenu (`Message conservé sur le serveur…`), et le second le compte dans `held_on_server` et dans le résumé (`N message(s) retenu(s) sur le serveur`). Les deux sont vérifiés.
+- **Quarantaine par note.** Le nombre d'images mises en quarantaine est compté dans `_skipped/<nom de la note>/`. Le chemin IMAP connaît le nom de la note avant d'écrire les images, il n'a donc pas besoin du dossier d'attente de la phase 3.
+- **Résultat local** : les 13 tests Dovecot passent (`--ignored --skip gmail_ --test-threads=1`), et les deux nouveaux figurent dans la liste filtrée du job CI.
