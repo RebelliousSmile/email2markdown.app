@@ -6164,8 +6164,6 @@ mod gmail_seed_tests {
     }
 
     #[test]
-    // Observed: list items keep the soft breaks (`fiche` / `annonce`), a line starts with `«`.
-    #[ignore = "#18 format=flowed list items and guillemets cut"]
     fn test_gmail_seed_c3_m7_flowed_plain_text() {
         check("seed-c3-m7");
     }

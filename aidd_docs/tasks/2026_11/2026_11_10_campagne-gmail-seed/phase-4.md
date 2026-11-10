@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Instruction : texte, recoller les lignes coupées du `text/plain`
@@ -84,3 +84,10 @@ journey
 | 1 | Un corps `format=flowed; delsp=yes` ressort en paragraphes continus, sans mot collé ni espace en trop ; les citations et la signature gardent leurs retours à la ligne |
 | 2 | Dans l'exemple de #18, chaque item numéroté tient sur une ligne et `»` suit le mot qu'il ferme ; une adresse sur trois lignes courtes est conservée |
 | 3 | `cargo test` est vert sans aucun `#[ignore]` dans `gmail_seed_tests` |
+
+## Écarts et notes
+
+- **Lieu de l'appel à `unflow`** : dans `collect_text_bodies`, à la lecture de la partie `text/plain`, plutôt que dans `extract_body_reporting`. C'est là que les paramètres du `Content-Type` sont disponibles, sans changer la signature partagée avec `raw_html_body`. Le résultat est le même : seul le corps `text/plain` déclaré `flowed` est recollé, et un corps HTML retenu n'est jamais touché.
+- **`»` en fin de ligne** : il était compté comme ponctuation finale, ce qui bloquait le recollage après `« Mentions »` dans l'exemple de #18. Il ne termine plus une phrase que s'il suit `.`, `!`, `?` ou `…` (`ends_sentence`).
+- **Citations dans `unflow`** : une ligne citée est reconstruite sous la forme `>… contenu`, avec une seule espace après les chevrons.
+- **Acquis des phases 2 et 3** : toute la suite du corpus a été relancée, pas seulement C3-M7. Les en-têtes de transfert restent protégés, puisque la protection `HEADER_FIELD_RE` est évaluée avant toute règle de recollage d'item.

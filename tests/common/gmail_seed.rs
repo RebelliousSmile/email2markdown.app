@@ -219,11 +219,21 @@ pub const CATALOGUE: &[SeedExpectation] = &[
             "Les annonces restent disponibles dans votre secteur jusqu'à la fin du mois",
             "la fiche annonce et le formulaire de contact",
             "vendredi prochain, faute de quoi le planning glisse",
+            "1. Le périmètre de la première livraison couvre la recherche, la fiche annonce et le formulaire de contact, sans le paiement en ligne.",
+            "2. Les maquettes sont validées par le client au plus tard vendredi prochain, faute de quoi le planning glisse d'une semaine.",
             "3. Démo le 18 novembre.",
-            "deux fois : « une recherche",
+            "deux fois : « une recherche qui répond avant que l'utilisateur ait fini de taper sa demande »",
             "Salle Garonne\n12 rue des Lilas\n31000 Toulouse",
+            "Alice Martin\nResponsable qualité",
         ],
-        body_excludes: &["dansvotre", "fiche\nannonce", "vendredi\nprochain"],
+        body_excludes: &[
+            "dansvotre",
+            "fiche\nannonce",
+            "vendredi\nprochain",
+            "\n»",
+            "\n«",
+            "  ",
+        ],
         ..BASE
     },
     SeedExpectation {

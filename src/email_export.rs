@@ -1172,7 +1172,21 @@ fn collect_text_bodies(mail: &ParsedMail, plain: &mut Option<String>, html: &mut
         _ => return,
     };
     if slot.is_none() {
-        *slot = mail.get_body().ok();
+        *slot = mail.get_body().ok().map(|body| {
+            let param = |key: &str, want: &str| {
+                mail.ctype
+                    .params
+                    .get(key)
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case(want))
+            };
+            // RFC 3676: soft line breaks of a flowed `text/plain` are not
+            // the author's (#18). The HTML body is never flowed.
+            if mimetype == "text/plain" && param("format", "flowed") {
+                crate::cleaner::unflow(&body, param("delsp", "yes"))
+            } else {
+                body
+            }
+        });
     }
 }
 
