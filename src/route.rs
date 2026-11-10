@@ -1325,24 +1325,7 @@ fn link_routed_note(note_path: &Path, notes_dir: &Path) -> Result<()> {
     let content = fs::read_to_string(note_path)
         .with_context(|| format!("failed to read {}", note_path.display()))?;
 
-    let mut guard = QUOTE_INDEX
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let branches = index_branches(&rel);
-    match guard.as_mut() {
-        Some((checked, vault)) if vault.root() == notes_dir => {
-            if checked.elapsed() >= QUOTE_INDEX_TTL || !vault.lists_branches(&branches) {
-                vault.refresh(&branches);
-                *checked = std::time::Instant::now();
-            }
-        }
-        _ => {
-            *guard = Some((
-                std::time::Instant::now(),
-                quote_link::Vault::open(notes_dir, &branches),
-            ));
-        }
-    }
+    let mut guard = fresh_quote_index(notes_dir, &index_branches(&rel));
     let Some((_, vault)) = guard.as_mut() else {
         return Ok(());
     };
@@ -1357,6 +1340,43 @@ fn link_routed_note(note_path: &Path, notes_dir: &Path) -> Result<()> {
     };
     vault.record(&rel, &final_content, note_path);
     Ok(())
+}
+
+/// Build or refresh the vault index of [`link_routed_note`] in a background thread.
+///
+/// Called when the review window opens: the first index of a process reads every note
+/// of the destination branches, which would otherwise stall the first "Appliquer".
+/// An apply started meanwhile waits on the index lock instead of reading twice.
+pub fn warm_quote_index(notes_dir: &Path) {
+    let notes_dir = notes_dir.to_path_buf();
+    std::thread::spawn(move || {
+        drop(fresh_quote_index(&notes_dir, &index_branches("")));
+    });
+}
+
+/// The process vault index for `notes_dir`, opened or brought up to date with `branches`.
+fn fresh_quote_index(
+    notes_dir: &Path,
+    branches: &[String],
+) -> std::sync::MutexGuard<'static, Option<(std::time::Instant, quote_link::Vault)>> {
+    let mut guard = QUOTE_INDEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match guard.as_mut() {
+        Some((checked, vault)) if vault.root() == notes_dir => {
+            if checked.elapsed() >= QUOTE_INDEX_TTL || !vault.lists_branches(branches) {
+                vault.refresh(branches);
+                *checked = std::time::Instant::now();
+            }
+        }
+        _ => {
+            *guard = Some((
+                std::time::Instant::now(),
+                quote_link::Vault::open(notes_dir, branches),
+            ));
+        }
+    }
+    guard
 }
 
 // ── Repair legacy attachments ────────────────────────────────────────────────

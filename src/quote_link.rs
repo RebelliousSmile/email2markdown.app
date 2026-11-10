@@ -54,6 +54,8 @@ pub struct Outcome {
 struct IndexedNote {
     /// Path of the note relative to the vault, `/`-separated, without `.md`.
     path: String,
+    /// Key of the note in `by_minute`.
+    minute: i64,
     from: String,
     name: String,
     text_key: String,
@@ -66,6 +68,8 @@ pub struct Index {
     by_minute: HashMap<i64, Vec<usize>>,
     /// Number of notes per file stem, to tell when a bare name is ambiguous.
     stems: HashMap<String, usize>,
+    /// Slot in `notes` of each findable note, by path without `.md`.
+    slots: HashMap<String, usize>,
 }
 
 impl Index {
@@ -134,16 +138,40 @@ impl Index {
         }
         let (name, address) = split_sender(&from);
         let slot = self.notes.len();
-        self.by_minute
-            .entry(date.timestamp().div_euclid(60))
-            .or_default()
-            .push(slot);
+        let minute = date.timestamp().div_euclid(60);
+        self.by_minute.entry(minute).or_default().push(slot);
+        self.slots.insert(path.clone(), slot);
         self.notes.push(IndexedNote {
             path,
+            minute,
             from: address,
             name,
             text_key,
         });
+    }
+
+    /// Forget the note at `rel_path`, as if it had never been added.
+    ///
+    /// Its slot in `notes` stays, unreachable: slots of the other notes never move.
+    pub fn remove(&mut self, rel_path: &str) {
+        let path = rel_path.replace('\\', "/");
+        let path = path.trim_end_matches(".md");
+        if let Some(count) = self.stems.get_mut(stem(path)) {
+            *count -= 1;
+            if *count == 0 {
+                self.stems.remove(stem(path));
+            }
+        }
+        let Some(slot) = self.slots.remove(path) else {
+            return;
+        };
+        let minute = self.notes[slot].minute;
+        if let Some(slots) = self.by_minute.get_mut(&minute) {
+            slots.retain(|&s| s != slot);
+            if slots.is_empty() {
+                self.by_minute.remove(&minute);
+            }
+        }
     }
 
     /// `[[name]]` target: the file stem when no other note shares it, the path otherwise.
@@ -222,10 +250,10 @@ fn md_files(root: &Path, dir: &Path) -> Vec<MdFile> {
 
 /// An [`Index`] of the branches of a vault, kept up to date between routing runs.
 ///
-/// [`Vault::refresh`] lists the notes without reading them and reads only those new since
-/// the last listing: a large vault is read once per process, not once per run. A note
-/// changed or deleted behind the app's back rebuilds the index, since an [`Index`] cannot
-/// forget a note.
+/// [`Vault::refresh`] lists the notes without reading them and reads only those new or
+/// changed since the last listing: a large vault is read once per process, not once per
+/// run, even while Obsidian edits other notes. A note deleted behind the app's back is
+/// forgotten.
 pub struct Vault {
     root: PathBuf,
     branches: Vec<String>,
@@ -258,13 +286,16 @@ impl Vault {
             .collect();
         let on_disk: HashMap<&str, Stamp> =
             files.iter().map(|f| (f.rel.as_str(), f.stamp)).collect();
-        let stale = self
+        // Changed or deleted notes leave the index; changed ones are read again below.
+        let stale: Vec<String> = self
             .stamps
             .iter()
-            .any(|(rel, stamp)| on_disk.get(rel.as_str()) != Some(stamp));
-        if stale {
-            self.index = Index::default();
-            self.stamps.clear();
+            .filter(|(rel, stamp)| on_disk.get(rel.as_str()) != Some(*stamp))
+            .map(|(rel, _)| rel.clone())
+            .collect();
+        for rel in stale {
+            self.index.remove(&rel);
+            self.stamps.remove(&rel);
         }
         for file in &files {
             if self.stamps.contains_key(&file.rel) {

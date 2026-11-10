@@ -5749,6 +5749,69 @@ mod quote_link_tests {
     }
 
     #[test]
+    fn test_vault_refresh_with_changed_note_indexes_it_once() {
+        let (vault, dir) = pro_vault();
+        let path = dir.join("Devis original.md");
+        std::fs::write(&path, original()).unwrap();
+        let mut index = Vault::open(vault.path(), &["Pro".to_string()]);
+        // Edited in Obsidian: another length, so another stamp.
+        std::fs::write(&path, format!("{}\nRelu.\n", original())).unwrap();
+
+        index.refresh(&["Pro".to_string()]);
+        let out = link_note(&reply(), "Reponse.md", &index.index);
+
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
+    }
+
+    #[test]
+    fn test_vault_refresh_with_changed_note_drops_its_old_content() {
+        let (vault, dir) = pro_vault();
+        let path = dir.join("Devis original.md");
+        std::fs::write(&path, original()).unwrap();
+        let mut index = Vault::open(vault.path(), &["Pro".to_string()]);
+        std::fs::write(
+            &path,
+            note(
+                "Mano <mano@example.com>",
+                "2022-07-11T10:56:00Z",
+                OLDER_BODY,
+            ),
+        )
+        .unwrap();
+
+        index.refresh(&["Pro".to_string()]);
+        let out = link_note(&reply(), "Reponse.md", &index.index);
+
+        assert_eq!(out.left, vec![Left::NoNote]);
+    }
+
+    #[test]
+    fn test_index_remove_with_shared_stem_links_by_stem() {
+        let mut index = index_of(&[
+            ("a/Devis original.md", original()),
+            (
+                "b/Devis original.md",
+                note("X <x@example.com>", "2020-01-01T00:00:00Z", OLDER_BODY),
+            ),
+        ]);
+
+        index.remove("b/Devis original.md");
+        let out = link_note(&reply(), "Reponse.md", &index);
+
+        assert_eq!(out.linked, vec!["Devis original".to_string()]);
+    }
+
+    #[test]
+    fn test_index_remove_forgets_note() {
+        let mut index = index_of(&[("a/Devis original.md", original())]);
+
+        index.remove("a\\Devis original.md");
+        let out = link_note(&reply(), "Reponse.md", &index);
+
+        assert_eq!(out.left, vec![Left::NoNote]);
+    }
+
+    #[test]
     fn test_link_note_without_note_reports_reason() {
         let out = link_note(&reply(), "Reponse.md", &Index::build([]));
         assert_eq!(out.left, vec![Left::NoNote]);
