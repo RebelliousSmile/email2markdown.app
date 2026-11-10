@@ -1,6 +1,6 @@
 ---
-objective: "Un corpus d'une douzaine de messages (cinq conversations, treize messages) au format MIME de Gmail, qui couvre chaque cas (liens, images collées et jointes, listes, sauts de ligne, transferts), s'exporte sans perte ni bruit, en local, sur Dovecot et entre les deux comptes Gmail de l'utilisateur, avec `skip_signature_images: true`, et chaque cas est vérifié automatiquement."
-status: blocked
+objective: "Un corpus d'une douzaine de messages (cinq conversations, treize messages) au format MIME de Gmail, qui couvre chaque cas (liens, images collées et jointes, listes, sauts de ligne, transferts), s'exporte sans perte ni bruit, en local et sur Dovecot, avec `skip_signature_images: true`, et chaque cas est vérifié automatiquement."
+status: implemented
 ---
 
 # Plan : campagne de tests Gmail par seed (issues #19, #14, #15, #18)
@@ -18,7 +18,7 @@ Les quatre issues portent sur le même flux : un mail écrit dans Gmail, dont la
 
 | Issue | Sujet | Couverte par |
 | ----- | ----- | ------------ |
-| #19 | Campagne de bout en bout, fixtures Gmail, compte Dovecot `skip_signature_images: true`, garde-fou de suppression, défauts de rendu révélés par le corpus | phases 1, 2, 3, 5, 6 |
+| #19 | Campagne de bout en bout, fixtures Gmail, compte Dovecot `skip_signature_images: true`, garde-fou de suppression, défauts de rendu révélés par le corpus | phases 1, 2, 3, 5 ; envoi réel entre les comptes Gmail : tâche `2026_11_11_campagne-gmail-reelle` |
 | #14 | Capture Gmail perdue après la v0.20.0, sans quarantaine | phases 1, 2 |
 | #15 | `[image: …]` reste dans une note issue de `text/plain` | phases 1, 2 |
 | #18 | Retours à la ligne du client mail conservés dans le corps `text/plain` | phases 1, 4 |
@@ -38,7 +38,7 @@ email2markdown transforme un message IMAP en note ; obs-mail retravaille des not
 | Tri, classement, envoi | aucun rôle | `triage`, `perso-filing`, `compose` |
 | Suppression sur le serveur | garde-fou (#19) | aucun rôle, obs-mail ne supprime rien |
 
-Le seed vérifie le passage de relais : les notes exportées doivent être lisibles par obs-mail (bloc TOML relu par `tomllib`, en-têtes de réponse et de transfert de Gmail intacts). Un `split` en mode simulation sur l'export de la phase 6 ne doit signaler aucune « découpage avec perte ». Ce contrôle reste manuel, car les scripts d'obs-mail ne font pas partie du dépôt.
+Le seed vérifie le passage de relais : les notes exportées doivent être lisibles par obs-mail (bloc TOML relu par `tomllib`, en-têtes de réponse et de transfert de Gmail intacts). Un `split` en mode simulation sur l'export de l'envoi réel (tâche `2026_11_11_campagne-gmail-reelle`) ne doit signaler aucune « découpage avec perte ». Ce contrôle reste manuel, car les scripts d'obs-mail ne font pas partie du dépôt.
 
 Restent hors périmètre : #16 (empreinte de logo, demande un index persistant), #13 (HTML marketing, tables de mise en page) et #10 (`#` du HTML et tags Obsidian). Le seed ne les exerce pas.
 
@@ -72,17 +72,10 @@ L'ordre des phases suit la règle de test du projet : le corpus et le harnais d'
 | 3   | Rendu : liens à parenthèses, listes imbriquées, transferts, noms RFC 2231, quarantaine | [`phase-3.md`](./phase-3.md) |
 | 4   | Texte : recoller les lignes coupées du `text/plain`        | [`phase-4.md`](./phase-4.md) |
 | 5   | Export réel sur Dovecot avec `skip_signature_images: true` | [`phase-5.md`](./phase-5.md) |
-| 6   | Envoi du seed entre les deux comptes Gmail et export       | [`phase-6.md`](./phase-6.md) |
 
-## Blocage (2026-11-10)
+## Livraison sans la phase 6 (2026-11-11)
 
-Les phases 1 à 5 sont faites. La phase 6 n'est pas commencée : elle exige les mots de passe d'application des comptes A et B, que seul l'utilisateur peut créer (validation en deux étapes, puis mot de passe d'application sur chaque compte Gmail).
-
-Pour débloquer :
-
-1. Sur chacun des deux comptes, activer la validation en deux étapes puis créer un mot de passe d'application.
-2. Définir localement, hors du dépôt : `EMAIL_TO_MARKDOWN_GMAIL_A_USER`, `EMAIL_TO_MARKDOWN_GMAIL_A_PASSWORD`, `EMAIL_TO_MARKDOWN_GMAIL_B_USER`, `EMAIL_TO_MARKDOWN_GMAIL_B_PASSWORD`.
-3. Relancer l'implémentation de la phase 6.
+Les phases 1 à 5 sont faites et livrées. L'ancienne phase 6, l'envoi du seed entre les deux comptes Gmail, est sortie de ce plan à la demande de l'utilisateur : elle exige les mots de passe d'application des comptes A et B, que seul l'utilisateur peut créer. Elle devient la tâche [`2026_11_11_campagne-gmail-reelle`](../2026_11_11_campagne-gmail-reelle/plan.md), bloquée sur ces mots de passe. L'issue #19 reste ouverte pour cette partie.
 
 ## Resources
 
@@ -97,7 +90,7 @@ Pour débloquer :
 | Decision | Why |
 | -------- | --- |
 | Le seed est un jeu de `.eml` versionnés qui reproduisent la structure MIME de Gmail, générés par un script déterministe. Ils sont copiés tels quels sur Dovecot et envoyés en SMTP brut entre les comptes A et B | La structure dépend du logiciel de l'expéditeur : un script ne peut qu'imiter Gmail, mais `send_raw` transmet ce MIME sans le recomposer. L'envoi réel ajoute la livraison Gmail (en-têtes, Spam, Sent Mail, fils) que `APPEND` ne testerait pas |
-| Le gabarit MIME suit la structure décrite dans #14, faute d'original disponible en phase 1 ; il est confirmé en phase 6 par un original Gmail réel (compte A vers compte B, capture collée, « Afficher l'original »), et chaque écart devient une fixture | Des fixtures écrites d'après la documentation peuvent manquer exactement la structure qui fait perdre l'image. L'original n'est accessible qu'une fois les mots de passe d'application en place |
+| Le gabarit MIME suit la structure décrite dans #14, faute d'original disponible en phase 1 ; il sera confirmé par l'envoi réel (tâche `2026_11_11_campagne-gmail-reelle`) avec un original Gmail (compte A vers compte B, capture collée, « Afficher l'original »), et chaque écart devient une fixture | Des fixtures écrites d'après la documentation peuvent manquer exactement la structure qui fait perdre l'image. L'original n'est accessible qu'une fois les mots de passe d'application en place |
 | Aucune adresse ni aucun mot de passe dans le dépôt : comptes A et B par `EMAIL_TO_MARKDOWN_GMAIL_{A,B}_{USER,PASSWORD}`, test lancé en local seulement | Ce sont des boîtes personnelles. Mettre leurs mots de passe d'application dans les secrets GitHub reste une décision de l'utilisateur, hors de ce plan |
 | Les citations, transferts et signatures texte sont conservés sans perte dans le corps ; découpage de fils et nettoyage relèvent d'obs-mail | Une note exportée est souvent la seule copie d'un message cité. Supprimer ou découper à l'export doublerait `split` et `quote_clean`, qui ont déjà leurs garde-fous de perte |
 | Un module d'assertions partagé `tests/common/gmail_seed.rs`, appelé par les trois harnais (local, Dovecot, Gmail) | Trois appelants vérifient la même chose (règle de trois). Le projet n'avait pas jusqu'ici de helper de test partagé (`testing.md`). Cette exception est consignée dans la mémoire |
