@@ -858,10 +858,14 @@ pub(super) fn build_route_window(
             std::thread::spawn(move || {
                 let outcome = apply_review(&body, &notes_dir, &mut lock_allowed(&allowed_files));
                 applying.store(false, Ordering::SeqCst);
+                let routed = outcome
+                    .as_ref()
+                    .map(|report| report.routed.clone())
+                    .unwrap_or_default();
                 let error = match outcome {
                     Ok(report) if report.is_complete() => {
                         let _ = proxy.send_event(AppCommand::CloseWindow { window_id });
-                        return;
+                        None
                     }
                     Ok(report) => {
                         // Drop the rows with nothing left to route, keep the failed ones.
@@ -872,16 +876,19 @@ pub(super) fn build_route_window(
                             );
                             let _ = proxy.send_event(AppCommand::EvalScript { window_id, js });
                         }
-                        report.error_message().unwrap_or_default()
+                        Some(report.error_message().unwrap_or_default())
                     }
                     // Validation failed: nothing was moved.
-                    Err(e) => format!("{:#}", e),
+                    Err(e) => Some(format!("{:#}", e)),
                 };
                 // Surface the error back to the HTML without closing.
-                if let Ok(js_str) = serde_json::to_string(&error) {
+                if let Some(Ok(js_str)) = error.map(|error| serde_json::to_string(&error)) {
                     let js = format!("route_review_error({})", escape_json_for_script(&js_str));
                     let _ = proxy.send_event(AppCommand::EvalScript { window_id, js });
                 }
+                // Linking quotes may wait for the vault index: last, once the moves
+                // are recorded and answered. Losing it (tray quit) only leaves quotes as text.
+                crate::route::link_routed_notes(&routed, &notes_dir);
             });
         },
     )?;
@@ -900,7 +907,9 @@ fn lock_allowed(allowed: &Mutex<HashSet<String>>) -> std::sync::MutexGuard<'_, H
 }
 
 /// Apply the decisions of `body`, record the proofs of the sorted notes and
-/// start the deletion of their server copy.
+/// start the deletion of their server copy. Quoted messages are not linked
+/// here (`report.routed`): the vault index they wait for must never delay the
+/// ledger or the deletion, which a tray quit in between would lose.
 fn apply_review(
     body: &str,
     notes_dir: &Path,

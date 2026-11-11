@@ -1264,23 +1264,41 @@ fn reject_symlink_path(notes_dir: &Path, target: &Path) -> Result<()> {
 /// Missing directories are created with `fs::create_dir_all` (D4).
 /// `move_email` handles the `.md` + its referenced attachment siblings.
 /// Returns the final path of the routed note (suffixed when its name was taken).
+/// The quoted messages of the routed note are then linked ([`link_routed_notes`]).
 pub fn apply_decision(staging_md: &Path, rel_path: &str, notes_dir: &Path) -> Result<PathBuf> {
+    let routed = move_decision(staging_md, rel_path, notes_dir)?;
+    link_routed_notes(std::slice::from_ref(&routed), notes_dir);
+    Ok(routed)
+}
+
+/// [`apply_decision`] without linking the quoted messages: only the move.
+///
+/// Linking may wait for the vault index; a caller with bookkeeping to do after
+/// the move (ledger, server deletion) moves first, records, then calls
+/// [`link_routed_notes`].
+pub fn move_decision(staging_md: &Path, rel_path: &str, notes_dir: &Path) -> Result<PathBuf> {
     let dest_dir = join_safe_segments(notes_dir, rel_path)
         .with_context(|| format!("invalid routing path {:?}", rel_path))?;
     fs::create_dir_all(&dest_dir)
         .with_context(|| format!("failed to create directory {}", dest_dir.display()))?;
-    let routed = move_email(staging_md, &dest_dir).with_context(|| {
+    move_email(staging_md, &dest_dir).with_context(|| {
         format!(
             "failed to move {} to {}",
             staging_md.display(),
             dest_dir.display()
         )
-    })?;
-    // A link failure never undoes the routing: the note stays, quotes stay as text.
-    if let Err(e) = link_routed_note(&routed, notes_dir) {
-        eprintln!("warning: could not link quoted messages: {e:#}");
+    })
+}
+
+/// Replace the quoted messages of routed notes by links to the vault's notes.
+///
+/// A link failure never undoes the routing: the note stays, quotes stay as text.
+pub fn link_routed_notes(routed: &[PathBuf], notes_dir: &Path) {
+    for note in routed {
+        if let Err(e) = link_routed_note(note, notes_dir) {
+            eprintln!("warning: could not link quoted messages: {e:#}");
+        }
     }
-    Ok(routed)
 }
 
 /// How long the vault index of [`link_routed_note`] is trusted before listing the vault

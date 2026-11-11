@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Redémarrage après mise à jour** : après une mise à jour depuis le tray, l'application se fermait sans se relancer. Elle redémarre désormais d'elle-même ; le nouveau tray attend que l'ancien ait quitté, au lieu d'afficher « déjà présent ». Si le redémarrage échoue, l'ancien tray reste ouvert et affiche l'erreur.
+- **Tri appliqué sans suppression serveur** : « Appliquer » attendait l'index du vault (une quinzaine de secondes) pour lier les citations avant d'inscrire les messages triés au registre et de les supprimer du serveur. Si le tray était quitté pendant cette attente, les notes étaient bien déplacées, mais le message restait sur le serveur et pouvait être réexporté. Le registre et la suppression passent désormais en premier, la fenêtre se ferme aussitôt, et la liaison des citations se fait ensuite.
 
 ## [0.28.0] - 2026-11-11
 
