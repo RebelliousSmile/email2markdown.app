@@ -493,6 +493,8 @@ pub(super) struct RouteApplyReport {
     /// Moved notes whose frontmatter holds the message on the server
     /// (`keep_on_server`): sorted, never deleted.
     pub(super) held: Vec<crate::contextual_export::LocalSourceProof>,
+    /// Final paths of the moved notes, whose quoted messages are not linked yet.
+    pub(super) routed: Vec<std::path::PathBuf>,
 }
 
 impl RouteApplyReport {
@@ -569,7 +571,8 @@ fn dated_dest_path(row: &RouteDecisionRow, layout: DateLayout) -> String {
 /// naming any other file is rejected. The whole batch is validated before the
 /// first move, so a bad row moves nothing; once moves start, a failure is
 /// recorded and the remaining rows still run. Moved and missing files leave
-/// `allowed`. The move itself is `route::apply_decision`.
+/// `allowed`. The move itself is `route::move_decision`: quoted messages are
+/// linked by the caller, once the moves are recorded (`report.routed`).
 pub(super) fn apply_route_decisions(
     rows: &[RouteDecisionRow],
     notes_dir: &Path,
@@ -614,10 +617,11 @@ pub(super) fn apply_route_decisions(
         let proof = head
             .source
             .filter(crate::contextual_export::proof_is_complete);
-        match crate::route::apply_decision(staging_md, dest_path, notes_dir) {
+        match crate::route::move_decision(staging_md, dest_path, notes_dir) {
             Ok(routed) => {
                 allowed.remove(&row.file);
                 report.moved.push(row.file.clone());
+                report.routed.push(routed.clone());
                 if head.keep_on_server.is_some() {
                     report.held.extend(proof);
                 } else if let Some(proof) = proof {
@@ -1688,6 +1692,10 @@ hi
                 failed: vec![],
                 deletions: vec![],
                 held: vec![],
+                routed: vec![
+                    fx.notes.join("Perso").join("a.md"),
+                    fx.notes.join("Perso").join("c.md"),
+                ],
             }
         );
         assert_eq!(md_names(&fx.notes.join("Perso")), ["a.md", "c.md"]);
@@ -1742,9 +1750,7 @@ hi
         let report = RouteApplyReport {
             moved: vec!["a.md".to_string()],
             missing: vec!["b.md".to_string()],
-            failed: vec![],
-            deletions: vec![],
-            held: vec![],
+            ..Default::default()
         };
 
         let message = report.error_message().unwrap();
