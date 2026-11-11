@@ -255,28 +255,57 @@ pub fn send_command(cmd: AppCommand) -> Result<()> {
 /// Run the system tray application.
 ///
 /// Only one tray may run at a time: a second launch shows an alert and exits.
-pub fn run_tray() -> Result<()> {
-    // Held for the whole process lifetime; the OS releases it on exit or crash.
-    let _instance_lock = match acquire_single_instance_lock() {
-        Ok(Some(lock)) => Some(lock),
-        Ok(None) => {
-            rfd::MessageDialog::new()
-                .set_level(rfd::MessageLevel::Info)
-                .set_title("Email to Markdown")
-                .set_description(
-                    "Le logiciel est déjà présent dans votre zone de notification (systray).",
-                )
-                .set_buttons(rfd::MessageButtons::Ok)
-                .show();
-            return Ok(());
-        }
-        Err(error) => {
-            // Never block startup on a lock-file problem.
-            eprintln!("warning: single-instance check failed: {error:#}");
-            None
-        }
+/// With `after_update`, the previous tray is still exiting: wait for its lock.
+pub fn run_tray(after_update: bool) -> Result<()> {
+    let attempts = if after_update {
+        LOCK_ATTEMPTS_AFTER_UPDATE
+    } else {
+        1
     };
+    // Held for the whole process lifetime; the OS releases it on exit or crash.
+    let _instance_lock =
+        match acquire_with_retry(acquire_single_instance_lock, attempts, LOCK_RETRY_DELAY) {
+            Ok(Some(lock)) => Some(lock),
+            Ok(None) => {
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Info)
+                    .set_title("Email to Markdown")
+                    .set_description(
+                        "Le logiciel est déjà présent dans votre zone de notification (systray).",
+                    )
+                    .set_buttons(rfd::MessageButtons::Ok)
+                    .show();
+                return Ok(());
+            }
+            Err(error) => {
+                // Never block startup on a lock-file problem.
+                eprintln!("warning: single-instance check failed: {error:#}");
+                None
+            }
+        };
     event_loop::run()
+}
+
+/// Window granted to the previous tray to exit after an update: 50 × 200 ms.
+const LOCK_ATTEMPTS_AFTER_UPDATE: u32 = 50;
+const LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Retry `acquire` while another instance holds the lock (`Ok(None)`).
+/// An error stops at once: retrying never fixes an unopenable lock file.
+fn acquire_with_retry<T>(
+    mut acquire: impl FnMut() -> Result<Option<T>>,
+    attempts: u32,
+    delay: std::time::Duration,
+) -> Result<Option<T>> {
+    for attempt in 1..=attempts.max(1) {
+        if let Some(lock) = acquire()? {
+            return Ok(Some(lock));
+        }
+        if attempt < attempts {
+            thread::sleep(delay);
+        }
+    }
+    Ok(None)
 }
 
 /// `Ok(None)` when another instance already holds the lock.
@@ -738,4 +767,54 @@ struct ContextualIpcMessage {
     keys: Vec<String>,
     attr_kind: Option<String>,
     attr_value: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_acquire_with_retry_with_lock_released_after_contention() {
+        let mut calls = 0;
+        let lock = acquire_with_retry(
+            || {
+                calls += 1;
+                Ok((calls == 3).then_some("lock"))
+            },
+            5,
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!((lock, calls), (Some("lock"), 3));
+    }
+
+    #[test]
+    fn test_acquire_with_retry_with_lock_never_released() {
+        let mut calls = 0;
+        let lock = acquire_with_retry(
+            || {
+                calls += 1;
+                Ok(None::<()>)
+            },
+            4,
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!((lock, calls), (None, 4));
+    }
+
+    #[test]
+    fn test_acquire_with_retry_with_error_stops_at_once() {
+        let mut calls = 0;
+        let result = acquire_with_retry(
+            || -> Result<Option<()>> {
+                calls += 1;
+                Err(anyhow::anyhow!("unopenable lock file"))
+            },
+            4,
+            Duration::ZERO,
+        );
+        assert!(result.is_err() && calls == 1);
+    }
 }

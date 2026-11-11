@@ -211,7 +211,11 @@ enum Commands {
 
     /// Run as system tray application (requires --features tray)
     #[cfg(feature = "tray")]
-    Tray,
+    Tray {
+        /// Started by the previous tray after an update: wait for it to exit
+        #[arg(long, hide = true)]
+        after_update: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -631,11 +635,11 @@ fn main() -> Result<()> {
         }
 
         #[cfg(feature = "tray")]
-        Commands::Tray => {
+        Commands::Tray { after_update } => {
             println!("Starting system tray application...");
             #[cfg(windows)]
             detach_console();
-            tray::run_tray().context("Failed to run system tray")?;
+            tray::run_tray(after_update).context("Failed to run system tray")?;
         }
     }
 

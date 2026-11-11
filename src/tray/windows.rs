@@ -308,6 +308,8 @@ pub(super) fn build_update_window(
                 if let Some(release) = release {
                     let proxy_dl = proxy_ipc.clone();
                     thread::spawn(move || {
+                        // Before `self_replace` moves the running image aside.
+                        let exe = std::env::current_exe();
                         let result = updater::download_and_apply(&release, |msg| {
                             let json =
                                 serde_json::json!({ "type": "msg", "text": msg }).to_string();
@@ -315,14 +317,32 @@ pub(super) fn build_update_window(
                         });
                         match result {
                             Ok(()) => {
-                                let json = serde_json::json!({
-                                    "type": "msg",
-                                    "text": "Mise à jour terminée — veuillez relancer l'application."
-                                })
-                                .to_string();
+                                let relaunch = exe
+                                    .context("failed to locate the running binary")
+                                    .and_then(|exe| updater::spawn_tray_after_update(&exe));
+                                let (kind, text) = match &relaunch {
+                                    Ok(()) => (
+                                        "msg",
+                                        "Mise à jour terminée — redémarrage de l'application…"
+                                            .to_string(),
+                                    ),
+                                    Err(e) => (
+                                        "error",
+                                        format!(
+                                            "Mise à jour terminée, mais le redémarrage a échoué \
+                                             ({e:#}). Quittez puis relancez l'application."
+                                        ),
+                                    ),
+                                };
+                                let json =
+                                    serde_json::json!({ "type": kind, "text": text }).to_string();
                                 let _ = proxy_dl.send_event(AppCommand::UpdateMsg(json));
-                                std::thread::sleep(std::time::Duration::from_millis(300));
-                                std::process::exit(0);
+                                // Exit only once a successor is on its way; otherwise
+                                // keep the error on screen.
+                                if relaunch.is_ok() {
+                                    std::thread::sleep(std::time::Duration::from_millis(300));
+                                    std::process::exit(0);
+                                }
                             }
                             Err(e) => {
                                 let json = serde_json::json!({
