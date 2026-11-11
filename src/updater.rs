@@ -202,7 +202,35 @@ pub fn download_and_apply(release: &Release, on_progress: impl Fn(&str)) -> Resu
         eprintln!("Version du registre non mise à jour : {e:#}");
     }
 
-    on_progress("Mise à jour terminée — fermez et relancez l'application.");
+    on_progress("Mise à jour installée.");
+    Ok(())
+}
+
+/// Start the freshly installed binary as a new tray, detached from this one.
+///
+/// `exe` must be captured before `self_replace`: once the running image is
+/// moved aside, `current_exe` may name the relocated old binary.
+/// The new tray waits for this one's single-instance lock (`--after-update`).
+pub fn spawn_tray_after_update(exe: &Path) -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    let mut command = Command::new(exe);
+    // Null stdio: a tray has no console, and inherited dead handles make
+    // `spawn` fail with os error 50 (see `detach_console` in main.rs).
+    command
+        .args(["tray", "--after-update"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+        .spawn()
+        .with_context(|| format!("failed to start {}", exe.display()))?;
     Ok(())
 }
 

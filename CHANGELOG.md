@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Redémarrage après mise à jour** : après une mise à jour depuis le tray, l'application se fermait sans se relancer. Elle redémarre désormais d'elle-même ; le nouveau tray attend que l'ancien ait quitté, au lieu d'afficher « déjà présent ». Si le redémarrage échoue, l'ancien tray reste ouvert et affiche l'erreur.
+
 ## [0.28.0] - 2026-11-11
 
 ### Added
