@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Instruction: Import Thunderbird sélectif dans la fenêtre Paramètres

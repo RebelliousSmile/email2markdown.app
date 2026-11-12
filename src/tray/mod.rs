@@ -76,6 +76,9 @@ pub enum AppCommand {
     },
     OpenConfig {
         sender: Sender<ActionResult>,
+        /// Panel shown on open (`THUNDERBIRD_IMPORT_VIEW`); `None` for the tabs.
+        /// An already open window comes to the front and shows it too.
+        initial_view: Option<&'static str>,
     },
     OpenUpdate,
     UpdateMsg(String),

@@ -23,7 +23,6 @@ use crate::contextual_export::{
 use crate::email_export::{self, ImapExporter};
 use crate::network::ProgressCallback;
 use crate::route::{self, EmailMeta, RouteDecisions};
-use crate::thunderbird;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ContextualAccountChoice {
@@ -558,8 +557,6 @@ pub fn retry_contextual_deletions(
 pub enum ActionResult {
     /// (title, message)
     Success(String, String),
-    /// Import completed — the main thread should rebuild the tray menu.
-    Imported(String),
     Error(String),
 }
 
@@ -873,136 +870,6 @@ fn meta_from_frontmatter(content: &str, account_name: &str) -> EmailMeta {
         account: account_name.to_string(),
         date,
     }
-}
-
-/// Import accounts from Thunderbird.
-///
-/// Shows a dialog whose buttons name what is imported (accounts with or
-/// without passwords, or nothing), then runs the import in a background
-/// thread. Yes/No buttons read as "import or not": "No" imported anyway.
-pub fn action_import_thunderbird(result_sender: Sender<ActionResult>) {
-    const WITH_PASSWORDS: &str = "Comptes et mots de passe";
-    const ACCOUNTS_ONLY: &str = "Comptes seulement";
-    const NOTHING: &str = "Ne rien importer";
-    let dialog_result = rfd::MessageDialog::new()
-        .set_title("Import Thunderbird")
-        .set_description(
-            "Ajouter les comptes IMAP de Thunderbird qui ne sont pas encore \
-             configurés ?\n\n\
-             Les comptes déjà configurés (même serveur et même identifiant) \
-             sont conservés tels quels ; l'état précédent est sauvegardé dans \
-             accounts.yaml.bak.\n\n\
-             (Thunderbird doit être fermé pour extraire les mots de passe)",
-        )
-        .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
-            WITH_PASSWORDS.to_string(),
-            ACCOUNTS_ONLY.to_string(),
-            NOTHING.to_string(),
-        ))
-        .show();
-
-    let extract_passwords = match dialog_result {
-        rfd::MessageDialogResult::Custom(label) if label == WITH_PASSWORDS => true,
-        rfd::MessageDialogResult::Custom(label) if label == ACCOUNTS_ONLY => false,
-        _ => return, // Ne rien importer, or the dialog closed
-    };
-
-    let (progress_tx, progress_rx) = mpsc::channel::<ProgressUpdate>();
-    let (result_tx, result_rx) = mpsc::sync_channel::<ActionResult>(1);
-
-    let sender_for_error = result_sender.clone();
-    let on_close = Some(Box::new(move || {
-        if let Ok(r) = result_rx.try_recv() {
-            let _ = result_sender.send(r);
-        }
-    }) as Box<dyn FnOnce() + Send>);
-
-    if let Err(e) = crate::tray::send_command(crate::tray::AppCommand::OpenProgress {
-        action_name: "Import Thunderbird".to_string(),
-        warning: None,
-        progress_rx,
-        on_close,
-        done_action: None,
-        error_action: Some(Box::new(|| {
-            let _ = action_open_config();
-        })),
-        sender: sender_for_error.clone(),
-        cancel_token: None,
-    }) {
-        let _ = sender_for_error.send(ActionResult::Error(format!(
-            "Fenêtre de progression : {}",
-            e
-        )));
-        return;
-    }
-
-    thread::spawn(move || {
-        let _ = progress_tx.send(ProgressUpdate::Indeterminate {
-            message: "Import Thunderbird en cours…".to_string(),
-        });
-        match run_import_thunderbird(extract_passwords) {
-            Ok(message) => {
-                let _ = result_tx.send(ActionResult::Imported(message.clone()));
-                let _ = progress_tx.send(ProgressUpdate::Done {
-                    summary: message,
-                    action_label: None,
-                });
-            }
-            Err(e) => {
-                let _ = progress_tx.send(ProgressUpdate::Error {
-                    message: format!("Import error: {:#}", e),
-                    action_label: classify_error(&e),
-                });
-            }
-        }
-    });
-}
-
-fn run_import_thunderbird(extract_passwords: bool) -> Result<String> {
-    let profiles = thunderbird::list_profiles().context("Could not find Thunderbird profiles")?;
-
-    // Same logic as CLI: prefer default profile that has prefs.js
-    let has_prefs = |p: &thunderbird::ThunderbirdProfile| p.path.join("prefs.js").exists();
-    let profile = profiles
-        .iter()
-        .find(|p| p.is_default && has_prefs(p))
-        .or_else(|| profiles.iter().find(|p| has_prefs(p)))
-        .cloned()
-        .context("No usable Thunderbird profiles found (no prefs.js)")?;
-
-    let accounts = thunderbird::extract_accounts(&profile)
-        .context("Failed to extract accounts from Thunderbird")?;
-
-    if accounts.is_empty() {
-        return Ok("No IMAP accounts found in Thunderbird".to_string());
-    }
-
-    let output_path = config::accounts_yaml_path();
-    let summary = thunderbird::write_accounts_merged(&accounts, &output_path)?;
-    let mut message = summary.describe(&output_path);
-
-    if extract_passwords {
-        match thunderbird::extract_passwords(&profile, None) {
-            Ok(passwords) if !passwords.is_empty() => {
-                let env_path = config::env_file_path();
-                if let Some(parent) = env_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                match thunderbird::write_passwords_to_env(
-                    &summary.added_accounts(&accounts),
-                    &passwords,
-                    &env_path,
-                ) {
-                    Ok(n) => message.push_str(&format!("\n{} mot(s) de passe écrits", n)),
-                    Err(e) => message.push_str(&format!("\nImpossible d'écrire .env : {}", e)),
-                }
-            }
-            Ok(_) => message.push_str("\nAucun mot de passe trouvé dans Thunderbird"),
-            Err(e) => message.push_str(&format!("\nExtraction des mots de passe échouée : {}", e)),
-        }
-    }
-
-    Ok(message)
 }
 
 /// Open a folder picker and update export_directory for all accounts.

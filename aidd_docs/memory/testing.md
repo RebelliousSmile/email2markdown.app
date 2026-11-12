@@ -11,8 +11,8 @@
 
 ## Test Coverage
 
-- **791 tests without `tray`, 909 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
-  - `--all-features`: 537 lib unit, 1 bin, 350 `rust_tests.rs`, 21 `imap_integration.rs` (19 `#[ignore]`)
+- **791 tests without `tray`, 921 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
+  - `--all-features`: 549 lib unit, 1 bin, 350 `rust_tests.rs`, 21 `imap_integration.rs` (19 `#[ignore]`)
   - `imap_integration.rs` not ignored: `probe_account_on_closed_port_*`, `probe_account_on_silent_server_*` (local `TcpListener`, no Docker)
 - Not covered automatically: `thunderbird.rs` NSS part (`extract_passwords`, `unlock_key_slot`, primary password: needs Thunderbird), tray event loop and windows (needs GUI), updater against GitHub, Gmail deletion
 - `ImapExporter` covered by the Dovecot tests only (export, purge, contextual search, deletion outcomes, server cleanup)
@@ -20,6 +20,17 @@
 - Folder selection: `export_with_included_folders_*`, `export_with_vanished_included_folder_*` (Dovecot `probe`), `exports_folder` / `included_folders` in `config_tests`, `save_account_*` inline in `tray/ipc.rs`
 - Signature filter + quarantine covered end to end on Dovecot (#19): `export_seed_corpus_*`
 - `tray_actions.rs` pure helpers covered inline under `--features tray`
+- Thunderbird import from Settings: `thunderbird_scan_with`, `thunderbird_import_with` inline in `tray/ipc.rs` (injected profile / import closure)
+  - `test_thunderbird_import_passes_primary_password_without_echo`: reply never carries the primary password
+  - `tray/windows.rs`: `reply_changed_accounts` with `thunderbird_import`, `show_view_script`, single `__INITIAL_VIEW__`
+- Manual Thunderbird import procedure (real profile, `--features tray`):
+  - Thunderbird closed; menu « Importer depuis Thunderbird » → Settings on the import panel
+  - Same menu with Settings already open → window focused, panel shown
+  - Tick one account only → only that account in `accounts.yaml` and `.env`
+  - Configured account greyed and unselectable; Gmail OAuth shows the app-password note
+  - Profile with primary password → field shown; wrong one → « incorrect » alert; nothing written
+  - Thunderbird open during import → NSS error alert, nothing written
+  - Failed account → alert with cause, « Modifier » opens its form, `included_folders: ["INBOX"]`
 
 ## Testing Strategy
 
@@ -45,6 +56,8 @@
   - Simulate replies with `window.config_result({...})` — takes an object, not a JSON string
   - Page functions are closure-scoped: drive through DOM clicks and `input` events, only `config_result` is global
   - Folder picker scenarios: saved selection summary, `request_id` stale answer, creation test-before-save, "Enregistrer quand même"
+  - Also replace `__INITIAL_VIEW__` (`""` or `"thunderbird"`); `window.showThunderbirdImport` is global too
+  - Thunderbird panel scenarios: scan render, import message, `primary_password_required`, mixed reports + « Modifier », empty selection
   - Playwright MCP writes only under the project root (`.playwright-mcp/`): delete it afterwards
 - Python tools: always run `python -m pytest tools/tests`, never bare `pytest` from the repository root
   **Why:** root collection walks `target/` (tens of GB) and `archive/`, takes minutes and ends in collection errors

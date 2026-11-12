@@ -264,20 +264,7 @@ fn main() -> Result<()> {
                     is_default: false,
                 }
             } else {
-                // Auto-detect default profile
-                let profiles =
-                    thunderbird::list_profiles().context("Could not find Thunderbird profiles")?;
-
-                // Prefer the marked default, but only if it has prefs.js (it may be an empty placeholder)
-                let has_prefs =
-                    |p: &thunderbird::ThunderbirdProfile| p.path.join("prefs.js").exists();
-
-                profiles
-                    .iter()
-                    .find(|p| p.is_default && has_prefs(p))
-                    .or_else(|| profiles.iter().find(|p| has_prefs(p)))
-                    .cloned()
-                    .context("No usable Thunderbird profiles found (no prefs.js)")?
+                thunderbird::default_profile()?
             };
 
             println!(

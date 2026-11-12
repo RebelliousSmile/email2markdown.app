@@ -197,10 +197,19 @@ fn settings_window_json(settings: &crate::config::Settings) -> Result<String> {
     serde_json::to_string(&value).context("failed to serialize settings")
 }
 
+/// Settings-window panel opened by the tray "Importer depuis Thunderbird" item.
+pub(super) const THUNDERBIRD_IMPORT_VIEW: &str = "thunderbird";
+
+/// Script showing `view` in an already open settings window; `None` if unknown.
+pub(super) fn show_view_script(view: &str) -> Option<&'static str> {
+    (view == THUNDERBIRD_IMPORT_VIEW).then_some("showThunderbirdImport()")
+}
+
 pub(super) fn build_config_window(
     target: &EventLoopWindowTarget<AppCommand>,
     proxy: &EventLoopProxy<AppCommand>,
     sender: Sender<ActionResult>,
+    initial_view: Option<&'static str>,
 ) -> Result<(Window, WebView, WindowId)> {
     let settings_path = crate::config::settings_path();
     let settings = crate::config::Settings::load(&settings_path)
@@ -216,6 +225,13 @@ pub(super) fn build_config_window(
     let html = html_template
         .replace("__SETTINGS_JSON__", &escape_json_for_script(&settings_json))
         .replace("__ACCOUNTS_JSON__", &escape_json_for_script(&accounts_json))
+        // Only the known constant reaches the page: no escaping needed.
+        .replace(
+            "__INITIAL_VIEW__",
+            initial_view
+                .filter(|v| show_view_script(v).is_some())
+                .unwrap_or(""),
+        )
         .replace(
             "__CONFIG_DIR__",
             &crate::config::app_config_dir()
@@ -245,6 +261,9 @@ pub(super) fn build_config_window(
                 let proxy_job = proxy_ipc.clone();
                 std::thread::spawn(move || {
                     let reply = job();
+                    if reply_changed_accounts(&reply) {
+                        let _ = proxy_job.send_event(AppCommand::RefreshMenu);
+                    }
                     let js = format!("config_result({})", escape_json_for_script(&reply));
                     let _ = proxy_job.send_event(AppCommand::EvalScript { window_id, js });
                 });
@@ -271,7 +290,7 @@ pub(super) fn build_config_window(
 }
 
 /// `true` when a settings-page reply reports a successful save (general settings
-/// or account), deletion or reload: the tray submenus list the accounts, and
+/// or account), deletion, reload or Thunderbird import: the tray submenus list the accounts, and
 /// "Nettoyer le serveur" depends on `delete_after_export`, so they are rebuilt.
 fn reply_changed_accounts(reply: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(reply) else {
@@ -279,7 +298,10 @@ fn reply_changed_accounts(reply: &str) -> bool {
     };
     let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     let action = value.get("action").and_then(|v| v.as_str()).unwrap_or("");
-    ok && matches!(action, "save" | "save_account" | "reload" | "move_account")
+    ok && matches!(
+        action,
+        "save" | "save_account" | "reload" | "move_account" | "thunderbird_import"
+    )
 }
 
 // ── Update window ─────────────────────────────────────────────────────────────
@@ -946,6 +968,7 @@ fn apply_review(
 mod tests {
     use super::{
         allow_navigation, escape_json_for_script, reply_changed_accounts, settings_window_json,
+        show_view_script, THUNDERBIRD_IMPORT_VIEW,
     };
 
     #[test]
@@ -974,6 +997,38 @@ mod tests {
         assert!(!reply_changed_accounts(
             r#"{"action":"move_account","ok":false,"message":"x"}"#
         ));
+    }
+
+    #[test]
+    fn test_reply_changed_accounts_with_thunderbird_import_ok() {
+        assert!(reply_changed_accounts(
+            r#"{"action":"thunderbird_import","ok":true,"reports":[],"accounts":[]}"#
+        ));
+    }
+
+    #[test]
+    fn test_reply_changed_accounts_with_thunderbird_import_failed() {
+        assert!(!reply_changed_accounts(
+            r#"{"action":"thunderbird_import","ok":false,"primary_password_required":true}"#
+        ));
+    }
+
+    #[test]
+    fn test_config_template_has_single_initial_view_placeholder() {
+        // A second occurrence (a JS identifier containing it) would be replaced too.
+        let html = include_str!("../../assets/config_window.html");
+        assert_eq!(html.matches("__INITIAL_VIEW__").count(), 1);
+    }
+
+    #[test]
+    fn test_show_view_script_with_known_and_unknown_view() {
+        assert_eq!(
+            (
+                show_view_script(THUNDERBIRD_IMPORT_VIEW),
+                show_view_script("</script>")
+            ),
+            (Some("showThunderbirdImport()"), None)
+        );
     }
 
     #[test]

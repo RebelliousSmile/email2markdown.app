@@ -207,7 +207,36 @@
     color: #c62828; font-size: 12px; text-decoration: underline;
   }
   .acct-delete-link:hover { color: #8e0000; }
-  .acct-list-head { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+  .acct-list-head { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px; }
+  .tb-profile { font-size: 11.5px; color: #777; margin-bottom: 6px; word-break: break-all; }
+  .tb-list { margin: 10px 0; }
+  .tb-item {
+    display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin-bottom: 6px;
+    border: 1px solid #ddd; border-radius: 4px; background: #fafafa; cursor: pointer;
+  }
+  .tb-item input { margin-top: 3px; cursor: pointer; }
+  .tb-item.configured { color: #999; cursor: default; }
+  .tb-item.configured input { cursor: default; }
+  .tb-item-main { display: flex; flex-direction: column; gap: 2px; }
+  .tb-item-name { font-weight: 500; }
+  .tb-item-sub { font-size: 12px; color: #666; }
+  .tb-item-note { font-size: 11.5px; color: #8d6e00; line-height: 1.4; }
+  .tb-badge {
+    display: inline-block; font-size: 10.5px; font-weight: 600; color: #8d6e00;
+    border: 1px solid #e0c060; border-radius: 3px; padding: 0 4px; margin-left: 4px;
+  }
+  .tb-primary { margin: 10px 0; }
+  .tb-primary label { display: block; margin-bottom: 4px; color: #333; }
+  .tb-primary input { width: 100%; padding: 5px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+  .tb-reports { margin: 10px 0; }
+  .tb-report {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0;
+    border-bottom: 1px solid #eee; font-size: 13px;
+  }
+  .tb-report.ok .tb-report-name { color: #2e7d32; }
+  .tb-report.failed .tb-report-name { color: #c62828; }
+  .tb-report-name { font-weight: 500; }
+  .tb-report-msg { flex: 1; font-size: 12px; color: #555; word-break: break-word; }
   .acct-pw-hint { font-size: 11.5px; color: #777; margin-top: 3px; }
   .modal-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,.35);
@@ -376,6 +405,7 @@
 <script>
   window.__SETTINGS_DATA__ = __SETTINGS_JSON__;
   window.__ACCOUNTS_DATA__ = __ACCOUNTS_JSON__;
+  window.__START_VIEW__ = "__INITIAL_VIEW__";
 </script>
 
 <header>Paramètres</header>
@@ -471,11 +501,31 @@
       <div id="reload-msg" class="acct-files-msg" style="display:none"></div>
     </div>
     <div class="acct-list-head">
+      <button class="btn-secondary" id="btn-import-thunderbird">Importer depuis Thunderbird</button>
       <button class="btn-primary" id="btn-add-account">+ Ajouter un compte</button>
     </div>
     <div id="account-list-view">
       <!-- rendered by JS -->
     </div>
+    </div>
+    <div id="tb-import-view" style="display:none">
+      <div class="acct-detail-section">
+        <div class="acct-detail-title">Importer depuis Thunderbird</div>
+        <div class="tb-profile" id="tb-profile"></div>
+        <div class="folder-status" id="tb-status"></div>
+        <div class="tb-list" id="tb-list"></div>
+        <div class="tb-primary" id="tb-primary-field" style="display:none">
+          <label for="tb-primary-password">Mot de passe principal Thunderbird</label>
+          <input type="password" id="tb-primary-password" autocomplete="off">
+          <div class="acct-pw-hint">Sert une seule fois à lire les mots de passe enregistrés ; il n’est pas conservé. Thunderbird doit être fermé.</div>
+        </div>
+        <div class="folder-alert" id="tb-alert" role="alert"></div>
+        <div class="tb-reports" id="tb-reports"></div>
+        <div class="acct-detail-footer">
+          <button class="btn-secondary" id="tb-cancel">Annuler</button>
+          <button class="btn-primary" id="tb-import" disabled>Importer la sélection</button>
+        </div>
+      </div>
     </div>
     <div id="account-detail-view" style="display:none">
       <div class="acct-detail-section">
@@ -1287,12 +1337,220 @@
     }, 800);
   }
 
+  // ── Thunderbird import ─────────────────────────────────────────────────────
+
+  // Accounts of the last profile scan; null until the host answers.
+  var tbAccounts = null;
+  var tbImporting = false;
+
+  function showTbView(which) {
+    document.getElementById('account-list-wrap').style.display = which === 'list' ? '' : 'none';
+    document.getElementById('account-detail-view').style.display = 'none';
+    document.getElementById('tb-import-view').style.display = which === 'tb' ? '' : 'none';
+  }
+
+  function showTbAlert(text) {
+    var el = document.getElementById('tb-alert');
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  function tbSelectedIds() {
+    var ids = [];
+    var boxes = document.querySelectorAll('#tb-list input[type="checkbox"]');
+    for (var i = 0; i < boxes.length; i++) {
+      if (boxes[i].checked && !boxes[i].disabled) ids.push(boxes[i].getAttribute('data-id'));
+    }
+    return ids;
+  }
+
+  function refreshTbImportButton() {
+    document.getElementById('tb-import').disabled = tbImporting || tbSelectedIds().length === 0;
+  }
+
+  function oauthNote(acct) {
+    if (/(^|\.)(gmail|googlemail)\.com$/i.test(acct.server || '')) {
+      return 'Connexion OAuth dans Thunderbird : l’application a besoin d’un mot de passe ' +
+        'd’application Google (myaccount.google.com/apppasswords), à saisir dans le formulaire du compte.';
+    }
+    return 'Connexion OAuth dans Thunderbird : saisissez un mot de passe d’application ' +
+      'dans le formulaire du compte après l’import.';
+  }
+
+  function renderTbList() {
+    var list = document.getElementById('tb-list');
+    if (!tbAccounts || tbAccounts.length === 0) {
+      list.innerHTML = '<div class="acct-empty">Aucun compte IMAP dans ce profil Thunderbird</div>';
+      refreshTbImportButton();
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < tbAccounts.length; i++) {
+      var a = tbAccounts[i];
+      var configured = !!a.already_configured;
+      html += '<label class="tb-item' + (configured ? ' configured' : '') + '">';
+      html += '<input type="checkbox" data-id="' + escapeHtml(a.server_id) + '"' +
+        (configured ? ' disabled' : ' checked') + '>';
+      html += '<span class="tb-item-main">';
+      html += '<span class="tb-item-name">' + escapeHtml(a.name);
+      if (a.auth === 'oauth2') html += ' <span class="tb-badge">OAuth</span>';
+      if (configured) html += ' <span class="folder-note">déjà configuré</span>';
+      html += '</span>';
+      html += '<span class="tb-item-sub">' + escapeHtml(a.username) + ' @ ' + escapeHtml(a.server) + '</span>';
+      if (!configured && a.auth === 'oauth2') {
+        html += '<span class="tb-item-note">' + escapeHtml(oauthNote(a)) + '</span>';
+      } else if (!configured && !a.has_saved_password) {
+        html += '<span class="tb-item-note">Aucun mot de passe enregistré dans Thunderbird : ' +
+          'à saisir dans le formulaire du compte après l’import.</span>';
+      }
+      html += '</span></label>';
+    }
+    list.innerHTML = html;
+    var boxes = list.querySelectorAll('input[type="checkbox"]');
+    for (var b = 0; b < boxes.length; b++) {
+      boxes[b].addEventListener('change', refreshTbImportButton);
+    }
+    refreshTbImportButton();
+  }
+
+  // Opens the panel and asks the host for the accounts of the default profile.
+  // Global: the tray menu calls it on an already open window.
+  function showThunderbirdImport() {
+    var accountsTab = document.querySelector('.tab-btn[data-tab="accounts"]');
+    if (accountsTab) accountsTab.click();
+    tbAccounts = null;
+    tbImporting = false;
+    document.getElementById('tb-profile').textContent = '';
+    document.getElementById('tb-status').textContent = 'Lecture du profil Thunderbird…';
+    document.getElementById('tb-status').className = 'folder-status';
+    document.getElementById('tb-list').innerHTML = '';
+    document.getElementById('tb-list').style.display = '';
+    document.getElementById('tb-reports').innerHTML = '';
+    document.getElementById('tb-primary-field').style.display = 'none';
+    document.getElementById('tb-primary-password').value = '';
+    document.getElementById('tb-import').style.display = '';
+    document.getElementById('tb-cancel').textContent = 'Annuler';
+    showTbAlert('');
+    refreshTbImportButton();
+    showTbView('tb');
+    postIpc({ action: 'thunderbird_scan' });
+  }
+  window.showThunderbirdImport = showThunderbirdImport;
+
+  document.getElementById('btn-import-thunderbird').addEventListener('click', showThunderbirdImport);
+  document.getElementById('tb-cancel').addEventListener('click', function () {
+    showTbView('list');
+  });
+
+  document.getElementById('tb-import').addEventListener('click', function () {
+    var ids = tbSelectedIds();
+    if (ids.length === 0) return;
+    var pwField = document.getElementById('tb-primary-password');
+    var data = { server_ids: ids };
+    if (pwField.value) data.primary_password = pwField.value;
+    pwField.value = '';
+    tbImporting = true;
+    refreshTbImportButton();
+    showTbAlert('');
+    document.getElementById('tb-status').className = 'folder-status';
+    document.getElementById('tb-status').textContent =
+      'Import et test de connexion de ' + ids.length + ' compte(s)… (20 s au plus)';
+    postIpc({ action: 'thunderbird_import', data: data });
+  });
+
+  function onThunderbirdScanned(result) {
+    var status = document.getElementById('tb-status');
+    if (!result.ok) {
+      status.textContent = '';
+      showTbAlert(result.message || 'Lecture du profil Thunderbird impossible');
+      return;
+    }
+    tbAccounts = result.accounts || [];
+    document.getElementById('tb-profile').textContent = 'Profil : ' + (result.profile || '');
+    var free = tbAccounts.filter(function (a) { return !a.already_configured; }).length;
+    status.textContent = tbAccounts.length + ' compte(s) IMAP, ' + free + ' à importer';
+    renderTbList();
+  }
+
+  function accountIndexByName(name) {
+    for (var i = 0; i < accounts.length; i++) {
+      if (accounts[i].name === name) return i;
+    }
+    return -1;
+  }
+
+  function renderTbReports(reports) {
+    var html = '';
+    for (var i = 0; i < reports.length; i++) {
+      var r = reports[i];
+      html += '<div class="tb-report ' + (r.ok ? 'ok' : 'failed') + '">';
+      html += '<span class="tb-report-name">' + (r.ok ? '✓ ' : '✗ ') + escapeHtml(r.name) + '</span>';
+      if (r.message) html += '<span class="tb-report-msg">' + escapeHtml(r.message) + '</span>';
+      if (!r.ok && accountIndexByName(r.name) >= 0) {
+        html += '<button type="button" class="btn-secondary tb-edit" data-name="' + escapeHtml(r.name) + '">Modifier</button>';
+      }
+      html += '</div>';
+    }
+    var el = document.getElementById('tb-reports');
+    el.innerHTML = html;
+    var edits = el.querySelectorAll('.tb-edit');
+    for (var e = 0; e < edits.length; e++) {
+      edits[e].addEventListener('click', function () {
+        var idx = accountIndexByName(this.getAttribute('data-name'));
+        if (idx < 0) return;
+        document.getElementById('tb-import-view').style.display = 'none';
+        showAccountDetail(idx);
+      });
+    }
+  }
+
+  function onThunderbirdImported(result) {
+    tbImporting = false;
+    // Written accounts appear in the list even when the panel was closed meanwhile.
+    if (Array.isArray(result.accounts)) {
+      accounts = result.accounts;
+      renderAccountList();
+    }
+    var status = document.getElementById('tb-status');
+    if (!result.ok) {
+      status.textContent = '';
+      if (result.primary_password_required) {
+        document.getElementById('tb-primary-field').style.display = '';
+        document.getElementById('tb-primary-password').focus();
+      }
+      showTbAlert(result.message || 'Import impossible');
+      refreshTbImportButton();
+      return;
+    }
+    var reports = result.reports || [];
+    var failed = reports.filter(function (r) { return !r.ok; }).length;
+    status.textContent = (reports.length - failed) + ' compte(s) importé(s) et vérifié(s)';
+    status.className = 'folder-status' + (failed ? '' : ' ok');
+    if (failed) {
+      showTbAlert(failed + ' compte(s) en échec. Un compte ajouté sans connexion vérifiée ' +
+        'n’exporte que INBOX : ouvrez-le avec « Modifier » pour corriger son mot de passe et ses dossiers.');
+    }
+    document.getElementById('tb-list').style.display = 'none';
+    document.getElementById('tb-primary-field').style.display = 'none';
+    document.getElementById('tb-import').style.display = 'none';
+    document.getElementById('tb-cancel').textContent = 'Fermer';
+    renderTbReports(reports);
+  }
+
   // Called by Rust via evaluate_script("config_result(<json>)") after each request
   // answered by the host, including connection tests (from a background thread).
   window.config_result = function (result) {
     var message = result.message || 'Erreur de sauvegarde';
     if (result.action === 'test_connection') {
       onConnectionTested(result);
+      return;
+    }
+    if (result.action === 'thunderbird_scan') {
+      onThunderbirdScanned(result);
+      return;
+    }
+    if (result.action === 'thunderbird_import') {
+      onThunderbirdImported(result);
       return;
     }
     if (result.action === 'move_account') {
@@ -1311,6 +1569,7 @@
       resetFolderTest();
       populateGeneral();
       document.getElementById('account-detail-view').style.display = 'none';
+      document.getElementById('tb-import-view').style.display = 'none';
       document.getElementById('account-list-wrap').style.display = '';
       renderAccountList();
       showReloadMsg(result.notice || 'Configuration rechargée depuis les fichiers.', true);
@@ -1347,6 +1606,7 @@
   }
 
   renderAccountList();
+  if (window.__START_VIEW__ === 'thunderbird') showThunderbirdImport();
 })();
 </script>
 </body>

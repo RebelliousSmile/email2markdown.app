@@ -54,6 +54,19 @@ pub fn get_thunderbird_profiles_dir() -> Option<PathBuf> {
     }
 }
 
+/// Profile an import reads when none is given: the marked default when it has
+/// a `prefs.js` (it may be an empty placeholder), else the first that has one.
+pub fn default_profile() -> Result<ThunderbirdProfile> {
+    let profiles = list_profiles().context("Could not find Thunderbird profiles")?;
+    let has_prefs = |p: &ThunderbirdProfile| p.path.join("prefs.js").exists();
+    profiles
+        .iter()
+        .find(|p| p.is_default && has_prefs(p))
+        .or_else(|| profiles.iter().find(|p| has_prefs(p)))
+        .cloned()
+        .context("No usable Thunderbird profiles found (no prefs.js)")
+}
+
 /// List available Thunderbird profiles
 pub fn list_profiles() -> Result<Vec<ThunderbirdProfile>> {
     let profiles_dir = get_thunderbird_profiles_dir()

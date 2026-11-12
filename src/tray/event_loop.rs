@@ -160,9 +160,10 @@ pub(super) fn run() -> Result<()> {
                 sender,
                 cancel_token,
             ),
-            Event::UserEvent(AppCommand::OpenConfig { sender }) => {
-                handle_open_config(target, &proxy, &mut windows, sender)
-            }
+            Event::UserEvent(AppCommand::OpenConfig {
+                sender,
+                initial_view,
+            }) => handle_open_config(target, &proxy, &mut windows, sender, initial_view),
             Event::UserEvent(AppCommand::OpenUpdate) => {
                 handle_open_update(target, &proxy, &mut windows, &result_sender)
             }
@@ -235,7 +236,7 @@ pub(super) fn run() -> Result<()> {
                 handle_menu_event_received(&id, result_sender.clone())
             }
             Event::UserEvent(AppCommand::ActionResultReceived(result)) => {
-                handle_action_result_received(&tray_icon, result)
+                handle_action_result_received(result)
             }
             _ => {}
         }
@@ -334,7 +335,20 @@ fn handle_open_config(
     proxy: &EventLoopProxy<AppCommand>,
     windows: &mut HashMap<WindowId, WState>,
     sender: Sender<ActionResult>,
+    initial_view: Option<&'static str>,
 ) {
+    let open = windows.values().find_map(|state| match state {
+        WState::Config(config) => Some(config),
+        _ => None,
+    });
+    if let Some(config) = open {
+        config.window.set_minimized(false);
+        config.window.set_focus();
+        if let Some(js) = initial_view.and_then(super::windows::show_view_script) {
+            let _ = config.webview.evaluate_script(js);
+        }
+        return;
+    }
     let ipc_sender = sender.clone();
     open_single_window(
         WindowKind::Config,
@@ -343,7 +357,7 @@ fn handle_open_config(
         &sender,
         || {
             let (window, webview, window_id) =
-                super::windows::build_config_window(target, proxy, ipc_sender)?;
+                super::windows::build_config_window(target, proxy, ipc_sender, initial_view)?;
             Ok((window_id, WState::Config(ConfigState { webview, window })))
         },
     );
@@ -587,13 +601,8 @@ fn rebuild_tray_menu(tray_icon: &Option<TrayIcon>) {
     }
 }
 
-fn handle_action_result_received(tray_icon: &Option<TrayIcon>, result: ActionResult) {
-    match &result {
-        ActionResult::Imported(_) => rebuild_tray_menu(tray_icon),
-        _ => {
-            show_notification(&result);
-        }
-    }
+fn handle_action_result_received(result: ActionResult) {
+    show_notification(&result);
 }
 
 fn format_progress_js(update: &ProgressUpdate) -> String {
@@ -640,11 +649,6 @@ fn format_progress_js(update: &ProgressUpdate) -> String {
 fn show_notification(result: &ActionResult) {
     let (title, description, level) = match result {
         ActionResult::Success(title, m) => (title.clone(), m.clone(), rfd::MessageLevel::Info),
-        ActionResult::Imported(m) => (
-            "Import Thunderbird".to_string(),
-            m.clone(),
-            rfd::MessageLevel::Info,
-        ),
         ActionResult::Error(m) => (
             "Email to Markdown - Erreur".to_string(),
             m.clone(),
