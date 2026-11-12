@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-12
+
+### Added
+
+- **Tester la connexion d'un compte** : le formulaire de compte a un bouton qui vérifie la connexion IMAP et liste les dossiers du serveur en cases à cocher. La boîte de réception et le dossier des envoyés sont cochés par défaut. Les dossiers spéciaux (corbeille, spam, brouillons, « Tous les messages »…) sont affichés grisés comme « toujours ignoré ». En cas d'échec, une alerte en donne la cause, Gmail compris. « Enregistrer quand même » garde le compte. Un mot de passe déjà enregistré n'est réutilisé que pour le même serveur et le même identifiant.
+- **Sélection des dossiers exportés** (`included_folders`) : quand elle est présente, seuls les dossiers cochés sont exportés, que ce soit par l'export complet, `--folder` ou la recherche contextuelle. Un dossier créé plus tard sur le serveur reste ignoré tant qu'il n'est pas coché. Les comptes existants gardent `ignored_folders` tant qu'aucune sélection n'est enregistrée.
+- **Import Thunderbird sélectif** : le menu « Importer depuis Thunderbird » et un bouton de l'onglet Comptes ouvrent un panneau des Paramètres. Ce panneau lit le profil par défaut et permet de cocher les comptes à importer. Il reprend les mots de passe enregistrés et ne demande le mot de passe principal que si le profil en a un ; ce mot de passe n'est pas conservé. La connexion de chaque compte est testée, puis un rapport par compte s'affiche. Un compte en échec est quand même importé, limité à la boîte de réception, avec un lien pour le corriger. Les comptes Gmail en OAuth2 sont signalés avec la marche à suivre pour créer un mot de passe d'application. Le `.env` ne reçoit que les mots de passe des comptes réellement ajoutés.
+
+### Removed
+
+- La boîte de dialogue d'import Thunderbird à trois boutons et sa fenêtre de progression, remplacées par le panneau des Paramètres.
+
 ## [0.28.1] - 2026-11-11
 
 ### Fixed
