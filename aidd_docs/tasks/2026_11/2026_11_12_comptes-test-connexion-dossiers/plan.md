@@ -1,6 +1,6 @@
 ---
 objective: "Depuis l'app, un compte ajouté à la main ou importé de Thunderbird voit sa connexion vérifiée, ses dossiers choisis par cases à cocher, et tout échec (Gmail compris) est signalé par une alerte qui en donne la cause."
-status: in-progress
+status: implemented
 ---
 
 # Plan: Test de connexion, dossiers à cocher et import Thunderbird sélectif
