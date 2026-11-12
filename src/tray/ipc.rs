@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::config::{self, AccountBehavior, RawAccount, Settings};
 use crate::date_layout::DateLayout;
+use crate::email_export::{describe_connection_error, probe_account, ListedFolder, PROBE_TIMEOUT};
 use crate::tray_actions::{action_open_config, ActionResult};
 
 /// Read a string field from a JSON object, `None` if missing or not a string.
@@ -1197,6 +1198,136 @@ fn reload_outcome(
     }
 }
 
+/// Password of `account_name` stored in `.env`, `_APPLICATION_PASSWORD` first.
+///
+/// Read from the file, not the process environment: the form must see the
+/// value just saved. A missing file or an empty value counts as absent.
+fn stored_password(env_path: &Path, account_name: &str) -> anyhow::Result<Option<String>> {
+    if !env_path.exists() {
+        return Ok(None);
+    }
+    let mut values = std::collections::HashMap::new();
+    for item in dotenvy::from_path_iter(env_path)
+        .with_context(|| format!("failed to open {}", env_path.display()))?
+    {
+        let (key, value) =
+            item.with_context(|| format!("failed to read {}", env_path.display()))?;
+        values.insert(key, value);
+    }
+    Ok(env_password_keys(account_name)
+        .iter()
+        .filter_map(|key| values.get(key))
+        .find(|value| !value.is_empty())
+        .cloned())
+}
+
+/// Password to probe with: the typed one, or the stored one when the form still
+/// targets the saved account (same name, server and username).
+///
+/// The guard keeps a stored password from being sent to a server the user just typed.
+fn probe_password(
+    data: &AccountData,
+    accounts_path: &Path,
+    env_path: &Path,
+) -> anyhow::Result<String> {
+    if let Some(typed) = data.password.as_deref().filter(|p| !p.is_empty()) {
+        return Ok(typed.to_string());
+    }
+    let missing = || {
+        anyhow::anyhow!(
+            "Saisissez le mot de passe pour tester la connexion \u{00e0} {}.",
+            data.server
+        )
+    };
+    if data.create {
+        return Err(missing());
+    }
+    let accounts = config::load_raw_accounts(accounts_path)
+        .with_context(|| format!("failed to load accounts from {}", accounts_path.display()))?;
+    let unchanged = accounts.iter().any(|a| {
+        a.name.eq_ignore_ascii_case(&data.account_name)
+            && a.server.eq_ignore_ascii_case(data.server.trim())
+            && a.username == data.username.trim()
+    });
+    if !unchanged {
+        return Err(missing());
+    }
+    stored_password(env_path, &data.account_name)?.ok_or_else(missing)
+}
+
+type ProbeFn = dyn FnOnce(&str, u16, &str, &str) -> anyhow::Result<Vec<ListedFolder>>;
+
+/// JSON answer to a `test_connection` request. Never carries the password.
+fn test_connection_with(
+    data: &AccountData,
+    accounts_path: &Path,
+    env_path: &Path,
+    probe: Box<ProbeFn>,
+) -> Value {
+    let server = data.server.trim();
+    let failure = |message: String| serde_json::json!({ "action": "test_connection", "ok": false, "message": message });
+    let password = match probe_password(data, accounts_path, env_path) {
+        Ok(password) => password,
+        Err(e) => return failure(format!("{e:#}")),
+    };
+    match probe(server, data.port, data.username.trim(), &password) {
+        Ok(folders) => serde_json::json!({
+            "action": "test_connection",
+            "ok": true,
+            "folders": folders
+                .iter()
+                .map(|f| serde_json::json!({
+                    "name": f.name.display,
+                    "role": f.role,
+                    "depth": f.depth,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        Err(e) => failure(describe_connection_error(server, &e)),
+    }
+}
+
+/// Work of a settings-window message that must not run on the IPC handler.
+///
+/// The handler runs on the event loop thread: a network call there freezes
+/// every tray window until it returns. `None` for every synchronous action.
+/// The reply echoes `request_id`, so the form drops the answer of a test made
+/// obsolete by an edit.
+pub(super) fn background_config_job(body: &str) -> Option<Box<dyn FnOnce() -> String + Send>> {
+    let msg: ConfigIpcMessage = serde_json::from_str(body).ok()?;
+    if msg.action != "test_connection" {
+        return None;
+    }
+    let request_id = msg.data.as_ref().and_then(|d| d.get("request_id")).cloned();
+    let parsed = msg
+        .data
+        .ok_or_else(|| anyhow::anyhow!("donn\u{00e9}es absentes de la demande de test"))
+        .and_then(|raw| {
+            serde_json::from_value::<AccountData>(raw).context("Compte re\u{00e7}u illisible")
+        });
+    Some(Box::new(move || {
+        let mut reply = match parsed {
+            Ok(data) => test_connection_with(
+                &data,
+                &config::accounts_yaml_path(),
+                &config::env_file_path(),
+                Box::new(|server, port, username, password| {
+                    probe_account(server, port, username, password, PROBE_TIMEOUT)
+                }),
+            ),
+            Err(e) => serde_json::json!({
+                "action": "test_connection",
+                "ok": false,
+                "message": format!("Test impossible : {:#}", e),
+            }),
+        };
+        if let (Some(id), Some(fields)) = (request_id, reply.as_object_mut()) {
+            fields.insert("request_id".to_string(), id);
+        }
+        reply.to_string()
+    }))
+}
+
 /// Decode and dispatch one settings-window IPC message.
 pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
     let msg: ConfigIpcMessage = match serde_json::from_str(body) {
@@ -1347,15 +1478,17 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails,
-        frontmatter_list, move_account, move_outcome, relative_destination, reload_outcome,
-        remove_env_passwords, save_account, save_outcome, save_settings, scan_destinations,
-        set_env_password, state_json_with, validate_new_account_name, AccountData,
-        DestGuiIpcResult, RouteApplyReport, RouteDecisionRow, SettingsData,
+        apply_route_decisions, background_config_job, dated_dest_path, delete_account,
+        delete_staged_emails, frontmatter_list, move_account, move_outcome, relative_destination,
+        reload_outcome, remove_env_passwords, save_account, save_outcome, save_settings,
+        scan_destinations, set_env_password, state_json_with, stored_password,
+        test_connection_with, validate_new_account_name, AccountData, DestGuiIpcResult,
+        RouteApplyReport, RouteDecisionRow, SettingsData,
     };
     use crate::config::{load_raw_accounts, RawAccount, Settings};
     use crate::date_layout::DateLayout;
     use crate::destinations::{DestinationEntry, DestinationsConfig};
+    use crate::email_export::{FolderName, FolderRole, ListedFolder};
     use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -2343,5 +2476,141 @@ hi
         fs::write(&path, "---\nattachments: []\n---\nbody\n").unwrap();
 
         assert!(frontmatter_list(&fs::read_to_string(&path).unwrap(), "attachments").is_empty());
+    }
+
+    fn perso_probe_data(server: &str, password: Option<&str>) -> AccountData {
+        serde_json::from_value(serde_json::json!({
+            "account_name": "Perso",
+            "server": server,
+            "port": 993,
+            "username": "perso@example.org",
+            "password": password,
+        }))
+        .unwrap()
+    }
+
+    fn perso_env(temp: &TempDir) -> (PathBuf, PathBuf) {
+        let (accounts_path, _, env_path) = account_files(temp);
+        fs::write(&accounts_path, VALID_ACCOUNTS).unwrap();
+        fs::write(
+            &env_path,
+            "PERSO_PASSWORD='plain'\nPERSO_APPLICATION_PASSWORD='app'\n",
+        )
+        .unwrap();
+        (accounts_path, env_path)
+    }
+
+    #[test]
+    fn test_stored_password_with_application_password() {
+        let temp = TempDir::new().unwrap();
+        let (_, env_path) = perso_env(&temp);
+
+        assert_eq!(
+            stored_password(&env_path, "Perso").unwrap().as_deref(),
+            Some("app")
+        );
+    }
+
+    #[test]
+    fn test_stored_password_without_env_file() {
+        let temp = TempDir::new().unwrap();
+
+        assert_eq!(
+            stored_password(&temp.path().join(".env"), "Perso").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_test_connection_with_changed_server_skips_probe() {
+        let temp = TempDir::new().unwrap();
+        let (accounts_path, env_path) = perso_env(&temp);
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = called.clone();
+
+        let reply = test_connection_with(
+            &perso_probe_data("imap.other.example", None),
+            &accounts_path,
+            &env_path,
+            Box::new(move |_, _, _, _| {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(Vec::new())
+            }),
+        );
+
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst), "{reply}");
+        assert!(reply["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("Saisissez le mot de passe")));
+    }
+
+    #[test]
+    fn test_test_connection_with_unchanged_account_uses_stored_password() {
+        let temp = TempDir::new().unwrap();
+        let (accounts_path, env_path) = perso_env(&temp);
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let seen = sent.clone();
+
+        let reply = test_connection_with(
+            &perso_probe_data("imap.example.org", Some("")),
+            &accounts_path,
+            &env_path,
+            Box::new(move |_, _, _, password| {
+                *seen.lock().unwrap() = password.to_string();
+                Ok(vec![ListedFolder {
+                    name: FolderName {
+                        raw: "INBOX".into(),
+                        display: "INBOX".into(),
+                    },
+                    role: FolderRole::Inbox,
+                    depth: 0,
+                }])
+            }),
+        );
+
+        assert_eq!(*sent.lock().unwrap(), "app");
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "action": "test_connection",
+                "ok": true,
+                "folders": [{"name": "INBOX", "role": "inbox", "depth": 0}],
+            })
+        );
+    }
+
+    #[test]
+    fn test_test_connection_with_failure_hides_password() {
+        let temp = TempDir::new().unwrap();
+        let (accounts_path, env_path) = perso_env(&temp);
+
+        let reply = test_connection_with(
+            &perso_probe_data("imap.example.org", Some("s3cret-typed")),
+            &accounts_path,
+            &env_path,
+            Box::new(|_, _, _, password| anyhow::bail!("LOGIN refused ({} chars)", password.len())),
+        );
+
+        assert_eq!(reply["ok"], false);
+        assert!(reply["message"].as_str().is_some_and(|m| !m.is_empty()));
+        assert!(!reply.to_string().contains("s3cret-typed"));
+    }
+
+    #[test]
+    fn test_background_config_job_with_sync_action() {
+        assert!(background_config_job(r#"{"action":"reload"}"#).is_none());
+    }
+
+    #[test]
+    fn test_background_config_job_with_request_id() {
+        let job = background_config_job(
+            r#"{"action":"test_connection","data":{"request_id":7,"account_name":"Perso"}}"#,
+        )
+        .unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&job()).unwrap();
+        assert_eq!(
+            (reply["ok"].clone(), reply["request_id"].clone()),
+            (serde_json::json!(false), serde_json::json!(7))
+        );
     }
 }

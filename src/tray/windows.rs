@@ -239,6 +239,17 @@ pub(super) fn build_config_window(
         None,
         move |req: wry::http::Request<String>| {
             let body = req.body().clone();
+            // Network work (connection test) runs off the event loop thread:
+            // its answer comes back later through the same `config_result`.
+            if let Some(job) = super::ipc::background_config_job(&body) {
+                let proxy_job = proxy_ipc.clone();
+                std::thread::spawn(move || {
+                    let reply = job();
+                    let js = format!("config_result({})", escape_json_for_script(&reply));
+                    let _ = proxy_job.send_event(AppCommand::EvalScript { window_id, js });
+                });
+                return;
+            }
             let outcome = super::ipc::handle_config_ipc(&body);
             if let Some(r) = outcome.result {
                 let _ = sender.send(r);
@@ -962,6 +973,13 @@ mod tests {
     fn test_reply_changed_accounts_with_move_account_failed() {
         assert!(!reply_changed_accounts(
             r#"{"action":"move_account","ok":false,"message":"x"}"#
+        ));
+    }
+
+    #[test]
+    fn test_reply_changed_accounts_with_test_connection() {
+        assert!(!reply_changed_accounts(
+            r#"{"action":"test_connection","ok":true,"folders":[]}"#
         ));
     }
     use std::sync::atomic::AtomicBool;

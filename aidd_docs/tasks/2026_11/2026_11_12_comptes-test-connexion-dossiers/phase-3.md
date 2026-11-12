@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Instruction: Formulaire de compte — bouton de test et dossiers à cocher

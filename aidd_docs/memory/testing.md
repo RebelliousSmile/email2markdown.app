@@ -11,8 +11,8 @@
 
 ## Test Coverage
 
-- **773 tests without `tray`, 883 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
-  - `--all-features`: 511 lib unit, 1 bin, 350 `rust_tests.rs`, 21 `imap_integration.rs` (19 `#[ignore]`)
+- **773 tests without `tray`, 891 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
+  - `--all-features`: 519 lib unit, 1 bin, 350 `rust_tests.rs`, 21 `imap_integration.rs` (19 `#[ignore]`)
   - `imap_integration.rs` not ignored: `probe_account_on_closed_port_*`, `probe_account_on_silent_server_*` (local `TcpListener`, no Docker)
 - Not covered automatically: `thunderbird.rs` (needs Thunderbird), tray event loop and windows (needs GUI), updater against GitHub, Gmail deletion
 - `ImapExporter` covered by the Dovecot tests only (export, purge, contextual search, deletion outcomes, server cleanup)
@@ -43,6 +43,8 @@
   - Inject `window.ipc = { postMessage }` stub recording sent messages
   - Serve over `python -m http.server`: Playwright blocks `file:`
   - Simulate replies with `window.config_result({...})` — takes an object, not a JSON string
+  - Page functions are closure-scoped: drive through DOM clicks and `input` events, only `config_result` is global
+  - Folder picker scenarios: saved selection summary, `request_id` stale answer, creation test-before-save, "Enregistrer quand même"
   - Playwright MCP writes only under the project root (`.playwright-mcp/`): delete it afterwards
 - Python tools: always run `python -m pytest tools/tests`, never bare `pytest` from the repository root
   **Why:** root collection walks `target/` (tens of GB) and `archive/`, takes minutes and ends in collection errors
@@ -71,8 +73,8 @@
 | `tray_actions::tests` (inline) | `clean_confirmation_text`, contextual summary, `set_export_dir_in`/`set_notes_dir_in` |
 | `email_export::tests` (inline) | `html_to_markdown` signature `cid:` images (Gmail, Outlook, Thunderbird, look-alike class kept), `extract_body` HTML choice, `extract_attachments`, quarantine (counter, collisions, none without deletion, discard on failed export, `discard_quarantined`, `quarantine_warning`), issue #14 E2E with a 30 KB screenshot, `describe_connection_error` (Gmail, other server, unreachable, timeout), `folder_role`, `folder_depth` |
 | `tray_actions::tests` (inline, `--features tray`) | `is_excluded_staging_dir` (incl. `_skipped`), `contextual_summary_message`, settings writers |
-| `tray::ipc::tests` (inline, `--features tray`) | `move_account` (up, down case-insensitive, edge no-write, unknown name, bad direction), `move_outcome` (new order, missing direction), `delete_account` |
-| `tray::windows::tests` (inline, `--features tray`) | `allow_navigation`, `escape_json_for_script`, `reply_changed_accounts` (`move_account` ok → true, failed → false) |
+| `tray::ipc::tests` (inline, `--features tray`) | `move_account` (up, down case-insensitive, edge no-write, unknown name, bad direction), `move_outcome` (new order, missing direction), `delete_account`, `stored_password` (application password first, no `.env`), `test_connection_with` (changed server skips probe, unchanged account uses stored password, failure hides password), `background_config_job` (sync action → None, `request_id` echoed) |
+| `tray::windows::tests` (inline, `--features tray`) | `allow_navigation`, `escape_json_for_script`, `reply_changed_accounts` (`move_account` ok → true, failed → false, `test_connection` → false) |
 | `network_tests` | `NetworkConfig::default`, `ProgressIndicator::new`/`update`/`inc` |
 
 ## Test Execution
