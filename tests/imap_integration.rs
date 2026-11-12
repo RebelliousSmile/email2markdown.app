@@ -32,6 +32,7 @@ fn account(username: &str) -> Account {
         port: 1993,
         username: username.into(),
         password: Some("password".into()),
+        included_folders: None,
         ignored_folders: vec![],
         export_directory: String::new(),
         quote_depth: 1,
@@ -488,6 +489,7 @@ fn gmail_targeted_deletion_fixture() {
         port: 993,
         username,
         password: Some(password),
+        included_folders: None,
         ignored_folders: vec![
             "[Gmail]/Spam".into(),
             "[Gmail]/Trash".into(),
@@ -837,6 +839,42 @@ fn probe_account_lists_folders_with_roles_and_depths() {
     assert_eq!(role_of("Projets"), (FolderRole::Regular, 0));
     assert_eq!(role_of(&factures), (FolderRole::Regular, 1));
     assert_eq!(folders.len(), 5, "no other folder expected: {folders:?}");
+}
+
+/// Export `probe` restricted to `included`; returns the exported note paths.
+fn export_probe_with(included: &[&str]) -> (tempfile::TempDir, Vec<std::path::PathBuf>) {
+    let (temp, paths, mut fixture_account) = export_dir("probe");
+    fixture_account.included_folders = Some(included.iter().map(|s| s.to_string()).collect());
+    let mut exporter = ImapExporter::new(fixture_account, false);
+    exporter.connect().unwrap();
+    let (_, decisions) = exporter
+        .export_account_in(&paths, None, None, None)
+        .unwrap();
+    exporter.disconnect().ok();
+    let notes = decisions.into_iter().map(|(note, _)| note).collect();
+    (temp, notes)
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn export_with_included_folders_skips_unticked_folders() {
+    require_fixture();
+    let (temp, notes) = export_probe_with(&["INBOX"]);
+    let export = temp.path().join("export");
+
+    assert!(!notes.is_empty(), "INBOX messages must be exported");
+    assert!(export.join("INBOX").is_dir());
+    assert!(!export.join("Projets").exists(), "Projets is not ticked");
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn export_with_vanished_included_folder_still_succeeds() {
+    require_fixture();
+    let (temp, notes) = export_probe_with(&["INBOX", "Archives2019"]);
+
+    assert!(!notes.is_empty(), "INBOX messages must still be exported");
+    assert!(!temp.path().join("export").join("Archives2019").exists());
 }
 
 #[test]

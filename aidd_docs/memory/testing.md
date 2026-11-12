@@ -11,12 +11,13 @@
 
 ## Test Coverage
 
-- **762 tests without `tray`, 868 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
-  - `--all-features`: 505 lib unit, 1 bin, 343 `rust_tests.rs`, 19 `imap_integration.rs` (17 `#[ignore]`)
+- **773 tests without `tray`, 883 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
+  - `--all-features`: 511 lib unit, 1 bin, 350 `rust_tests.rs`, 21 `imap_integration.rs` (19 `#[ignore]`)
   - `imap_integration.rs` not ignored: `probe_account_on_closed_port_*`, `probe_account_on_silent_server_*` (local `TcpListener`, no Docker)
 - Not covered automatically: `thunderbird.rs` (needs Thunderbird), tray event loop and windows (needs GUI), updater against GitHub, Gmail deletion
 - `ImapExporter` covered by the Dovecot tests only (export, purge, contextual search, deletion outcomes, server cleanup)
 - Connection probe on Dovecot user `probe`: `probe_account_*` (roles, depths, wrong password), `list_folders_keeps_every_folder_but_special_ones`
+- Folder selection: `export_with_included_folders_*`, `export_with_vanished_included_folder_*` (Dovecot `probe`), `exports_folder` / `included_folders` in `config_tests`, `save_account_*` inline in `tray/ipc.rs`
 - Signature filter + quarantine covered end to end on Dovecot (#19): `export_seed_corpus_*`
 - `tray_actions.rs` pure helpers covered inline under `--features tray`
 

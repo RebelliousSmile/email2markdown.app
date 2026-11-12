@@ -310,6 +310,7 @@ mod config_tests {
                 server: "imap.work.com".to_string(),
                 port: 993,
                 username: "user@work.com".to_string(),
+                included_folders: None,
                 ignored_folders: vec!["Spam".to_string(), "Trash".to_string()],
             },
             RawAccount {
@@ -317,6 +318,7 @@ mod config_tests {
                 server: "imap.personal.com".to_string(),
                 port: 993,
                 username: "me@personal.com".to_string(),
+                included_folders: None,
                 ignored_folders: vec![],
             },
         ];
@@ -338,6 +340,144 @@ mod config_tests {
         assert!(loaded[1].ignored_folders.is_empty());
     }
 
+    /// Load one account named Perso whose accounts.yaml entry ends with `folders`.
+    fn perso_account(folders: &str) -> email_to_markdown::config::Account {
+        let temp = TempDir::new().expect("create tempdir");
+        let accounts = temp.path().join("accounts.yaml");
+        let settings = temp.path().join("settings.yaml");
+        std::fs::write(
+            &accounts,
+            format!(
+                "accounts:
+  - name: Perso
+    server: imap.example.org
+    port: 993
+    username: perso@example.org
+{folders}"
+            ),
+        )
+        .expect("write accounts");
+        let export = temp
+            .path()
+            .join("export")
+            .to_string_lossy()
+            .replace('\\', "/");
+        std::fs::write(
+            &settings,
+            format!(
+                "export_base_dir: '{export}'
+"
+            ),
+        )
+        .expect("write settings");
+        Config::load_with_settings(&accounts, &settings)
+            .expect("load config")
+            .accounts
+            .remove(0)
+    }
+
+    #[test]
+    fn test_raw_account_included_folders_round_trip() {
+        let temp = TempDir::new().expect("create tempdir");
+        let path = temp.path().join("accounts.yaml");
+        std::fs::write(
+            &path,
+            "accounts:
+  - name: Perso
+    server: imap.example.org
+    port: 993
+    username: perso@example.org
+    included_folders:
+      - INBOX
+      - Sent
+",
+        )
+        .expect("write accounts");
+
+        let loaded = load_raw_accounts(&path).expect("load_raw_accounts");
+        save_accounts(&loaded, &path).expect("save_accounts");
+
+        let reloaded = load_raw_accounts(&path).expect("reload");
+        assert_eq!(
+            reloaded[0].included_folders,
+            Some(vec!["INBOX".to_string(), "Sent".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_raw_account_without_included_folders_is_not_written() {
+        let temp = TempDir::new().expect("create tempdir");
+        let path = temp.path().join("accounts.yaml");
+        std::fs::write(
+            &path,
+            "accounts:
+  - name: Perso
+    server: imap.example.org
+    port: 993
+    username: perso@example.org
+    ignored_folders:
+      - Spam
+",
+        )
+        .expect("write accounts");
+
+        let loaded = load_raw_accounts(&path).expect("load_raw_accounts");
+        save_accounts(&loaded, &path).expect("save_accounts");
+
+        let written = std::fs::read_to_string(&path).expect("read back");
+        assert!(!written.contains("included_folders"), "{written}");
+        assert!(written.contains("- Spam"), "{written}");
+    }
+
+    #[test]
+    fn test_exports_folder_with_included_folders_skips_unlisted() {
+        let account = perso_account(
+            "    included_folders:
+      - INBOX
+      - Sent
+",
+        );
+        assert!(!account.exports_folder("Projets"));
+    }
+
+    #[test]
+    fn test_exports_folder_with_included_inbox_ignores_case() {
+        let account = perso_account(
+            "    included_folders:
+      - INBOX
+",
+        );
+        assert!(account.exports_folder("inbox"));
+    }
+
+    #[test]
+    fn test_exports_folder_without_included_folders_exports_all() {
+        let account = perso_account("");
+        assert!(account.exports_folder("Projets"));
+    }
+
+    #[test]
+    fn test_exports_folder_with_included_overrides_ignored() {
+        let account = perso_account(
+            "    included_folders:
+      - Spam
+    ignored_folders:
+      - Spam
+",
+        );
+        assert!(account.exports_folder("Spam"));
+    }
+
+    #[test]
+    fn test_exports_folder_without_included_honours_ignored() {
+        let account = perso_account(
+            "    ignored_folders:
+      - Spam
+",
+        );
+        assert!(!account.exports_folder("Spam"));
+    }
+
     #[test]
     fn test_save_accounts_preserves_order() {
         let temp = TempDir::new().expect("create tempdir");
@@ -349,6 +489,7 @@ mod config_tests {
                 server: "imap.a.com".to_string(),
                 port: 993,
                 username: "a@a.com".to_string(),
+                included_folders: None,
                 ignored_folders: vec![],
             },
             RawAccount {
@@ -356,6 +497,7 @@ mod config_tests {
                 server: "imap.b.com".to_string(),
                 port: 993,
                 username: "b@b.com".to_string(),
+                included_folders: None,
                 ignored_folders: vec![],
             },
             RawAccount {
@@ -363,6 +505,7 @@ mod config_tests {
                 server: "imap.c.com".to_string(),
                 port: 993,
                 username: "c@c.com".to_string(),
+                included_folders: None,
                 ignored_folders: vec![],
             },
         ];
@@ -3260,6 +3403,7 @@ mod contextual_export_tests {
             port: 993,
             username: "work@example.com".into(),
             password: Some("unused".into()),
+            included_folders: None,
             ignored_folders: vec![],
             export_directory: target.to_string_lossy().into_owned(),
             quote_depth: 1,
@@ -6082,6 +6226,7 @@ mod thunderbird_tests {
             port: 993,
             username: format!("{name}@example.com"),
             password: None,
+            included_folders: None,
             ignored_folders: Vec::new(),
             export_directory: String::new(),
             quote_depth: 1,
@@ -6236,6 +6381,7 @@ mod gmail_seed_tests {
             port: 993,
             username: "bob@example.com".into(),
             password: Some("unused".into()),
+            included_folders: None,
             ignored_folders: vec![],
             export_directory: export.to_string_lossy().into_owned(),
             quote_depth: 5,

@@ -224,6 +224,7 @@ mod tests {
             username: "me".into(),
             password: password.map(str::to_string),
             export_directory: String::new(),
+            included_folders: None,
             ignored_folders: Vec::new(),
             quote_depth: 1,
             skip_existing: true,

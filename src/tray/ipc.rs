@@ -766,8 +766,12 @@ struct AccountData {
     server: String,
     port: u16,
     username: String,
+    /// Ticked folders; `Some` replaces `ignored_folders` in `accounts.yaml`.
     #[serde(default)]
-    ignored_folders: Vec<String>,
+    included_folders: Option<Vec<String>>,
+    /// `Option`, not `Vec`: an absent key must keep the saved list, not empty it.
+    #[serde(default)]
+    ignored_folders: Option<Vec<String>>,
     #[serde(default)]
     delete_after_export: Option<bool>,
     #[serde(default)]
@@ -1040,7 +1044,12 @@ fn save_account(
             acct.server = data.server.clone();
             acct.port = data.port;
             acct.username = data.username.clone();
-            acct.ignored_folders = data.ignored_folders.clone();
+            if let Some(included) = &data.included_folders {
+                acct.included_folders = Some(included.clone());
+                acct.ignored_folders.clear();
+            } else if let Some(ignored) = &data.ignored_folders {
+                acct.ignored_folders = ignored.clone();
+            }
             found = true;
             break;
         }
@@ -1051,7 +1060,11 @@ fn save_account(
             server: data.server.clone(),
             port: data.port,
             username: data.username.clone(),
-            ignored_folders: data.ignored_folders.clone(),
+            included_folders: data.included_folders.clone(),
+            ignored_folders: match &data.included_folders {
+                Some(_) => Vec::new(),
+                None => data.ignored_folders.clone().unwrap_or_default(),
+            },
         });
     }
 
@@ -1825,6 +1838,80 @@ hi
         )
     }
 
+    const ACCOUNT_WITH_FOLDERS: &str = "accounts:
+  - name: Perso
+    server: imap.example.org
+    port: 993
+    username: perso@example.org
+    included_folders:
+      - Projets
+    ignored_folders:
+      - Spam
+";
+
+    #[test]
+    fn test_save_account_with_included_folders_clears_ignored() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, _) = account_files(&temp);
+        fs::write(&accounts, ACCOUNT_WITH_FOLDERS).unwrap();
+        let mut data = account_data("Perso");
+        data.included_folders = Some(vec!["INBOX".to_string()]);
+
+        save_account(data, &accounts, &settings).unwrap();
+
+        let saved = &load_raw_accounts(&accounts).unwrap()[0];
+        assert_eq!(saved.included_folders, Some(vec!["INBOX".to_string()]));
+        assert!(saved.ignored_folders.is_empty());
+    }
+
+    #[test]
+    fn test_save_account_without_selection_keeps_folder_keys() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, _) = account_files(&temp);
+        fs::write(&accounts, ACCOUNT_WITH_FOLDERS).unwrap();
+
+        save_account(account_data("Perso"), &accounts, &settings).unwrap();
+
+        let saved = &load_raw_accounts(&accounts).unwrap()[0];
+        assert_eq!(saved.included_folders, Some(vec!["Projets".to_string()]));
+        assert_eq!(saved.ignored_folders, ["Spam"]);
+    }
+
+    #[test]
+    fn test_save_account_with_ignored_folders_keeps_included() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, _) = account_files(&temp);
+        fs::write(&accounts, ACCOUNT_WITH_FOLDERS).unwrap();
+        let mut data = account_data("Perso");
+        data.ignored_folders = Some(vec!["Trash".to_string()]);
+
+        save_account(data, &accounts, &settings).unwrap();
+
+        let saved = &load_raw_accounts(&accounts).unwrap()[0];
+        assert_eq!(saved.ignored_folders, ["Trash"]);
+        assert_eq!(saved.included_folders, Some(vec!["Projets".to_string()]));
+    }
+
+    #[test]
+    fn test_save_account_with_new_account_and_included_folders() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, _) = account_files(&temp);
+        fs::write(&accounts, VALID_ACCOUNTS).unwrap();
+        let mut data = account_data("Pro");
+        data.create = true;
+        data.included_folders = Some(vec!["INBOX".to_string(), "Sent".to_string()]);
+
+        save_account(data, &accounts, &settings).unwrap();
+
+        let saved = load_raw_accounts(&accounts).unwrap();
+        let pro = saved.iter().find(|a| a.name == "Pro").unwrap();
+        assert_eq!(
+            pro.included_folders,
+            Some(vec!["INBOX".to_string(), "Sent".to_string()])
+        );
+        assert!(pro.ignored_folders.is_empty());
+    }
+
     #[test]
     fn test_delete_account_removes_entry_override_and_passwords() {
         let temp = TempDir::new().unwrap();
@@ -2039,6 +2126,7 @@ hi
             server: "imap.example.org".to_string(),
             port: 993,
             username: "u".to_string(),
+            included_folders: None,
             ignored_folders: Vec::new(),
         }];
 

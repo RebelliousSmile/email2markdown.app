@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Instruction: Liste d'inclusion des dossiers et sélection à l'export

@@ -2306,7 +2306,7 @@ impl ImapExporter {
     /// List the folders the export walks.
     ///
     /// Returns the raw IMAP name (modified UTF-7, used for `SELECT`) and a decoded
-    /// display name (used for local paths, `ignored_folders` matching and logging).
+    /// display name (used for local paths, folder selection (`Account::exports_folder`) and logging).
     /// Special-use folders (trash, junk, drafts, all mail, flagged, important) are
     /// left out: [`list_all_folders`](Self::list_all_folders) keeps them with their role.
     pub fn list_folders(&mut self) -> Result<Vec<FolderName>> {
@@ -2358,14 +2358,10 @@ impl ImapExporter {
             .has_str("X-GM-EXT-1");
         let folders = self.list_folders()?;
         let account_name = self.account.name.clone();
-        let ignored_folders = self.account.ignored_folders.clone();
         let mut candidates = Vec::new();
 
         for folder in folders {
-            if ignored_folders
-                .iter()
-                .any(|ignored| ignored == &folder.display)
-            {
+            if !self.account.exports_folder(&folder.display) {
                 continue;
             }
             let session = self.session.as_mut().context("Not connected")?;
@@ -2491,16 +2487,13 @@ impl ImapExporter {
             .has_str("X-GM-EXT-1");
         let folders = self.list_folders()?;
         let base_export_directory = PathBuf::from(&self.account.export_directory);
-        let ignored_folders = self.account.ignored_folders.clone();
         let mut seen_provider_ids = HashSet::new();
         let mut entries = Vec::new();
 
         for folder in folders {
             let selected = match only_folder {
                 Some(name) => folder.display == name || folder.raw == name,
-                None => !ignored_folders
-                    .iter()
-                    .any(|ignored| ignored == &folder.display),
+                None => self.account.exports_folder(&folder.display),
             };
             if !selected {
                 continue;
@@ -3527,18 +3520,22 @@ impl ImapExporter {
                 None
             };
 
-            let folders = self.list_folders()?;
+            let all_folders = self.list_folders()?;
+            for missing in missing_included_folders(&self.account, &all_folders) {
+                println!("Warning: Selected folder not found on server: {missing}");
+            }
+            // Selection matched against the decoded display name
+            let (folders, ignored): (Vec<_>, Vec<_>) = all_folders
+                .into_iter()
+                .partition(|folder| self.account.exports_folder(&folder.display));
+            for folder in &ignored {
+                println!("Ignored folder: {}", folder.display);
+            }
             let total_folders = folders.len();
             let mut folder_index = 0usize;
             let batch_size = self.account.batch_size;
 
             for folder in folders {
-                // Skip ignored folders (matched against the decoded display name)
-                if self.account.ignored_folders.contains(&folder.display) {
-                    println!("Ignored folder: {}", folder.display);
-                    continue;
-                }
-
                 folder_index += 1;
                 if let Some(cb) = on_progress {
                     if batch_size > 0 {
@@ -3724,11 +3721,28 @@ pub fn purge_summary<'a>(stats: impl IntoIterator<Item = &'a ExportStats>) -> St
 ///
 /// `raw` is the modified UTF-7 name as sent by the server and must be used
 /// for IMAP commands like `SELECT`. `display` is the decoded UTF-8 form used
-/// for local paths, logging and matching against `ignored_folders`.
+/// for local paths, logging and folder selection (`Account::exports_folder`).
 #[derive(Debug, Clone)]
 pub struct FolderName {
     pub raw: String,
     pub display: String,
+}
+
+/// Names of `included_folders` the server no longer lists (renamed or deleted).
+fn missing_included_folders<'a>(account: &'a Account, listed: &[FolderName]) -> Vec<&'a str> {
+    account
+        .included_folders
+        .iter()
+        .flatten()
+        .filter(|name| {
+            !listed.iter().any(|folder| {
+                folder.display == **name
+                    || (name.eq_ignore_ascii_case("INBOX")
+                        && folder.display.eq_ignore_ascii_case("INBOX"))
+            })
+        })
+        .map(String::as_str)
+        .collect()
 }
 
 /// An authenticated IMAP session, whatever the transport.
@@ -4940,6 +4954,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             username: "user@example.com".to_string(),
             password: None,
             export_directory: export_dir.to_string(),
+            included_folders: None,
             ignored_folders: vec![],
             quote_depth: 0,
             skip_existing: false,
@@ -4949,6 +4964,33 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             cleanup_empty_dirs: false,
             batch_size: 0,
         }
+    }
+
+    #[test]
+    fn test_missing_included_folders_with_vanished_folder() {
+        let mut account = make_account("out");
+        account.included_folders = Some(vec![
+            "inbox".to_string(),
+            "Projets".to_string(),
+            "Archives2019".to_string(),
+        ]);
+        let listed = [
+            inbox(),
+            FolderName {
+                raw: "Projets".to_string(),
+                display: "Projets".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            missing_included_folders(&account, &listed),
+            ["Archives2019"]
+        );
+    }
+
+    #[test]
+    fn test_missing_included_folders_without_selection() {
+        assert!(missing_included_folders(&make_account("out"), &[inbox()]).is_empty());
     }
 
     #[test]

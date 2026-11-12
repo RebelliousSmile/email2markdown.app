@@ -236,6 +236,7 @@ fn parse_prefs_js(content: &str) -> Result<Vec<Account>> {
             username,
             password: None, // Passwords are stored separately in Thunderbird
             export_directory: format!("./exports/{}", safe_name),
+            included_folders: None,
             ignored_folders: default_ignored_folders(&name),
             quote_depth: 1,
             skip_existing: true,
@@ -347,6 +348,7 @@ pub fn write_accounts_merged(accounts: &[Account], path: &Path) -> Result<Import
                 server: account.server.clone(),
                 port: account.port,
                 username: account.username.clone(),
+                included_folders: account.included_folders.clone(),
                 ignored_folders: account.ignored_folders.clone(),
             });
         }
@@ -733,6 +735,7 @@ mod tests {
             port: 993,
             username: format!("{name}@example.com"),
             password: None,
+            included_folders: None,
             ignored_folders: vec!["Spam".to_string()],
             export_directory: String::new(),
             quote_depth: 1,
