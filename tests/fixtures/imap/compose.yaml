@@ -18,6 +18,14 @@ services:
           mkdir -p /srv/mail/$$user/Maildir/cur /srv/mail/$$user/Maildir/new /srv/mail/$$user/Maildir/tmp
           cp /seed/gmail/*.eml /srv/mail/$$user/Maildir/new/
         done
+        # Connection probe and folder picker: special-use folders, a regular
+        # folder holding one message, and a child of INBOX (Maildir++ layout,
+        # listed as INBOX/Factures with the namespace separator).
+        for folder in "" .Sent .Trash .Projets .INBOX.Factures; do
+          mkdir -p /srv/mail/probe/Maildir/$$folder/cur /srv/mail/probe/Maildir/$$folder/new /srv/mail/probe/Maildir/$$folder/tmp
+        done
+        cp /seed/*.eml /srv/mail/probe/Maildir/new/
+        cp /seed/01-from-alice.eml /srv/mail/probe/Maildir/.Projets/new/
         chmod -R a+rwX /srv/mail
     volumes:
       - mail:/srv/mail
@@ -32,6 +40,7 @@ services:
       - "1993:993"
     volumes:
       - mail:/srv/mail
+      - ./dovecot.conf:/etc/dovecot/dovecot.conf:ro
       - ./99-contextual-test.conf:/etc/dovecot/conf.d/99-contextual-test.conf:ro
 
 volumes:

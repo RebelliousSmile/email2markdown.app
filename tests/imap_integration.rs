@@ -2,7 +2,9 @@ use email_to_markdown::config::{Account, AppPaths};
 use email_to_markdown::contextual_export::{
     build_deletion_batch, ConversionStatus, DeletionOutcome, LocalSourceProof,
 };
-use email_to_markdown::email_export::ImapExporter;
+use email_to_markdown::email_export::{
+    describe_connection_error, probe_account, FolderRole, ImapExporter, ListedFolder, PROBE_TIMEOUT,
+};
 use email_to_markdown::handled::{LedgerProofs, PurgeMatch, SeenHandled};
 use email_to_markdown::route::MatchRule;
 use email_to_markdown::server_cleanup::clean_server_in;
@@ -797,4 +799,113 @@ fn export_seed_corpus_with_deletion_quarantines_and_guards() {
         .collect();
     wanted_ids.sort();
     assert_eq!(inbox_message_ids("gmail-seed-delete"), wanted_ids);
+}
+
+/// Hierarchy delimiter the fixture server declares for INBOX.
+fn inbox_delimiter(username: &str) -> String {
+    let mut session = raw_session(username);
+    let names = session.list(None, Some("INBOX")).unwrap();
+    let delimiter = names
+        .iter()
+        .find_map(|n| n.delimiter().map(str::to_string))
+        .expect("INBOX delimiter");
+    session.logout().ok();
+    delimiter
+}
+
+fn probe_fixture(password: &str) -> anyhow::Result<Vec<ListedFolder>> {
+    probe_account("127.0.0.1", 1993, "probe", password, PROBE_TIMEOUT)
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn probe_account_lists_folders_with_roles_and_depths() {
+    require_fixture();
+    let factures = format!("INBOX{}Factures", inbox_delimiter("probe"));
+    let folders = probe_fixture("password").unwrap();
+    let role_of = |name: &str| {
+        folders
+            .iter()
+            .find(|f| f.name.raw == name)
+            .map(|f| (f.role, f.depth))
+            .unwrap_or_else(|| panic!("{name} missing from {folders:?}"))
+    };
+
+    assert_eq!(role_of("INBOX"), (FolderRole::Inbox, 0));
+    assert_eq!(role_of("Sent"), (FolderRole::Sent, 0));
+    assert_eq!(role_of("Trash"), (FolderRole::Special, 0));
+    assert_eq!(role_of("Projets"), (FolderRole::Regular, 0));
+    assert_eq!(role_of(&factures), (FolderRole::Regular, 1));
+    assert_eq!(folders.len(), 5, "no other folder expected: {folders:?}");
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn list_folders_keeps_every_folder_but_special_ones() {
+    require_fixture();
+    let mut exporter = ImapExporter::new(account("probe"), false);
+    exporter.connect().unwrap();
+    let mut names: Vec<String> = exporter
+        .list_folders()
+        .unwrap()
+        .into_iter()
+        .map(|f| f.raw)
+        .collect();
+    names.sort();
+    let factures = format!("INBOX{}Factures", inbox_delimiter("probe"));
+    let mut expected = vec![
+        "INBOX".to_string(),
+        factures,
+        "Projets".into(),
+        "Sent".into(),
+    ];
+    expected.sort();
+
+    assert_eq!(names, expected);
+    assert!(!names.iter().any(|n| n == "Trash"));
+}
+
+#[test]
+#[ignore = "requires tests/fixtures/imap/compose.yaml and EMAIL_TO_MARKDOWN_IMAP_TEST=1"]
+fn probe_account_with_wrong_password_reports_refused_credentials() {
+    require_fixture();
+    let err = probe_fixture("not-the-password").unwrap_err();
+
+    assert_eq!(
+        describe_connection_error("127.0.0.1", &err),
+        "Identifiant ou mot de passe refusé par le serveur."
+    );
+}
+
+#[test]
+fn probe_account_on_closed_port_reports_unreachable_server() {
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    }; // listener dropped: nothing listens on this port any more
+    let err = probe_account("127.0.0.1", port, "probe", "password", PROBE_TIMEOUT).unwrap_err();
+    let message = describe_connection_error("127.0.0.1", &err);
+
+    assert!(message.starts_with("Serveur injoignable"), "{message}");
+}
+
+#[test]
+fn probe_account_on_silent_server_times_out() {
+    // Accepts the TCP connection (kernel backlog) but never sends a greeting.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let started = std::time::Instant::now();
+    let err = probe_account(
+        "127.0.0.1",
+        port,
+        "probe",
+        "password",
+        std::time::Duration::from_secs(2),
+    )
+    .unwrap_err();
+    let elapsed = started.elapsed();
+    drop(listener);
+
+    assert!(elapsed < std::time::Duration::from_secs(4), "{elapsed:?}");
+    assert!(describe_connection_error("127.0.0.1", &err).starts_with("Délai dépassé"));
 }

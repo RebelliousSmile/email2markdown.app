@@ -11,10 +11,12 @@
 
 ## Test Coverage
 
-- **735 tests without `tray`, 838 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-10)
-  - `--all-features`: 491 lib unit, 332 `rust_tests.rs`, 14 `imap_integration.rs` (all `#[ignore]`)
+- **762 tests without `tray`, 868 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
+  - `--all-features`: 505 lib unit, 1 bin, 343 `rust_tests.rs`, 19 `imap_integration.rs` (17 `#[ignore]`)
+  - `imap_integration.rs` not ignored: `probe_account_on_closed_port_*`, `probe_account_on_silent_server_*` (local `TcpListener`, no Docker)
 - Not covered automatically: `thunderbird.rs` (needs Thunderbird), tray event loop and windows (needs GUI), updater against GitHub, Gmail deletion
 - `ImapExporter` covered by the Dovecot tests only (export, purge, contextual search, deletion outcomes, server cleanup)
+- Connection probe on Dovecot user `probe`: `probe_account_*` (roles, depths, wrong password), `list_folders_keeps_every_folder_but_special_ones`
 - Signature filter + quarantine covered end to end on Dovecot (#19): `export_seed_corpus_*`
 - `tray_actions.rs` pure helpers covered inline under `--features tray`
 
@@ -66,7 +68,7 @@
 | `quote_link_tests` | `Index::from_dir` (skips `.`/`_` dirs), `link_note`, `link_vault` |
 | `server_cleanup::tests` (inline) | `cleanup_account` refusals, `plan` (Gmail labels), `notes_suffix`, `record_results` |
 | `tray_actions::tests` (inline) | `clean_confirmation_text`, contextual summary, `set_export_dir_in`/`set_notes_dir_in` |
-| `email_export::tests` (inline) | `html_to_markdown` signature `cid:` images (Gmail, Outlook, Thunderbird, look-alike class kept), `extract_body` HTML choice, `extract_attachments`, quarantine (counter, collisions, none without deletion, discard on failed export, `discard_quarantined`, `quarantine_warning`), issue #14 E2E with a 30 KB screenshot |
+| `email_export::tests` (inline) | `html_to_markdown` signature `cid:` images (Gmail, Outlook, Thunderbird, look-alike class kept), `extract_body` HTML choice, `extract_attachments`, quarantine (counter, collisions, none without deletion, discard on failed export, `discard_quarantined`, `quarantine_warning`), issue #14 E2E with a 30 KB screenshot, `describe_connection_error` (Gmail, other server, unreachable, timeout), `folder_role`, `folder_depth` |
 | `tray_actions::tests` (inline, `--features tray`) | `is_excluded_staging_dir` (incl. `_skipped`), `contextual_summary_message`, settings writers |
 | `tray::ipc::tests` (inline, `--features tray`) | `move_account` (up, down case-insensitive, edge no-write, unknown name, bad direction), `move_outcome` (new order, missing direction), `delete_account` |
 | `tray::windows::tests` (inline, `--features tray`) | `allow_navigation`, `escape_json_for_script`, `reply_changed_accounts` (`move_account` ok → true, failed → false) |
@@ -102,6 +104,10 @@ EMAIL_TO_MARKDOWN_IMAP_TEST=1 cargo test --test imap_integration -- --ignored --
 - CI job `dovecot` (`.github/workflows/ci.yml`): same three steps, `down -v` always
 - `compose.yaml` seeds one user per test (`contextual`, `purge`, `clean-*`, `batch`); a new destructive test gets its own user
   - `gmail-seed`, `gmail-seed-delete`: Gmail seed corpus only (`/seed/gmail/*.eml`)
+  - `probe`: folders `Sent`, `Trash`, `Projets` (1 message), `INBOX/Factures`; read-only tests
+- `tests/fixtures/imap/dovecot.conf` replaces the image's: named `inbox` namespace with `special_use` `\Sent`, `\Trash`
+  **Why:** the image's namespace is unnamed; a second one from `conf.d` fails with `Duplicate namespace prefix`
+  - Fixture folder names: build children with the separator from `LIST` (`/` here), never hardcode it
 - Dovecot test names never contain `gmail_`: CI runs `--skip gmail_` (real-Gmail tests only)
 - CI job `gmail-destructive`: `workflow_dispatch` only, protected environment, dedicated Gmail account
   - Trigger: `gh workflow run ci.yml --ref main -f run_gmail_destructive=true`
