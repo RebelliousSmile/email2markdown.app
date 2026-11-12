@@ -988,7 +988,11 @@ fn run_import_thunderbird(extract_passwords: bool) -> Result<String> {
                 if let Some(parent) = env_path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                match thunderbird::write_passwords_to_env(&accounts, &passwords, &env_path) {
+                match thunderbird::write_passwords_to_env(
+                    &summary.added_accounts(&accounts),
+                    &passwords,
+                    &env_path,
+                ) {
                     Ok(n) => message.push_str(&format!("\n{} mot(s) de passe écrits", n)),
                     Err(e) => message.push_str(&format!("\nImpossible d'écrire .env : {}", e)),
                 }

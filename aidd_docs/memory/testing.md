@@ -11,10 +11,10 @@
 
 ## Test Coverage
 
-- **773 tests without `tray`, 891 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
-  - `--all-features`: 519 lib unit, 1 bin, 350 `rust_tests.rs`, 21 `imap_integration.rs` (19 `#[ignore]`)
+- **791 tests without `tray`, 909 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
+  - `--all-features`: 537 lib unit, 1 bin, 350 `rust_tests.rs`, 21 `imap_integration.rs` (19 `#[ignore]`)
   - `imap_integration.rs` not ignored: `probe_account_on_closed_port_*`, `probe_account_on_silent_server_*` (local `TcpListener`, no Docker)
-- Not covered automatically: `thunderbird.rs` (needs Thunderbird), tray event loop and windows (needs GUI), updater against GitHub, Gmail deletion
+- Not covered automatically: `thunderbird.rs` NSS part (`extract_passwords`, `unlock_key_slot`, primary password: needs Thunderbird), tray event loop and windows (needs GUI), updater against GitHub, Gmail deletion
 - `ImapExporter` covered by the Dovecot tests only (export, purge, contextual search, deletion outcomes, server cleanup)
 - Connection probe on Dovecot user `probe`: `probe_account_*` (roles, depths, wrong password), `list_folders_keeps_every_folder_but_special_ones`
 - Folder selection: `export_with_included_folders_*`, `export_with_vanished_included_folder_*` (Dovecot `probe`), `exports_folder` / `included_folders` in `config_tests`, `save_account_*` inline in `tray/ipc.rs`
@@ -72,6 +72,7 @@
 | `server_cleanup::tests` (inline) | `cleanup_account` refusals, `plan` (Gmail labels), `notes_suffix`, `record_results` |
 | `tray_actions::tests` (inline) | `clean_confirmation_text`, contextual summary, `set_export_dir_in`/`set_notes_dir_in` |
 | `email_export::tests` (inline) | `html_to_markdown` signature `cid:` images (Gmail, Outlook, Thunderbird, look-alike class kept), `extract_body` HTML choice, `extract_attachments`, quarantine (counter, collisions, none without deletion, discard on failed export, `discard_quarantined`, `quarantine_warning`), issue #14 E2E with a 30 KB screenshot, `describe_connection_error` (Gmail, other server, unreachable, timeout), `folder_role`, `folder_depth` |
+| `thunderbird::tests` (inline) | fake profile in `TempDir` (`FAKE_PREFS` 3 IMAP + 1 local, `FAKE_LOGINS` with OAuth token): `scan_accounts` (order, `AuthKind::OAuth2`, `has_saved_password` ignores `oauth://`, `already_configured` by mailbox, no `logins.json`), `AuthKind::from_pref`, `imap_login_server`, `default_included_folders`, `find_password` (two Gmail, single-entry fallback), `write_passwords_to_env` (two Gmail, no fallback on shared server), `added_accounts`, `import_selected_with` (name collision keeps `.env`, tested + OAuth, OAuth app-password message, `PrimaryPasswordRequired` writes nothing, failed probe → `[INBOX]`), `write_accounts_merged`, `parse_prefs_js` |
 | `tray_actions::tests` (inline, `--features tray`) | `is_excluded_staging_dir` (incl. `_skipped`), `contextual_summary_message`, settings writers |
 | `tray::ipc::tests` (inline, `--features tray`) | `move_account` (up, down case-insensitive, edge no-write, unknown name, bad direction), `move_outcome` (new order, missing direction), `delete_account`, `stored_password` (application password first, no `.env`), `test_connection_with` (changed server skips probe, unchanged account uses stored password, failure hides password), `background_config_job` (sync action → None, `request_id` echoed) |
 | `tray::windows::tests` (inline, `--features tray`) | `allow_navigation`, `escape_json_for_script`, `reply_changed_accounts` (`move_account` ok → true, failed → false, `test_connection` → false) |

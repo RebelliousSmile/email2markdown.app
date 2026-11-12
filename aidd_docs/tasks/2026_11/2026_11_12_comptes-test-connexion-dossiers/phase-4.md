@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Instruction: Thunderbird — inventaire des comptes, OAuth, mot de passe principal

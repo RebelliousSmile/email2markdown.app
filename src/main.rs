@@ -347,7 +347,9 @@ fn main() -> Result<()> {
                                 std::fs::create_dir_all(parent)?;
                             }
                             match thunderbird::write_passwords_to_env(
-                                &accounts, &passwords, &env_path,
+                                &summary.added_accounts(&accounts),
+                                &passwords,
+                                &env_path,
                             ) {
                                 Ok(n) => {
                                     println!("Written {} password(s) to {}", n, env_path.display())
