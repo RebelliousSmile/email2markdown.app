@@ -252,6 +252,9 @@ pub struct RawAccount {
     pub server: String,
     pub port: u16,
     pub username: String,
+    /// Folders to export, by display name; when set, overrides `ignored_folders`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub included_folders: Option<Vec<String>>,
     #[serde(default)]
     pub ignored_folders: Vec<String>,
 }
@@ -354,6 +357,7 @@ fn merge_account(raw: &RawAccount, settings: &Settings) -> Account {
         port: raw.port,
         username: raw.username.clone(),
         password: None,
+        included_folders: raw.included_folders.clone(),
         ignored_folders: raw.ignored_folders.clone(),
         export_directory,
         quote_depth: per
@@ -415,6 +419,9 @@ pub struct Account {
     pub password: Option<String>,
     /// Computed: `export_base_dir / folder_name`
     pub export_directory: String,
+    /// Folders to export, by display name; when set, overrides `ignored_folders`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub included_folders: Option<Vec<String>>,
     #[serde(default)]
     pub ignored_folders: Vec<String>,
     pub quote_depth: usize,
@@ -426,6 +433,22 @@ pub struct Account {
     /// Max newly-exported messages per run; `0` = no limit.
     #[serde(default)]
     pub batch_size: usize,
+}
+
+impl Account {
+    /// Whether the folder with this display name is exported.
+    ///
+    /// `included_folders` set: only listed folders (`INBOX` compared without case).
+    /// Otherwise every folder except those in `ignored_folders`.
+    pub fn exports_folder(&self, display: &str) -> bool {
+        match &self.included_folders {
+            Some(included) => included.iter().any(|name| {
+                name == display
+                    || (name.eq_ignore_ascii_case("INBOX") && display.eq_ignore_ascii_case("INBOX"))
+            }),
+            None => !self.ignored_folders.iter().any(|name| name == display),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

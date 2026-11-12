@@ -207,7 +207,36 @@
     color: #c62828; font-size: 12px; text-decoration: underline;
   }
   .acct-delete-link:hover { color: #8e0000; }
-  .acct-list-head { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+  .acct-list-head { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px; }
+  .tb-profile { font-size: 11.5px; color: #777; margin-bottom: 6px; word-break: break-all; }
+  .tb-list { margin: 10px 0; }
+  .tb-item {
+    display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin-bottom: 6px;
+    border: 1px solid #ddd; border-radius: 4px; background: #fafafa; cursor: pointer;
+  }
+  .tb-item input { margin-top: 3px; cursor: pointer; }
+  .tb-item.configured { color: #999; cursor: default; }
+  .tb-item.configured input { cursor: default; }
+  .tb-item-main { display: flex; flex-direction: column; gap: 2px; }
+  .tb-item-name { font-weight: 500; }
+  .tb-item-sub { font-size: 12px; color: #666; }
+  .tb-item-note { font-size: 11.5px; color: #8d6e00; line-height: 1.4; }
+  .tb-badge {
+    display: inline-block; font-size: 10.5px; font-weight: 600; color: #8d6e00;
+    border: 1px solid #e0c060; border-radius: 3px; padding: 0 4px; margin-left: 4px;
+  }
+  .tb-primary { margin: 10px 0; }
+  .tb-primary label { display: block; margin-bottom: 4px; color: #333; }
+  .tb-primary input { width: 100%; padding: 5px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+  .tb-reports { margin: 10px 0; }
+  .tb-report {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0;
+    border-bottom: 1px solid #eee; font-size: 13px;
+  }
+  .tb-report.ok .tb-report-name { color: #2e7d32; }
+  .tb-report.failed .tb-report-name { color: #c62828; }
+  .tb-report-name { font-weight: 500; }
+  .tb-report-msg { flex: 1; font-size: 12px; color: #555; word-break: break-word; }
   .acct-pw-hint { font-size: 11.5px; color: #777; margin-top: 3px; }
   .modal-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,.35);
@@ -299,59 +328,25 @@
     border-color: #1e88e5;
     box-shadow: 0 0 0 2px rgba(30,136,229,0.15);
   }
-  .chip-zone {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 8px;
-    min-height: 28px;
-  }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    background: #e3f2fd;
-    border: 1px solid #90caf9;
-    border-radius: 12px;
-    padding: 2px 8px 2px 10px;
-    font-size: 12px;
-    color: #1565c0;
-    gap: 4px;
-  }
-  .chip-remove {
-    background: none;
-    border: none;
-    color: #1565c0;
-    cursor: pointer;
-    font-size: 14px;
-    line-height: 1;
-    padding: 0;
-  }
-  .chip-remove:hover { color: #d32f2f; }
-  .chip-label { cursor: text; }
-  .chip-label:hover { text-decoration: underline; }
-  .chip-edit {
-    font-size: 12px; color: #1565c0; border: none; outline: none;
-    background: transparent; padding: 0; width: 140px;
-  }
   .acct-row-actions { display: flex; gap: 6px; }
-  .folder-add-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
+  .folder-test-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .folder-status { font-size: 12px; color: #555; }
+  .folder-status.ok { color: #2e7d32; }
+  .folder-alert {
+    display: none; margin-top: 8px; padding: 8px 10px; border: 1px solid #ef9a9a;
+    border-radius: 4px; background: #ffebee; color: #b71c1c; font-size: 12.5px; line-height: 1.45;
+    word-break: break-word;
   }
-  .folder-add-row input[type="text"] {
-    flex: 1;
-    padding: 5px 8px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    font-size: 13px;
-    background: #fff;
+  .folder-summary { margin-top: 8px; font-size: 12px; color: #666; line-height: 1.45; }
+  .folder-list {
+    display: none; margin-top: 8px; max-height: 240px; overflow-y: auto;
+    border: 1px solid #ddd; border-radius: 4px; padding: 6px 10px; background: #fafafa;
   }
-  .folder-add-row input[type="text"]:focus {
-    outline: none;
-    border-color: #1e88e5;
-    box-shadow: 0 0 0 2px rgba(30,136,229,0.15);
-  }
+  .acct-field .folder-item { display: flex; align-items: center; gap: 6px; width: auto; padding: 2px 0; font-size: 13px; }
+  .folder-item input { margin: 0; cursor: pointer; }
+  .folder-item.special { color: #999; }
+  .folder-item.special input { cursor: default; }
+  .folder-note { font-size: 11px; color: #999; margin-left: 6px; }
   .save-error {
     display: none;
     color: #d32f2f;
@@ -410,6 +405,7 @@
 <script>
   window.__SETTINGS_DATA__ = __SETTINGS_JSON__;
   window.__ACCOUNTS_DATA__ = __ACCOUNTS_JSON__;
+  window.__START_VIEW__ = "__INITIAL_VIEW__";
 </script>
 
 <header>Paramètres</header>
@@ -505,11 +501,31 @@
       <div id="reload-msg" class="acct-files-msg" style="display:none"></div>
     </div>
     <div class="acct-list-head">
+      <button class="btn-secondary" id="btn-import-thunderbird">Importer depuis Thunderbird</button>
       <button class="btn-primary" id="btn-add-account">+ Ajouter un compte</button>
     </div>
     <div id="account-list-view">
       <!-- rendered by JS -->
     </div>
+    </div>
+    <div id="tb-import-view" style="display:none">
+      <div class="acct-detail-section">
+        <div class="acct-detail-title">Importer depuis Thunderbird</div>
+        <div class="tb-profile" id="tb-profile"></div>
+        <div class="folder-status" id="tb-status"></div>
+        <div class="tb-list" id="tb-list"></div>
+        <div class="tb-primary" id="tb-primary-field" style="display:none">
+          <label for="tb-primary-password">Mot de passe principal Thunderbird</label>
+          <input type="password" id="tb-primary-password" autocomplete="off">
+          <div class="acct-pw-hint">Sert une seule fois à lire les mots de passe enregistrés ; il n’est pas conservé. Thunderbird doit être fermé.</div>
+        </div>
+        <div class="folder-alert" id="tb-alert" role="alert"></div>
+        <div class="tb-reports" id="tb-reports"></div>
+        <div class="acct-detail-footer">
+          <button class="btn-secondary" id="tb-cancel">Annuler</button>
+          <button class="btn-primary" id="tb-import" disabled>Importer la sélection</button>
+        </div>
+      </div>
     </div>
     <div id="account-detail-view" style="display:none">
       <div class="acct-detail-section">
@@ -539,13 +555,15 @@
           </div>
         </div>
         <div class="acct-field" style="align-items:flex-start">
-          <label style="padding-top:4px">Dossiers ignorés</label>
+          <label style="padding-top:4px">Dossiers exportés</label>
           <div style="flex:1">
-            <div class="chip-zone" id="acct-chips"></div>
-            <div class="folder-add-row">
-              <input type="text" id="acct-folder-input" placeholder="Ajouter un dossier...">
-              <button class="btn-secondary" id="acct-folder-add">+</button>
+            <div class="folder-test-row">
+              <button type="button" class="btn-secondary" id="acct-test">Tester la connexion</button>
+              <span class="folder-status" id="acct-test-status"></span>
             </div>
+            <div class="folder-alert" id="acct-test-alert" role="alert"></div>
+            <div class="folder-summary" id="acct-folder-summary"></div>
+            <div class="folder-list" id="acct-folder-list"></div>
           </div>
         </div>
         <fieldset class="acct-behavior-fieldset">
@@ -604,6 +622,7 @@
         <div class="acct-error" id="acct-error"></div>
         <div class="acct-detail-footer">
           <span class="acct-saved-msg" id="acct-saved-msg">Enregistré ✓</span>
+          <button class="btn-secondary" id="acct-save-anyway" style="display:none">Enregistrer quand même</button>
           <button class="btn-secondary" id="acct-cancel">Annuler</button>
           <button class="btn-primary" id="acct-save">Sauvegarder</button>
         </div>
@@ -764,8 +783,14 @@
   // ── Accounts tab ─────────────────────────────────────────────────────────────
 
   var accounts = window.__ACCOUNTS_DATA__ || [];
-  var currentFolders = [];
   var currentAccountIdx = -1;
+  // Saved folder selection of the edited or duplicated account; null for a new one.
+  var savedSelection = null;
+  // Folders of the last successful connection test, each with its `ticked` state.
+  var testedFolders = null;
+  // Id of the test awaiting its answer (0: none). A later edit drops it.
+  var testRequestId = 0;
+  var activeTestId = 0;
 
   var ACCT_BOOL_FIELDS = [
     ['acct-delete-after-export', 'delete_after_export'],
@@ -904,8 +929,8 @@
     document.getElementById('acct-password').value = '';
   }
 
-  // `source` (optional): account to duplicate. Only server, port and ignored
-  // folders are copied; name, credentials and behaviour stay empty.
+  // `source` (optional): account to duplicate. Only server, port and folder
+  // selection are copied; name, credentials and behaviour stay empty.
   function showNewAccount(source) {
     currentAccountIdx = -1;
     setDetailMode(true);
@@ -914,8 +939,8 @@
     document.getElementById('acct-server').value = (source && source.server) || '';
     document.getElementById('acct-port').value = (source && source.port) || 993;
     document.getElementById('acct-username').value = '';
-    currentFolders = (source && source.ignored_folders) ? source.ignored_folders.slice() : [];
-    renderChips();
+    savedSelection = selectionOf(source);
+    resetFolderTest();
     for (var bi = 0; bi < ACCT_BOOL_FIELDS.length; bi++) {
       document.getElementById(ACCT_BOOL_FIELDS[bi][0]).value = '';
     }
@@ -938,8 +963,8 @@
     document.getElementById('acct-server').value = acct.server || '';
     document.getElementById('acct-port').value = acct.port || 993;
     document.getElementById('acct-username').value = acct.username || '';
-    currentFolders = (acct.ignored_folders || []).slice();
-    renderChips();
+    savedSelection = selectionOf(acct);
+    resetFolderTest();
 
     var behavior = (window.__SETTINGS_DATA__.accounts && window.__SETTINGS_DATA__.accounts[acct.name]) || {};
     for (var bi = 0; bi < ACCT_BOOL_FIELDS.length; bi++) {
@@ -959,111 +984,224 @@
     document.getElementById('account-detail-view').style.display = '';
   }
 
-  function renderChips() {
-    var zone = document.getElementById('acct-chips');
-    var html = '';
-    for (var i = 0; i < currentFolders.length; i++) {
-      html += '<span class="chip" data-folder-idx="' + i + '">';
-      html += '<span class="chip-label" data-folder-idx="' + i + '" title="Cliquer pour modifier">' +
-        escapeHtml(currentFolders[i]) + '</span>';
-      html += ' <button class="chip-remove" data-folder-idx="' + i + '" type="button">&#xD7;</button>';
-      html += '</span>';
-    }
-    zone.innerHTML = html;
-    var labels = zone.querySelectorAll('.chip-label');
-    for (var l = 0; l < labels.length; l++) {
-      labels[l].addEventListener('click', function () {
-        editChip(this, parseInt(this.getAttribute('data-folder-idx'), 10));
-      });
-    }
-    var removeBtns = zone.querySelectorAll('.chip-remove');
-    for (var k = 0; k < removeBtns.length; k++) {
-      removeBtns[k].addEventListener('click', function () {
-        var folderIdx = parseInt(this.getAttribute('data-folder-idx'), 10);
-        currentFolders.splice(folderIdx, 1);
-        renderChips();
-      });
-    }
+  // ── Folder picker ──────────────────────────────────────────────────────────
+
+  function trimmedValue(id) {
+    return document.getElementById(id).value.replace(/^\s+|\s+$/g, '');
   }
 
-  // Rename an ignored folder in place. `finish` runs once: removing the input
-  // from the DOM after Enter/Escape fires a blur that must be ignored.
-  function editChip(label, idx) {
-    var original = currentFolders[idx];
-    if (original === undefined) return;
-    var input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'chip-edit';
-    input.value = original;
-    label.parentNode.replaceChild(input, label);
-    input.focus();
-    input.select();
-    var done = false;
-    function finish(apply) {
-      if (done) return;
-      done = true;
-      if (apply) {
-        var val = input.value.replace(/^\s+|\s+$/g, '');
-        if (val.length > 0 && val !== original) {
-          var dup = false;
-          for (var j = 0; j < currentFolders.length; j++) {
-            if (j !== idx && currentFolders[j] === val) { dup = true; break; }
-          }
-          if (dup) currentFolders.splice(idx, 1);
-          else currentFolders[idx] = val;
-        }
+  function showAcctError(text, focusId) {
+    var errorEl = document.getElementById('acct-error');
+    errorEl.textContent = text;
+    errorEl.style.display = 'block';
+    if (focusId) document.getElementById(focusId).focus();
+  }
+
+  function isInbox(name) { return String(name).toUpperCase() === 'INBOX'; }
+
+  // Same rule as `Account::exports_folder`: INBOX matches case-insensitively.
+  function listHasFolder(list, name) {
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] === name || (isInbox(list[i]) && isInbox(name))) return true;
+    }
+    return false;
+  }
+
+  function selectionOf(acct) {
+    if (!acct) return null;
+    return {
+      included_folders: acct.included_folders ? acct.included_folders.slice() : null,
+      ignored_folders: (acct.ignored_folders || []).slice()
+    };
+  }
+
+  // Ticked by default: the saved selection, else INBOX and Sent for a new account.
+  function defaultTicked(folder) {
+    if (folder.role === 'special') return false;
+    if (!savedSelection) return folder.role === 'inbox' || folder.role === 'sent';
+    if (savedSelection.included_folders) return listHasFolder(savedSelection.included_folders, folder.name);
+    return !listHasFolder(savedSelection.ignored_folders, folder.name);
+  }
+
+  function renderFolderSummary() {
+    var el = document.getElementById('acct-folder-summary');
+    var text;
+    if (!savedSelection) {
+      text = 'Testez la connexion pour choisir les dossiers à exporter. Par défaut : boîte de réception et messages envoyés.';
+    } else {
+      if (savedSelection.included_folders) {
+        text = savedSelection.included_folders.length
+          ? 'Dossiers sélectionnés : ' + savedSelection.included_folders.join(', ') + '.'
+          : 'Aucun dossier sélectionné.';
+      } else if (savedSelection.ignored_folders.length) {
+        text = 'Tous les dossiers sauf : ' + savedSelection.ignored_folders.join(', ') + '.';
+      } else {
+        text = 'Tous les dossiers, hors corbeille, spam, brouillons et dossiers spéciaux.';
       }
-      renderChips();
+      text += ' Testez la connexion pour modifier la sélection.';
     }
-    input.addEventListener('keydown', function (e) {
-      if (e.keyCode === 13) { e.preventDefault(); finish(true); }
-      else if (e.keyCode === 27) { e.preventDefault(); e.stopPropagation(); finish(false); }
-    });
-    input.addEventListener('blur', function () { finish(true); });
+    el.textContent = text;
+    el.style.display = testedFolders ? 'none' : '';
   }
 
-  function addFolder() {
-    var input = document.getElementById('acct-folder-input');
-    var val = input.value.replace(/^\s+|\s+$/g, '');
-    if (val.length > 0) {
-      currentFolders.push(val);
-      input.value = '';
-      renderChips();
+  function renderFolderList() {
+    var list = document.getElementById('acct-folder-list');
+    renderFolderSummary();
+    if (!testedFolders) {
+      list.innerHTML = '';
+      list.style.display = 'none';
+      return;
     }
-    input.focus();
+    var html = '';
+    for (var i = 0; i < testedFolders.length; i++) {
+      var f = testedFolders[i];
+      var special = f.role === 'special';
+      html += '<label class="folder-item' + (special ? ' special' : '') +
+        '" style="padding-left:' + (f.depth * 18) + 'px">';
+      html += '<input type="checkbox" data-folder-idx="' + i + '"' +
+        (f.ticked ? ' checked' : '') + (special ? ' disabled' : '') + '>';
+      html += '<span>' + escapeHtml(f.name) + '</span>';
+      if (special) html += '<span class="folder-note">toujours ignoré</span>';
+      else if (f.role === 'inbox') html += '<span class="folder-note">boîte de réception</span>';
+      else if (f.role === 'sent') html += '<span class="folder-note">messages envoyés</span>';
+      html += '</label>';
+    }
+    list.innerHTML = html;
+    list.style.display = 'block';
+    var boxes = list.querySelectorAll('input[type="checkbox"]');
+    for (var b = 0; b < boxes.length; b++) {
+      boxes[b].addEventListener('change', function () {
+        testedFolders[parseInt(this.getAttribute('data-folder-idx'), 10)].ticked = this.checked;
+      });
+    }
   }
 
-  document.getElementById('acct-folder-add').addEventListener('click', addFolder);
+  function setTestStatus(text, ok) {
+    var el = document.getElementById('acct-test-status');
+    el.textContent = text;
+    el.className = 'folder-status' + (ok ? ' ok' : '');
+  }
 
-  document.getElementById('acct-folder-input').addEventListener('keydown', function (e) {
-    if (e.keyCode === 13) {
-      e.preventDefault();
-      addFolder();
-    }
+  function showTestAlert(text) {
+    var el = document.getElementById('acct-test-alert');
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  // Forget the last test: the list no longer matches the connection fields.
+  function resetFolderTest() {
+    testedFolders = null;
+    activeTestId = 0;
+    setTestStatus('', false);
+    showTestAlert('');
+    document.getElementById('acct-save-anyway').style.display = 'none';
+    document.getElementById('acct-test').disabled = false;
+    renderFolderList();
+  }
+
+  ['acct-server', 'acct-port', 'acct-username', 'acct-password'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', resetFolderTest);
   });
+
+  // Server, port and username, or null after showing what is wrong.
+  function readConnectionFields() {
+    var server = trimmedValue('acct-server');
+    var portVal = trimmedValue('acct-port');
+    var port = parseInt(portVal, 10);
+    var username = trimmedValue('acct-username');
+    if (server.length === 0) {
+      showAcctError('Le serveur IMAP est obligatoire.', 'acct-server');
+      return null;
+    }
+    if (portVal === '' || isNaN(port) || port < 1 || port > 65535) {
+      showAcctError('Le port doit être un entier entre 1 et 65535.', 'acct-port');
+      return null;
+    }
+    if (username.length === 0) {
+      showAcctError("L'identifiant est obligatoire.", 'acct-username');
+      return null;
+    }
+    return { server: server, port: port, username: username };
+  }
+
+  function currentAccountName() {
+    return creatingAccount ? trimmedValue('acct-newname') : document.getElementById('acct-name').value;
+  }
+
+  // Ask the host to log in and list the folders. The answer comes back
+  // through `config_result` with the same `request_id`.
+  function startConnectionTest() {
+    var errorEl = document.getElementById('acct-error');
+    errorEl.style.display = 'none';
+    errorEl.textContent = '';
+    var fields = readConnectionFields();
+    if (!fields) return;
+    activeTestId = ++testRequestId;
+    testedFolders = null;
+    renderFolderList();
+    showTestAlert('');
+    document.getElementById('acct-save-anyway').style.display = 'none';
+    setTestStatus('Test de la connexion en cours…', false);
+    document.getElementById('acct-test').disabled = true;
+    postIpc({
+      action: 'test_connection',
+      data: {
+        request_id: activeTestId,
+        account_name: currentAccountName(),
+        server: fields.server,
+        port: fields.port,
+        username: fields.username,
+        create: creatingAccount,
+        password: document.getElementById('acct-password').value
+      }
+    });
+  }
+
+  document.getElementById('acct-test').addEventListener('click', startConnectionTest);
+
+  function onConnectionTested(result) {
+    if (!activeTestId || result.request_id !== activeTestId) return; // obsolete answer
+    activeTestId = 0;
+    document.getElementById('acct-test').disabled = false;
+    if (result.ok) {
+      testedFolders = [];
+      var folders = result.folders || [];
+      for (var i = 0; i < folders.length; i++) {
+        testedFolders.push({
+          name: folders[i].name,
+          role: folders[i].role,
+          depth: folders[i].depth || 0,
+          ticked: defaultTicked(folders[i])
+        });
+      }
+      setTestStatus('Connexion réussie · ' + folders.length + ' dossier' + (folders.length > 1 ? 's' : ''), true);
+      renderFolderList();
+      return;
+    }
+    setTestStatus('Échec de la connexion', false);
+    showTestAlert(result.message || 'Connexion impossible.');
+    if (creatingAccount) document.getElementById('acct-save-anyway').style.display = '';
+  }
 
   document.getElementById('acct-cancel').addEventListener('click', function () {
     document.getElementById('account-detail-view').style.display = 'none';
     document.getElementById('account-list-wrap').style.display = '';
     currentAccountIdx = -1;
-    currentFolders = [];
+    savedSelection = null;
+    resetFolderTest();
   });
 
   // Account save sent to the host and not answered yet.
   var pendingAccount = null;
 
-  document.getElementById('acct-save').addEventListener('click', function () {
+  // `forcedIncluded`: folders to save without a successful test ("Enregistrer
+  // quand même" after a failed test at creation).
+  function saveAccount(forcedIncluded) {
     var errorEl = document.getElementById('acct-error');
     errorEl.style.display = 'none';
     errorEl.textContent = '';
 
-    var server = document.getElementById('acct-server').value.replace(/^\s+|\s+$/g, '');
-    var portVal = document.getElementById('acct-port').value.replace(/^\s+|\s+$/g, '');
-    var port = parseInt(portVal, 10);
-    var username = document.getElementById('acct-username').value.replace(/^\s+|\s+$/g, '');
-    var accountName = creatingAccount
-      ? document.getElementById('acct-newname').value.replace(/^\s+|\s+$/g, '')
-      : document.getElementById('acct-name').value;
+    var accountName = currentAccountName();
 
     if (creatingAccount) {
       var badName = '';
@@ -1080,30 +1218,30 @@
         }
       }
       if (badName) {
-        errorEl.textContent = badName;
-        errorEl.style.display = 'block';
-        document.getElementById('acct-newname').focus();
+        showAcctError(badName, 'acct-newname');
         return;
       }
     }
 
-    if (server.length === 0) {
-      errorEl.textContent = 'Le serveur IMAP est obligatoire.';
-      errorEl.style.display = 'block';
-      document.getElementById('acct-server').focus();
+    var fields = readConnectionFields();
+    if (!fields) return;
+
+    // A new account is only worth adding once the connection works.
+    if (creatingAccount && !forcedIncluded && !testedFolders) {
+      startConnectionTest();
       return;
     }
-    if (portVal === '' || isNaN(port) || port < 1 || port > 65535) {
-      errorEl.textContent = 'Le port doit être un entier entre 1 et 65535.';
-      errorEl.style.display = 'block';
-      document.getElementById('acct-port').focus();
-      return;
-    }
-    if (username.length === 0) {
-      errorEl.textContent = "L'identifiant est obligatoire.";
-      errorEl.style.display = 'block';
-      document.getElementById('acct-username').focus();
-      return;
+
+    var included = forcedIncluded;
+    if (!included && testedFolders) {
+      included = [];
+      for (var fi = 0; fi < testedFolders.length; fi++) {
+        if (testedFolders[fi].ticked) included.push(testedFolders[fi].name);
+      }
+      if (included.length === 0) {
+        showAcctError('Cochez au moins un dossier à exporter.', null);
+        return;
+      }
     }
 
     var behaviorData = {};
@@ -1111,41 +1249,53 @@
       var sv = document.getElementById(ACCT_BOOL_FIELDS[si][0]).value;
       behaviorData[ACCT_BOOL_FIELDS[si][1]] = sv === '' ? null : sv === 'true';
     }
-    var qdSave = document.getElementById('acct-quote-depth').value.replace(/^\s+|\s+$/g, '');
+    var qdSave = trimmedValue('acct-quote-depth');
     behaviorData.quote_depth = qdSave === '' ? null : parseInt(qdSave, 10);
-    var bsSave = document.getElementById('acct-batch-size').value.replace(/^\s+|\s+$/g, '');
+    var bsSave = trimmedValue('acct-batch-size');
     behaviorData.batch_size = bsSave === '' ? null : Math.max(0, parseInt(bsSave, 10) || 0);
 
-    var payload = {
-      action: 'save_account',
-      data: {
-        account_name: accountName,
-        server: server,
-        port: port,
-        username: username,
-        ignored_folders: currentFolders,
-        delete_after_export: behaviorData.delete_after_export,
-        cleanup_empty_dirs: behaviorData.cleanup_empty_dirs,
-        skip_existing: behaviorData.skip_existing,
-        collect_contacts: behaviorData.collect_contacts,
-        skip_signature_images: behaviorData.skip_signature_images,
-        quote_depth: behaviorData.quote_depth,
-        batch_size: behaviorData.batch_size,
-        create: creatingAccount,
-        password: document.getElementById('acct-password').value
-      }
+    var data = {
+      account_name: accountName,
+      server: fields.server,
+      port: fields.port,
+      username: fields.username,
+      delete_after_export: behaviorData.delete_after_export,
+      cleanup_empty_dirs: behaviorData.cleanup_empty_dirs,
+      skip_existing: behaviorData.skip_existing,
+      collect_contacts: behaviorData.collect_contacts,
+      skip_signature_images: behaviorData.skip_signature_images,
+      quote_depth: behaviorData.quote_depth,
+      batch_size: behaviorData.batch_size,
+      create: creatingAccount,
+      password: document.getElementById('acct-password').value
     };
+    // Without a list on screen the saved selection stays as it is.
+    var savedFields = { name: accountName, server: fields.server, port: fields.port, username: fields.username };
+    if (included) {
+      data.included_folders = included;
+      savedFields.included_folders = included.slice();
+      savedFields.ignored_folders = [];
+    } else if (savedSelection) {
+      if (savedSelection.included_folders) savedFields.included_folders = savedSelection.included_folders.slice();
+      savedFields.ignored_folders = savedSelection.ignored_folders.slice();
+    }
 
-    this.disabled = true;
+    document.getElementById('acct-save').disabled = true;
+    document.getElementById('acct-save-anyway').style.display = 'none';
     pendingAccount = {
       name: accountName,
       behavior: behaviorData,
-      fields: { name: accountName, server: server, port: port, username: username, ignored_folders: currentFolders.slice() },
+      fields: savedFields,
       created: creatingAccount
     };
-    if (window.ipc && typeof window.ipc.postMessage === 'function') {
-      window.ipc.postMessage(JSON.stringify(payload));
-    }
+    postIpc({ action: 'save_account', data: data });
+  }
+
+  document.getElementById('acct-save').addEventListener('click', function () {
+    saveAccount(null);
+  });
+  document.getElementById('acct-save-anyway').addEventListener('click', function () {
+    saveAccount(['INBOX']);
   });
 
   // Runs once the host confirms the account was written: only then is the
@@ -1182,13 +1332,227 @@
       document.getElementById('account-detail-view').style.display = 'none';
       document.getElementById('account-list-wrap').style.display = '';
       currentAccountIdx = -1;
-      currentFolders = [];
+      savedSelection = null;
+      resetFolderTest();
     }, 800);
   }
 
-  // Called by Rust via evaluate_script("config_result(<json>)") after each save request.
+  // ── Thunderbird import ─────────────────────────────────────────────────────
+
+  // Accounts of the last profile scan; null until the host answers.
+  var tbAccounts = null;
+  var tbImporting = false;
+
+  function showTbView(which) {
+    document.getElementById('account-list-wrap').style.display = which === 'list' ? '' : 'none';
+    document.getElementById('account-detail-view').style.display = 'none';
+    document.getElementById('tb-import-view').style.display = which === 'tb' ? '' : 'none';
+  }
+
+  function showTbAlert(text) {
+    var el = document.getElementById('tb-alert');
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  function tbSelectedIds() {
+    var ids = [];
+    var boxes = document.querySelectorAll('#tb-list input[type="checkbox"]');
+    for (var i = 0; i < boxes.length; i++) {
+      if (boxes[i].checked && !boxes[i].disabled) ids.push(boxes[i].getAttribute('data-id'));
+    }
+    return ids;
+  }
+
+  function refreshTbImportButton() {
+    document.getElementById('tb-import').disabled = tbImporting || tbSelectedIds().length === 0;
+  }
+
+  function oauthNote(acct) {
+    if (/(^|\.)(gmail|googlemail)\.com$/i.test(acct.server || '')) {
+      return 'Connexion OAuth dans Thunderbird : l’application a besoin d’un mot de passe ' +
+        'd’application Google (myaccount.google.com/apppasswords), à saisir dans le formulaire du compte.';
+    }
+    return 'Connexion OAuth dans Thunderbird : saisissez un mot de passe d’application ' +
+      'dans le formulaire du compte après l’import.';
+  }
+
+  function renderTbList() {
+    var list = document.getElementById('tb-list');
+    if (!tbAccounts || tbAccounts.length === 0) {
+      list.innerHTML = '<div class="acct-empty">Aucun compte IMAP dans ce profil Thunderbird</div>';
+      refreshTbImportButton();
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < tbAccounts.length; i++) {
+      var a = tbAccounts[i];
+      var configured = !!a.already_configured;
+      html += '<label class="tb-item' + (configured ? ' configured' : '') + '">';
+      html += '<input type="checkbox" data-id="' + escapeHtml(a.server_id) + '"' +
+        (configured ? ' disabled' : ' checked') + '>';
+      html += '<span class="tb-item-main">';
+      html += '<span class="tb-item-name">' + escapeHtml(a.name);
+      if (a.auth === 'oauth2') html += ' <span class="tb-badge">OAuth</span>';
+      if (configured) html += ' <span class="folder-note">déjà configuré</span>';
+      html += '</span>';
+      html += '<span class="tb-item-sub">' + escapeHtml(a.username) + ' @ ' + escapeHtml(a.server) + '</span>';
+      if (!configured && a.auth === 'oauth2') {
+        html += '<span class="tb-item-note">' + escapeHtml(oauthNote(a)) + '</span>';
+      } else if (!configured && !a.has_saved_password) {
+        html += '<span class="tb-item-note">Aucun mot de passe enregistré dans Thunderbird : ' +
+          'à saisir dans le formulaire du compte après l’import.</span>';
+      }
+      html += '</span></label>';
+    }
+    list.innerHTML = html;
+    var boxes = list.querySelectorAll('input[type="checkbox"]');
+    for (var b = 0; b < boxes.length; b++) {
+      boxes[b].addEventListener('change', refreshTbImportButton);
+    }
+    refreshTbImportButton();
+  }
+
+  // Opens the panel and asks the host for the accounts of the default profile.
+  // Global: the tray menu calls it on an already open window.
+  function showThunderbirdImport() {
+    var accountsTab = document.querySelector('.tab-btn[data-tab="accounts"]');
+    if (accountsTab) accountsTab.click();
+    tbAccounts = null;
+    tbImporting = false;
+    document.getElementById('tb-profile').textContent = '';
+    document.getElementById('tb-status').textContent = 'Lecture du profil Thunderbird…';
+    document.getElementById('tb-status').className = 'folder-status';
+    document.getElementById('tb-list').innerHTML = '';
+    document.getElementById('tb-list').style.display = '';
+    document.getElementById('tb-reports').innerHTML = '';
+    document.getElementById('tb-primary-field').style.display = 'none';
+    document.getElementById('tb-primary-password').value = '';
+    document.getElementById('tb-import').style.display = '';
+    document.getElementById('tb-cancel').textContent = 'Annuler';
+    showTbAlert('');
+    refreshTbImportButton();
+    showTbView('tb');
+    postIpc({ action: 'thunderbird_scan' });
+  }
+  window.showThunderbirdImport = showThunderbirdImport;
+
+  document.getElementById('btn-import-thunderbird').addEventListener('click', showThunderbirdImport);
+  document.getElementById('tb-cancel').addEventListener('click', function () {
+    showTbView('list');
+  });
+
+  document.getElementById('tb-import').addEventListener('click', function () {
+    var ids = tbSelectedIds();
+    if (ids.length === 0) return;
+    var pwField = document.getElementById('tb-primary-password');
+    var data = { server_ids: ids };
+    if (pwField.value) data.primary_password = pwField.value;
+    pwField.value = '';
+    tbImporting = true;
+    refreshTbImportButton();
+    showTbAlert('');
+    document.getElementById('tb-status').className = 'folder-status';
+    document.getElementById('tb-status').textContent =
+      'Import et test de connexion de ' + ids.length + ' compte(s)… (20 s au plus)';
+    postIpc({ action: 'thunderbird_import', data: data });
+  });
+
+  function onThunderbirdScanned(result) {
+    var status = document.getElementById('tb-status');
+    if (!result.ok) {
+      status.textContent = '';
+      showTbAlert(result.message || 'Lecture du profil Thunderbird impossible');
+      return;
+    }
+    tbAccounts = result.accounts || [];
+    document.getElementById('tb-profile').textContent = 'Profil : ' + (result.profile || '');
+    var free = tbAccounts.filter(function (a) { return !a.already_configured; }).length;
+    status.textContent = tbAccounts.length + ' compte(s) IMAP, ' + free + ' à importer';
+    renderTbList();
+  }
+
+  function accountIndexByName(name) {
+    for (var i = 0; i < accounts.length; i++) {
+      if (accounts[i].name === name) return i;
+    }
+    return -1;
+  }
+
+  function renderTbReports(reports) {
+    var html = '';
+    for (var i = 0; i < reports.length; i++) {
+      var r = reports[i];
+      html += '<div class="tb-report ' + (r.ok ? 'ok' : 'failed') + '">';
+      html += '<span class="tb-report-name">' + (r.ok ? '✓ ' : '✗ ') + escapeHtml(r.name) + '</span>';
+      if (r.message) html += '<span class="tb-report-msg">' + escapeHtml(r.message) + '</span>';
+      if (!r.ok && accountIndexByName(r.name) >= 0) {
+        html += '<button type="button" class="btn-secondary tb-edit" data-name="' + escapeHtml(r.name) + '">Modifier</button>';
+      }
+      html += '</div>';
+    }
+    var el = document.getElementById('tb-reports');
+    el.innerHTML = html;
+    var edits = el.querySelectorAll('.tb-edit');
+    for (var e = 0; e < edits.length; e++) {
+      edits[e].addEventListener('click', function () {
+        var idx = accountIndexByName(this.getAttribute('data-name'));
+        if (idx < 0) return;
+        document.getElementById('tb-import-view').style.display = 'none';
+        showAccountDetail(idx);
+      });
+    }
+  }
+
+  function onThunderbirdImported(result) {
+    tbImporting = false;
+    // Written accounts appear in the list even when the panel was closed meanwhile.
+    if (Array.isArray(result.accounts)) {
+      accounts = result.accounts;
+      renderAccountList();
+    }
+    var status = document.getElementById('tb-status');
+    if (!result.ok) {
+      status.textContent = '';
+      if (result.primary_password_required) {
+        document.getElementById('tb-primary-field').style.display = '';
+        document.getElementById('tb-primary-password').focus();
+      }
+      showTbAlert(result.message || 'Import impossible');
+      refreshTbImportButton();
+      return;
+    }
+    var reports = result.reports || [];
+    var failed = reports.filter(function (r) { return !r.ok; }).length;
+    status.textContent = (reports.length - failed) + ' compte(s) importé(s) et vérifié(s)';
+    status.className = 'folder-status' + (failed ? '' : ' ok');
+    if (failed) {
+      showTbAlert(failed + ' compte(s) en échec. Un compte ajouté sans connexion vérifiée ' +
+        'n’exporte que INBOX : ouvrez-le avec « Modifier » pour corriger son mot de passe et ses dossiers.');
+    }
+    document.getElementById('tb-list').style.display = 'none';
+    document.getElementById('tb-primary-field').style.display = 'none';
+    document.getElementById('tb-import').style.display = 'none';
+    document.getElementById('tb-cancel').textContent = 'Fermer';
+    renderTbReports(reports);
+  }
+
+  // Called by Rust via evaluate_script("config_result(<json>)") after each request
+  // answered by the host, including connection tests (from a background thread).
   window.config_result = function (result) {
     var message = result.message || 'Erreur de sauvegarde';
+    if (result.action === 'test_connection') {
+      onConnectionTested(result);
+      return;
+    }
+    if (result.action === 'thunderbird_scan') {
+      onThunderbirdScanned(result);
+      return;
+    }
+    if (result.action === 'thunderbird_import') {
+      onThunderbirdImported(result);
+      return;
+    }
     if (result.action === 'move_account') {
       // Only the list changes: the General tab keeps any unsaved edit.
       if (!result.ok) { showReloadMsg(message, false); return; }
@@ -1201,8 +1565,11 @@
       window.__SETTINGS_DATA__ = result.settings || {};
       accounts = result.accounts || [];
       currentAccountIdx = -1;
+      savedSelection = null;
+      resetFolderTest();
       populateGeneral();
       document.getElementById('account-detail-view').style.display = 'none';
+      document.getElementById('tb-import-view').style.display = 'none';
       document.getElementById('account-list-wrap').style.display = '';
       renderAccountList();
       showReloadMsg(result.notice || 'Configuration rechargée depuis les fichiers.', true);
@@ -1239,6 +1606,7 @@
   }
 
   renderAccountList();
+  if (window.__START_VIEW__ === 'thunderbird') showThunderbirdImport();
 })();
 </script>
 </body>

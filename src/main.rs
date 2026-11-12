@@ -264,20 +264,7 @@ fn main() -> Result<()> {
                     is_default: false,
                 }
             } else {
-                // Auto-detect default profile
-                let profiles =
-                    thunderbird::list_profiles().context("Could not find Thunderbird profiles")?;
-
-                // Prefer the marked default, but only if it has prefs.js (it may be an empty placeholder)
-                let has_prefs =
-                    |p: &thunderbird::ThunderbirdProfile| p.path.join("prefs.js").exists();
-
-                profiles
-                    .iter()
-                    .find(|p| p.is_default && has_prefs(p))
-                    .or_else(|| profiles.iter().find(|p| has_prefs(p)))
-                    .cloned()
-                    .context("No usable Thunderbird profiles found (no prefs.js)")?
+                thunderbird::default_profile()?
             };
 
             println!(
@@ -347,7 +334,9 @@ fn main() -> Result<()> {
                                 std::fs::create_dir_all(parent)?;
                             }
                             match thunderbird::write_passwords_to_env(
-                                &accounts, &passwords, &env_path,
+                                &summary.added_accounts(&accounts),
+                                &passwords,
+                                &env_path,
                             ) {
                                 Ok(n) => {
                                     println!("Written {} password(s) to {}", n, env_path.display())

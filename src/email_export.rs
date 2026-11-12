@@ -18,6 +18,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
+use std::time::Duration;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2284,76 +2285,15 @@ impl ImapExporter {
             .as_ref()
             .context("No password found")?;
 
-        if self.debug_mode {
-            println!(
-                "Connecting to {}:{}...",
-                self.account.server, self.account.port
-            );
-        }
-
-        let local_test_tls = std::env::var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST").as_deref()
-            == Ok("1")
-            && matches!(
-                self.account.server.as_str(),
-                "localhost" | "127.0.0.1" | "::1"
-            );
-        let mut builder = imap::ClientBuilder::new(&self.account.server, self.account.port);
-        if local_test_tls {
-            builder = builder
-                .mode(imap::ConnectionMode::Tls)
-                .danger_skip_tls_verify(true);
-        }
-        let client = builder.connect().context("connect to imap server")?;
-
-        // `ClientBuilder` has no timeout option: without one, a server that stops
-        // answering mid-export blocks the read forever. Apply the configured read
-        // timeout on the transport, then rebuild the client around it.
-        let client = {
-            use imap::extensions::idle::SetReadTimeout;
-            let mut stream = client.into_inner().context("take imap transport")?;
-            stream
-                .set_read_timeout(Some(self.network_config.read_timeout))
-                .context("set imap read timeout")?;
-            let mut client = imap::Client::new(stream);
-            client.greeting_read = true; // greeting already consumed by the builder
-            client
-        };
-
+        let session = open_session(
+            &self.account.server,
+            self.account.port,
+            &self.account.username,
+            password,
+            self.network_config.read_timeout,
+            self.debug_mode,
+        )?;
         self.is_gmail = is_gmail_server(&self.account.server);
-
-        if self.debug_mode {
-            println!("Authenticating as {}...", self.account.username);
-        }
-
-        let session = match client.login(&self.account.username, password) {
-            Ok(s) => s,
-            Err((login_err, client)) => {
-                if self.debug_mode {
-                    println!("LOGIN failed ({}), trying AUTHENTICATE PLAIN...", login_err);
-                }
-                struct PlainAuth {
-                    username: String,
-                    password: String,
-                }
-                impl imap::Authenticator for PlainAuth {
-                    type Response = Vec<u8>;
-                    fn process(&self, _challenge: &[u8]) -> Self::Response {
-                        let mut r = vec![0u8];
-                        r.extend_from_slice(self.username.as_bytes());
-                        r.push(0u8);
-                        r.extend_from_slice(self.password.as_bytes());
-                        r
-                    }
-                }
-                let auth = PlainAuth {
-                    username: self.account.username.clone(),
-                    password: password.to_string(),
-                };
-                client.authenticate("PLAIN", &auth).map_err(|(e, _)| {
-                    anyhow::anyhow!("Authentication failed (LOGIN: {login_err} / PLAIN: {e})")
-                })?
-            }
-        };
 
         if self.debug_mode {
             println!("Connected successfully!");
@@ -2363,41 +2303,18 @@ impl ImapExporter {
         Ok(())
     }
 
-    /// List all folders.
+    /// List the folders the export walks.
     ///
     /// Returns the raw IMAP name (modified UTF-7, used for `SELECT`) and a decoded
-    /// display name (used for local paths, `ignored_folders` matching and logging).
-    /// Folders with the `\Noselect` attribute (e.g. Gmail's `[Gmail]` parent) are
-    /// filtered out because they cannot be opened with `SELECT`.
+    /// display name (used for local paths, folder selection (`Account::exports_folder`) and logging).
+    /// Special-use folders (trash, junk, drafts, all mail, flagged, important) are
+    /// left out: [`list_all_folders`](Self::list_all_folders) keeps them with their role.
     pub fn list_folders(&mut self) -> Result<Vec<FolderName>> {
-        let session = self.session.as_mut().context("Not connected")?;
-
-        if self.debug_mode {
-            println!("Listing folders...");
-        }
-
-        let folders = session.list(None, Some("*"))?;
-        let folder_names: Vec<FolderName> = folders
-            .iter()
-            .filter(|f| {
-                let attrs = f.attributes();
-                !attrs.contains(&NameAttribute::NoSelect)
-                    && !attrs.contains(&NameAttribute::Junk)
-                    && !attrs.contains(&NameAttribute::Trash)
-                    && !attrs.contains(&NameAttribute::Drafts)
-                    && !attrs.contains(&NameAttribute::All)
-                    && !attrs.contains(&NameAttribute::Flagged)
-                    && !attrs.iter().any(|a| {
-                        matches!(a, NameAttribute::Extension(s) if s.eq_ignore_ascii_case("Important"))
-                    })
-                    // Gmail does not always declare \Important via SPECIAL-USE — filter by known names
-                    && !matches!(f.name(), "[Gmail]/Important" | "[Google Mail]/Important")
-            })
-            .map(|f| {
-                let raw = f.name().to_string();
-                let display = decode_imap_utf7(f.name());
-                FolderName { raw, display }
-            })
+        let folder_names: Vec<FolderName> = self
+            .list_all_folders()?
+            .into_iter()
+            .filter(|f| f.role != FolderRole::Special)
+            .map(|f| f.name)
             .collect();
 
         if self.debug_mode {
@@ -2405,6 +2322,17 @@ impl ImapExporter {
         }
 
         Ok(folder_names)
+    }
+
+    /// List every selectable folder with its role and hierarchy depth.
+    pub fn list_all_folders(&mut self) -> Result<Vec<ListedFolder>> {
+        let session = self.session.as_mut().context("Not connected")?;
+
+        if self.debug_mode {
+            println!("Listing folders...");
+        }
+
+        list_session_folders(session)
     }
 
     /// Search every eligible mailbox for the address rules of one contextual
@@ -2430,14 +2358,10 @@ impl ImapExporter {
             .has_str("X-GM-EXT-1");
         let folders = self.list_folders()?;
         let account_name = self.account.name.clone();
-        let ignored_folders = self.account.ignored_folders.clone();
         let mut candidates = Vec::new();
 
         for folder in folders {
-            if ignored_folders
-                .iter()
-                .any(|ignored| ignored == &folder.display)
-            {
+            if !self.account.exports_folder(&folder.display) {
                 continue;
             }
             let session = self.session.as_mut().context("Not connected")?;
@@ -2563,16 +2487,13 @@ impl ImapExporter {
             .has_str("X-GM-EXT-1");
         let folders = self.list_folders()?;
         let base_export_directory = PathBuf::from(&self.account.export_directory);
-        let ignored_folders = self.account.ignored_folders.clone();
         let mut seen_provider_ids = HashSet::new();
         let mut entries = Vec::new();
 
         for folder in folders {
             let selected = match only_folder {
                 Some(name) => folder.display == name || folder.raw == name,
-                None => !ignored_folders
-                    .iter()
-                    .any(|ignored| ignored == &folder.display),
+                None => self.account.exports_folder(&folder.display),
             };
             if !selected {
                 continue;
@@ -3599,18 +3520,22 @@ impl ImapExporter {
                 None
             };
 
-            let folders = self.list_folders()?;
+            let all_folders = self.list_folders()?;
+            for missing in missing_included_folders(&self.account, &all_folders) {
+                println!("Warning: Selected folder not found on server: {missing}");
+            }
+            // Selection matched against the decoded display name
+            let (folders, ignored): (Vec<_>, Vec<_>) = all_folders
+                .into_iter()
+                .partition(|folder| self.account.exports_folder(&folder.display));
+            for folder in &ignored {
+                println!("Ignored folder: {}", folder.display);
+            }
             let total_folders = folders.len();
             let mut folder_index = 0usize;
             let batch_size = self.account.batch_size;
 
             for folder in folders {
-                // Skip ignored folders (matched against the decoded display name)
-                if self.account.ignored_folders.contains(&folder.display) {
-                    println!("Ignored folder: {}", folder.display);
-                    continue;
-                }
-
                 folder_index += 1;
                 if let Some(cb) = on_progress {
                     if batch_size > 0 {
@@ -3796,11 +3721,299 @@ pub fn purge_summary<'a>(stats: impl IntoIterator<Item = &'a ExportStats>) -> St
 ///
 /// `raw` is the modified UTF-7 name as sent by the server and must be used
 /// for IMAP commands like `SELECT`. `display` is the decoded UTF-8 form used
-/// for local paths, logging and matching against `ignored_folders`.
+/// for local paths, logging and folder selection (`Account::exports_folder`).
 #[derive(Debug, Clone)]
 pub struct FolderName {
     pub raw: String,
     pub display: String,
+}
+
+/// Names of `included_folders` the server no longer lists (renamed or deleted).
+fn missing_included_folders<'a>(account: &'a Account, listed: &[FolderName]) -> Vec<&'a str> {
+    account
+        .included_folders
+        .iter()
+        .flatten()
+        .filter(|name| {
+            !listed.iter().any(|folder| {
+                folder.display == **name
+                    || (name.eq_ignore_ascii_case("INBOX")
+                        && folder.display.eq_ignore_ascii_case("INBOX"))
+            })
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+/// An authenticated IMAP session, whatever the transport.
+pub type ImapSession = Session<Box<dyn ImapConnection>>;
+
+/// Deadline of a connection probe started from the tray.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// What a folder is for, as far as the folder picker and the export care.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FolderRole {
+    /// The `INBOX` mailbox.
+    Inbox,
+    /// The `\Sent` special-use folder.
+    Sent,
+    /// Trash, junk, drafts, all mail, flagged, important: never exported.
+    Special,
+    /// Any other folder.
+    Regular,
+}
+
+/// A selectable folder with its role and its depth in the hierarchy.
+#[derive(Debug, Clone)]
+pub struct ListedFolder {
+    pub name: FolderName,
+    pub role: FolderRole,
+    /// Number of hierarchy delimiters in the name (`INBOX.Factures` → 1).
+    pub depth: usize,
+}
+
+/// Failures `describe_connection_error` must tell apart from plain I/O errors.
+#[derive(Debug)]
+pub enum ProbeFailure {
+    /// No answer before the probe deadline.
+    TimedOut,
+    /// The server refused both LOGIN and AUTHENTICATE PLAIN.
+    AuthRejected(String),
+}
+
+impl std::fmt::Display for ProbeFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimedOut => write!(f, "connection probe timed out"),
+            Self::AuthRejected(detail) => write!(f, "authentication failed ({detail})"),
+        }
+    }
+}
+
+impl std::error::Error for ProbeFailure {}
+
+/// Open an authenticated session from the four connection fields.
+///
+/// Tries LOGIN first, then AUTHENTICATE PLAIN. Self-signed TLS is accepted only
+/// for the local test fixture (`EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST=1` on localhost).
+fn open_session(
+    server: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    read_timeout: Duration,
+    debug: bool,
+) -> Result<ImapSession> {
+    if debug {
+        println!("Connecting to {server}:{port}...");
+    }
+
+    let local_test_tls = std::env::var("EMAIL_TO_MARKDOWN_IMAP_INSECURE_TEST").as_deref()
+        == Ok("1")
+        && matches!(server, "localhost" | "127.0.0.1" | "::1");
+    let mut builder = imap::ClientBuilder::new(server, port);
+    if local_test_tls {
+        builder = builder
+            .mode(imap::ConnectionMode::Tls)
+            .danger_skip_tls_verify(true);
+    }
+    let client = builder.connect().context("connect to imap server")?;
+
+    // `ClientBuilder` has no timeout option: without one, a server that stops
+    // answering mid-export blocks the read forever. Apply the configured read
+    // timeout on the transport, then rebuild the client around it.
+    let client = {
+        use imap::extensions::idle::SetReadTimeout;
+        let mut stream = client.into_inner().context("take imap transport")?;
+        stream
+            .set_read_timeout(Some(read_timeout))
+            .context("set imap read timeout")?;
+        let mut client = imap::Client::new(stream);
+        client.greeting_read = true; // greeting already consumed by the builder
+        client
+    };
+
+    if debug {
+        println!("Authenticating as {username}...");
+    }
+
+    match client.login(username, password) {
+        Ok(session) => Ok(session),
+        Err((login_err, client)) => {
+            if debug {
+                println!("LOGIN failed ({login_err}), trying AUTHENTICATE PLAIN...");
+            }
+            struct PlainAuth {
+                username: String,
+                password: String,
+            }
+            impl imap::Authenticator for PlainAuth {
+                type Response = Vec<u8>;
+                fn process(&self, _challenge: &[u8]) -> Self::Response {
+                    let mut r = vec![0u8];
+                    r.extend_from_slice(self.username.as_bytes());
+                    r.push(0u8);
+                    r.extend_from_slice(self.password.as_bytes());
+                    r
+                }
+            }
+            let auth = PlainAuth {
+                username: username.to_string(),
+                password: password.to_string(),
+            };
+            client.authenticate("PLAIN", &auth).map_err(|(e, _)| {
+                ProbeFailure::AuthRejected(format!("LOGIN: {login_err} / PLAIN: {e}")).into()
+            })
+        }
+    }
+}
+
+/// Role of a folder from its name and its `LIST` attributes (RFC 6154).
+fn folder_role(name: &str, attrs: &[NameAttribute]) -> FolderRole {
+    if name.eq_ignore_ascii_case("INBOX") {
+        return FolderRole::Inbox;
+    }
+    if attrs.contains(&NameAttribute::Sent) {
+        return FolderRole::Sent;
+    }
+    let special = attrs.iter().any(|a| {
+        matches!(
+            a,
+            NameAttribute::Junk
+                | NameAttribute::Trash
+                | NameAttribute::Drafts
+                | NameAttribute::All
+                | NameAttribute::Flagged
+        ) || matches!(a, NameAttribute::Extension(s) if s.eq_ignore_ascii_case("Important"))
+    })
+        // Gmail does not always declare \Important via SPECIAL-USE — filter by known names
+        || matches!(name, "[Gmail]/Important" | "[Google Mail]/Important");
+    if special {
+        FolderRole::Special
+    } else {
+        FolderRole::Regular
+    }
+}
+
+/// Number of hierarchy levels below the root, from the server's delimiter.
+fn folder_depth(name: &str, delimiter: Option<&str>) -> usize {
+    match delimiter {
+        Some(d) if !d.is_empty() => name.matches(d).count(),
+        _ => 0,
+    }
+}
+
+/// Every selectable folder of the session, `\Noselect` parents left out.
+fn list_session_folders(session: &mut ImapSession) -> Result<Vec<ListedFolder>> {
+    let folders = session.list(None, Some("*")).context("list imap folders")?;
+    Ok(folders
+        .iter()
+        .filter(|f| !f.attributes().contains(&NameAttribute::NoSelect))
+        .map(|f| ListedFolder {
+            name: FolderName {
+                raw: f.name().to_string(),
+                display: decode_imap_utf7(f.name()),
+            },
+            role: folder_role(f.name(), f.attributes()),
+            depth: folder_depth(f.name(), f.delimiter()),
+        })
+        .collect())
+}
+
+/// Check that an account connects and list its folders, within `timeout`.
+///
+/// The connection runs on its own thread: `imap::ClientBuilder` offers no
+/// connect timeout and reads the greeting before any read timeout can be set,
+/// so a server that accepts and stays silent would block forever. Past the
+/// deadline the thread is abandoned; it ends when the TCP connection fails or
+/// closes, or with the app if the server never closes it.
+pub fn probe_account(
+    server: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    timeout: Duration,
+) -> Result<Vec<ListedFolder>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (server, username, password) = (
+        server.to_string(),
+        username.to_string(),
+        password.to_string(),
+    );
+    std::thread::spawn(move || {
+        let result = open_session(&server, port, &username, &password, timeout, false).and_then(
+            |mut session| {
+                let folders = list_session_folders(&mut session);
+                let _ = session.logout();
+                folders
+            },
+        );
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(timeout)
+        .unwrap_or_else(|_| Err(ProbeFailure::TimedOut.into()))
+}
+
+/// Gmail's answer when the account password is sent instead of an app password.
+const GMAIL_APP_PASSWORD_HINT: &str = "Application-specific password required";
+
+/// French explanation of a failed probe, shown in the alert of the tray.
+pub fn describe_connection_error(server: &str, err: &anyhow::Error) -> String {
+    let full = format!("{err:#}");
+    let gmail_advice = "Gmail exige un mot de passe d'application (validation en deux étapes \
+                        activée) : créez-en un sur https://myaccount.google.com/apppasswords \
+                        et utilisez-le à la place du mot de passe du compte.";
+
+    if full.contains(GMAIL_APP_PASSWORD_HINT) {
+        return gmail_advice.to_string();
+    }
+    let describe_io = |io: &std::io::Error| {
+        if matches!(
+            io.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ) {
+            format!("Délai dépassé : {server} n'a pas répondu à temps.")
+        } else {
+            format!("Serveur injoignable ({server}) : {io}.")
+        }
+    };
+    for cause in err.chain() {
+        if let Some(failure) = cause.downcast_ref::<ProbeFailure>() {
+            return match failure {
+                ProbeFailure::TimedOut => format!(
+                    "Délai dépassé : {server} n'a pas répondu à temps. Vérifiez le serveur et le port."
+                ),
+                ProbeFailure::AuthRejected(_) if is_gmail_server(server) => {
+                    gmail_advice.to_string()
+                }
+                ProbeFailure::AuthRejected(_) => {
+                    "Identifiant ou mot de passe refusé par le serveur.".to_string()
+                }
+            };
+        }
+        // `imap::Error` only implements the deprecated `cause()`, so `chain()`
+        // never reaches the I/O error inside `Error::Io`: unwrap it here.
+        if let Some(imap_err) = cause.downcast_ref::<imap::Error>() {
+            match imap_err {
+                imap::Error::TlsHandshake(_) | imap::Error::Tls(_) => {
+                    return format!(
+                        "Connexion sécurisée (TLS) refusée par {server} : vérifiez le port (993 en général)."
+                    );
+                }
+                imap::Error::Io(io) => return describe_io(io),
+                imap::Error::ConnectionLost => {
+                    return format!("Serveur injoignable ({server}) : connexion interrompue.");
+                }
+                _ => {}
+            }
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return describe_io(io);
+        }
+    }
+    format!("Échec de la connexion : {full}")
 }
 
 #[cfg(test)]
@@ -3814,6 +4027,67 @@ mod tests {
             raw: "INBOX".to_string(),
             display: "INBOX".to_string(),
         }
+    }
+
+    fn auth_rejected(detail: &str) -> anyhow::Error {
+        anyhow::Error::from(ProbeFailure::AuthRejected(detail.to_string()))
+    }
+
+    #[test]
+    fn test_describe_connection_error_with_gmail_auth_rejected() {
+        let msg = describe_connection_error("imap.gmail.com", &auth_rejected("LOGIN: No"));
+        assert!(msg.contains("https://myaccount.google.com/apppasswords"));
+    }
+
+    #[test]
+    fn test_describe_connection_error_with_gmail_app_password_text() {
+        let err = anyhow::anyhow!("[ALERT] Application-specific password required");
+        let msg = describe_connection_error("imap.example.org", &err);
+        assert!(msg.contains("mot de passe d'application"));
+    }
+
+    #[test]
+    fn test_describe_connection_error_with_other_server_auth_rejected() {
+        let msg = describe_connection_error("imap.free.fr", &auth_rejected("LOGIN: No"));
+        assert_eq!(msg, "Identifiant ou mot de passe refusé par le serveur.");
+    }
+
+    #[test]
+    fn test_describe_connection_error_with_unreachable_server() {
+        let io = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        let err = anyhow::Error::from(io).context("connect to imap server");
+        let msg = describe_connection_error("imap.free.fr", &err);
+        assert!(msg.starts_with("Serveur injoignable (imap.free.fr)"));
+    }
+
+    #[test]
+    fn test_describe_connection_error_with_timeout() {
+        let err = anyhow::Error::from(ProbeFailure::TimedOut);
+        let msg = describe_connection_error("imap.free.fr", &err);
+        assert!(msg.starts_with("Délai dépassé"));
+    }
+
+    #[test]
+    fn test_folder_role_with_special_use_attributes() {
+        assert_eq!(folder_role("inbox", &[]), FolderRole::Inbox);
+        assert_eq!(
+            folder_role("Sent", &[NameAttribute::Sent]),
+            FolderRole::Sent
+        );
+        assert_eq!(
+            folder_role("Trash", &[NameAttribute::Trash]),
+            FolderRole::Special
+        );
+        assert_eq!(folder_role("[Gmail]/Important", &[]), FolderRole::Special);
+        assert_eq!(folder_role("Projets", &[]), FolderRole::Regular);
+    }
+
+    #[test]
+    fn test_folder_depth_with_delimiters() {
+        assert_eq!(folder_depth("INBOX.Factures", Some(".")), 1);
+        assert_eq!(folder_depth("[Gmail]/Envoyés", Some("/")), 1);
+        assert_eq!(folder_depth("Projets", Some("/")), 0);
+        assert_eq!(folder_depth("A.B", None), 0);
     }
 
     #[test]
@@ -4680,6 +4954,7 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             username: "user@example.com".to_string(),
             password: None,
             export_directory: export_dir.to_string(),
+            included_folders: None,
             ignored_folders: vec![],
             quote_depth: 0,
             skip_existing: false,
@@ -4689,6 +4964,33 @@ aWx0bzpwYkBjb3JwLnRlc3QNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==\r\n\
             cleanup_empty_dirs: false,
             batch_size: 0,
         }
+    }
+
+    #[test]
+    fn test_missing_included_folders_with_vanished_folder() {
+        let mut account = make_account("out");
+        account.included_folders = Some(vec![
+            "inbox".to_string(),
+            "Projets".to_string(),
+            "Archives2019".to_string(),
+        ]);
+        let listed = [
+            inbox(),
+            FolderName {
+                raw: "Projets".to_string(),
+                display: "Projets".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            missing_included_folders(&account, &listed),
+            ["Archives2019"]
+        );
+    }
+
+    #[test]
+    fn test_missing_included_folders_without_selection() {
+        assert!(missing_included_folders(&make_account("out"), &[inbox()]).is_empty());
     }
 
     #[test]

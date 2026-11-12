@@ -8,6 +8,10 @@ use serde_json::Value;
 
 use crate::config::{self, AccountBehavior, RawAccount, Settings};
 use crate::date_layout::DateLayout;
+use crate::email_export::{describe_connection_error, probe_account, ListedFolder, PROBE_TIMEOUT};
+use crate::thunderbird::{
+    self, AuthKind, ImportReport, PrimaryPasswordRequired, ThunderbirdAccount, ThunderbirdProfile,
+};
 use crate::tray_actions::{action_open_config, ActionResult};
 
 /// Read a string field from a JSON object, `None` if missing or not a string.
@@ -766,8 +770,12 @@ struct AccountData {
     server: String,
     port: u16,
     username: String,
+    /// Ticked folders; `Some` replaces `ignored_folders` in `accounts.yaml`.
     #[serde(default)]
-    ignored_folders: Vec<String>,
+    included_folders: Option<Vec<String>>,
+    /// `Option`, not `Vec`: an absent key must keep the saved list, not empty it.
+    #[serde(default)]
+    ignored_folders: Option<Vec<String>>,
     #[serde(default)]
     delete_after_export: Option<bool>,
     #[serde(default)]
@@ -1040,7 +1048,12 @@ fn save_account(
             acct.server = data.server.clone();
             acct.port = data.port;
             acct.username = data.username.clone();
-            acct.ignored_folders = data.ignored_folders.clone();
+            if let Some(included) = &data.included_folders {
+                acct.included_folders = Some(included.clone());
+                acct.ignored_folders.clear();
+            } else if let Some(ignored) = &data.ignored_folders {
+                acct.ignored_folders = ignored.clone();
+            }
             found = true;
             break;
         }
@@ -1051,7 +1064,11 @@ fn save_account(
             server: data.server.clone(),
             port: data.port,
             username: data.username.clone(),
-            ignored_folders: data.ignored_folders.clone(),
+            included_folders: data.included_folders.clone(),
+            ignored_folders: match &data.included_folders {
+                Some(_) => Vec::new(),
+                None => data.ignored_folders.clone().unwrap_or_default(),
+            },
         });
     }
 
@@ -1181,6 +1198,242 @@ fn reload_outcome(
         result: None,
         should_close: false,
         reply: Some(reply.to_string()),
+    }
+}
+
+/// Password of `account_name` stored in `.env`, `_APPLICATION_PASSWORD` first.
+///
+/// Read from the file, not the process environment: the form must see the
+/// value just saved. A missing file or an empty value counts as absent.
+fn stored_password(env_path: &Path, account_name: &str) -> anyhow::Result<Option<String>> {
+    if !env_path.exists() {
+        return Ok(None);
+    }
+    let mut values = std::collections::HashMap::new();
+    for item in dotenvy::from_path_iter(env_path)
+        .with_context(|| format!("failed to open {}", env_path.display()))?
+    {
+        let (key, value) =
+            item.with_context(|| format!("failed to read {}", env_path.display()))?;
+        values.insert(key, value);
+    }
+    Ok(env_password_keys(account_name)
+        .iter()
+        .filter_map(|key| values.get(key))
+        .find(|value| !value.is_empty())
+        .cloned())
+}
+
+/// Password to probe with: the typed one, or the stored one when the form still
+/// targets the saved account (same name, server and username).
+///
+/// The guard keeps a stored password from being sent to a server the user just typed.
+fn probe_password(
+    data: &AccountData,
+    accounts_path: &Path,
+    env_path: &Path,
+) -> anyhow::Result<String> {
+    if let Some(typed) = data.password.as_deref().filter(|p| !p.is_empty()) {
+        return Ok(typed.to_string());
+    }
+    let missing = || {
+        anyhow::anyhow!(
+            "Saisissez le mot de passe pour tester la connexion \u{00e0} {}.",
+            data.server
+        )
+    };
+    if data.create {
+        return Err(missing());
+    }
+    let accounts = config::load_raw_accounts(accounts_path)
+        .with_context(|| format!("failed to load accounts from {}", accounts_path.display()))?;
+    let unchanged = accounts.iter().any(|a| {
+        a.name.eq_ignore_ascii_case(&data.account_name)
+            && a.server.eq_ignore_ascii_case(data.server.trim())
+            && a.username == data.username.trim()
+    });
+    if !unchanged {
+        return Err(missing());
+    }
+    stored_password(env_path, &data.account_name)?.ok_or_else(missing)
+}
+
+type ProbeFn = dyn FnOnce(&str, u16, &str, &str) -> anyhow::Result<Vec<ListedFolder>>;
+
+/// JSON answer to a `test_connection` request. Never carries the password.
+fn test_connection_with(
+    data: &AccountData,
+    accounts_path: &Path,
+    env_path: &Path,
+    probe: Box<ProbeFn>,
+) -> Value {
+    let server = data.server.trim();
+    let failure = |message: String| serde_json::json!({ "action": "test_connection", "ok": false, "message": message });
+    let password = match probe_password(data, accounts_path, env_path) {
+        Ok(password) => password,
+        Err(e) => return failure(format!("{e:#}")),
+    };
+    match probe(server, data.port, data.username.trim(), &password) {
+        Ok(folders) => serde_json::json!({
+            "action": "test_connection",
+            "ok": true,
+            "folders": folders
+                .iter()
+                .map(|f| serde_json::json!({
+                    "name": f.name.display,
+                    "role": f.role,
+                    "depth": f.depth,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        Err(e) => failure(describe_connection_error(server, &e)),
+    }
+}
+
+/// Work of a settings-window message that must not run on the IPC handler.
+///
+/// The handler runs on the event loop thread: a network call there freezes
+/// every tray window until it returns. `None` for every synchronous action.
+/// The reply of a connection test echoes `request_id`, so the form drops the
+/// answer of a test made obsolete by an edit.
+pub(super) fn background_config_job(body: &str) -> Option<Box<dyn FnOnce() -> String + Send>> {
+    let msg: ConfigIpcMessage = serde_json::from_str(body).ok()?;
+    match msg.action.as_str() {
+        "test_connection" => Some(test_connection_job(msg.data)),
+        // Reads the profile files: cheap, but kept off the handler with the import.
+        "thunderbird_scan" => Some(Box::new(|| {
+            thunderbird_scan_with(
+                thunderbird::default_profile(),
+                &config::accounts_yaml_path(),
+            )
+            .to_string()
+        })),
+        "thunderbird_import" => Some(Box::new(move || {
+            let accounts_path = config::accounts_yaml_path();
+            let env_path = config::env_file_path();
+            thunderbird_import_with(msg.data.as_ref(), &accounts_path, |ids, primary| {
+                let profile = thunderbird::default_profile()?;
+                thunderbird::import_selected(&profile, ids, primary, &accounts_path, &env_path)
+            })
+            .to_string()
+        })),
+        _ => None,
+    }
+}
+
+fn test_connection_job(data: Option<Value>) -> Box<dyn FnOnce() -> String + Send> {
+    let request_id = data.as_ref().and_then(|d| d.get("request_id")).cloned();
+    let parsed = data
+        .ok_or_else(|| anyhow::anyhow!("donn\u{00e9}es absentes de la demande de test"))
+        .and_then(|raw| {
+            serde_json::from_value::<AccountData>(raw).context("Compte re\u{00e7}u illisible")
+        });
+    Box::new(move || {
+        let mut reply = match parsed {
+            Ok(data) => test_connection_with(
+                &data,
+                &config::accounts_yaml_path(),
+                &config::env_file_path(),
+                Box::new(|server, port, username, password| {
+                    probe_account(server, port, username, password, PROBE_TIMEOUT)
+                }),
+            ),
+            Err(e) => serde_json::json!({
+                "action": "test_connection",
+                "ok": false,
+                "message": format!("Test impossible : {:#}", e),
+            }),
+        };
+        if let (Some(id), Some(fields)) = (request_id, reply.as_object_mut()) {
+            fields.insert("request_id".to_string(), id);
+        }
+        reply.to_string()
+    })
+}
+
+/// Account of the Thunderbird import picker, as the page reads it.
+fn thunderbird_account_json(candidate: &ThunderbirdAccount) -> Value {
+    let auth = match candidate.auth {
+        AuthKind::Password => "password",
+        AuthKind::OAuth2 => "oauth2",
+        AuthKind::Other(_) => "other",
+    };
+    serde_json::json!({
+        "server_id": candidate.server_id,
+        "name": candidate.account.name,
+        "server": candidate.account.server,
+        "username": candidate.account.username,
+        "auth": auth,
+        "has_saved_password": candidate.has_saved_password,
+        "already_configured": candidate.already_configured,
+    })
+}
+
+/// JSON answer to `thunderbird_scan`: the IMAP accounts of `profile`.
+fn thunderbird_scan_with(
+    profile: anyhow::Result<ThunderbirdProfile>,
+    accounts_path: &Path,
+) -> Value {
+    let scanned = profile.and_then(|profile| {
+        let accounts = thunderbird::scan_accounts(&profile, accounts_path)?;
+        Ok((profile, accounts))
+    });
+    match scanned {
+        Ok((profile, accounts)) => serde_json::json!({
+            "action": "thunderbird_scan",
+            "ok": true,
+            "profile": profile.path.display().to_string(),
+            "accounts": accounts.iter().map(thunderbird_account_json).collect::<Vec<_>>(),
+        }),
+        Err(e) => serde_json::json!({
+            "action": "thunderbird_scan",
+            "ok": false,
+            "message": format!("Lecture du profil Thunderbird impossible : {e:#}"),
+        }),
+    }
+}
+
+/// JSON answer to `thunderbird_import`: one report per ticked account and the
+/// reloaded account list. Never carries the primary password.
+///
+/// A profile locked by a primary password answers `primary_password_required`:
+/// the page then asks for it and sends the same selection again.
+fn thunderbird_import_with(
+    data: Option<&Value>,
+    accounts_path: &Path,
+    import: impl FnOnce(&[String], Option<&str>) -> anyhow::Result<Vec<ImportReport>>,
+) -> Value {
+    let failure = |message: String| serde_json::json!({ "action": "thunderbird_import", "ok": false, "message": message });
+    let server_ids: Vec<String> = data
+        .and_then(|d| d.get("server_ids"))
+        .and_then(|v| v.as_array())
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if server_ids.is_empty() {
+        return failure("Aucun compte s\u{00e9}lectionn\u{00e9}".to_string());
+    }
+    let primary_password = data
+        .and_then(|d| field_str(d, "primary_password"))
+        .filter(|p| !p.is_empty());
+    match import(&server_ids, primary_password) {
+        Ok(reports) => serde_json::json!({
+            "action": "thunderbird_import",
+            "ok": true,
+            "reports": reports,
+            // `null` when unreadable: the page keeps its list, the menu is rebuilt.
+            "accounts": config::load_raw_accounts(accounts_path).ok(),
+        }),
+        Err(e) if e.downcast_ref::<PrimaryPasswordRequired>().is_some() => serde_json::json!({
+            "action": "thunderbird_import",
+            "ok": false,
+            "primary_password_required": true,
+            "message": e.to_string(),
+        }),
+        Err(e) => failure(format!("Import impossible : {e:#}")),
     }
 }
 
@@ -1334,15 +1587,19 @@ pub(super) fn handle_config_ipc(body: &str) -> ConfigIpcOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_route_decisions, dated_dest_path, delete_account, delete_staged_emails,
-        frontmatter_list, move_account, move_outcome, relative_destination, reload_outcome,
-        remove_env_passwords, save_account, save_outcome, save_settings, scan_destinations,
-        set_env_password, state_json_with, validate_new_account_name, AccountData,
-        DestGuiIpcResult, RouteApplyReport, RouteDecisionRow, SettingsData,
+        apply_route_decisions, background_config_job, dated_dest_path, delete_account,
+        delete_staged_emails, frontmatter_list, move_account, move_outcome, relative_destination,
+        reload_outcome, remove_env_passwords, save_account, save_outcome, save_settings,
+        scan_destinations, set_env_password, state_json_with, stored_password,
+        test_connection_with, thunderbird_import_with, thunderbird_scan_with,
+        validate_new_account_name, AccountData, DestGuiIpcResult, ImportReport,
+        PrimaryPasswordRequired, RouteApplyReport, RouteDecisionRow, SettingsData,
+        ThunderbirdProfile,
     };
     use crate::config::{load_raw_accounts, RawAccount, Settings};
     use crate::date_layout::DateLayout;
     use crate::destinations::{DestinationEntry, DestinationsConfig};
+    use crate::email_export::{FolderName, FolderRole, ListedFolder};
     use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1825,6 +2082,80 @@ hi
         )
     }
 
+    const ACCOUNT_WITH_FOLDERS: &str = "accounts:
+  - name: Perso
+    server: imap.example.org
+    port: 993
+    username: perso@example.org
+    included_folders:
+      - Projets
+    ignored_folders:
+      - Spam
+";
+
+    #[test]
+    fn test_save_account_with_included_folders_clears_ignored() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, _) = account_files(&temp);
+        fs::write(&accounts, ACCOUNT_WITH_FOLDERS).unwrap();
+        let mut data = account_data("Perso");
+        data.included_folders = Some(vec!["INBOX".to_string()]);
+
+        save_account(data, &accounts, &settings).unwrap();
+
+        let saved = &load_raw_accounts(&accounts).unwrap()[0];
+        assert_eq!(saved.included_folders, Some(vec!["INBOX".to_string()]));
+        assert!(saved.ignored_folders.is_empty());
+    }
+
+    #[test]
+    fn test_save_account_without_selection_keeps_folder_keys() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, _) = account_files(&temp);
+        fs::write(&accounts, ACCOUNT_WITH_FOLDERS).unwrap();
+
+        save_account(account_data("Perso"), &accounts, &settings).unwrap();
+
+        let saved = &load_raw_accounts(&accounts).unwrap()[0];
+        assert_eq!(saved.included_folders, Some(vec!["Projets".to_string()]));
+        assert_eq!(saved.ignored_folders, ["Spam"]);
+    }
+
+    #[test]
+    fn test_save_account_with_ignored_folders_keeps_included() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, _) = account_files(&temp);
+        fs::write(&accounts, ACCOUNT_WITH_FOLDERS).unwrap();
+        let mut data = account_data("Perso");
+        data.ignored_folders = Some(vec!["Trash".to_string()]);
+
+        save_account(data, &accounts, &settings).unwrap();
+
+        let saved = &load_raw_accounts(&accounts).unwrap()[0];
+        assert_eq!(saved.ignored_folders, ["Trash"]);
+        assert_eq!(saved.included_folders, Some(vec!["Projets".to_string()]));
+    }
+
+    #[test]
+    fn test_save_account_with_new_account_and_included_folders() {
+        let temp = TempDir::new().unwrap();
+        let (accounts, settings, _) = account_files(&temp);
+        fs::write(&accounts, VALID_ACCOUNTS).unwrap();
+        let mut data = account_data("Pro");
+        data.create = true;
+        data.included_folders = Some(vec!["INBOX".to_string(), "Sent".to_string()]);
+
+        save_account(data, &accounts, &settings).unwrap();
+
+        let saved = load_raw_accounts(&accounts).unwrap();
+        let pro = saved.iter().find(|a| a.name == "Pro").unwrap();
+        assert_eq!(
+            pro.included_folders,
+            Some(vec!["INBOX".to_string(), "Sent".to_string()])
+        );
+        assert!(pro.ignored_folders.is_empty());
+    }
+
     #[test]
     fn test_delete_account_removes_entry_override_and_passwords() {
         let temp = TempDir::new().unwrap();
@@ -2039,6 +2370,7 @@ hi
             server: "imap.example.org".to_string(),
             port: 993,
             username: "u".to_string(),
+            included_folders: None,
             ignored_folders: Vec::new(),
         }];
 
@@ -2255,5 +2587,319 @@ hi
         fs::write(&path, "---\nattachments: []\n---\nbody\n").unwrap();
 
         assert!(frontmatter_list(&fs::read_to_string(&path).unwrap(), "attachments").is_empty());
+    }
+
+    fn perso_probe_data(server: &str, password: Option<&str>) -> AccountData {
+        serde_json::from_value(serde_json::json!({
+            "account_name": "Perso",
+            "server": server,
+            "port": 993,
+            "username": "perso@example.org",
+            "password": password,
+        }))
+        .unwrap()
+    }
+
+    fn perso_env(temp: &TempDir) -> (PathBuf, PathBuf) {
+        let (accounts_path, _, env_path) = account_files(temp);
+        fs::write(&accounts_path, VALID_ACCOUNTS).unwrap();
+        fs::write(
+            &env_path,
+            "PERSO_PASSWORD='plain'\nPERSO_APPLICATION_PASSWORD='app'\n",
+        )
+        .unwrap();
+        (accounts_path, env_path)
+    }
+
+    #[test]
+    fn test_stored_password_with_application_password() {
+        let temp = TempDir::new().unwrap();
+        let (_, env_path) = perso_env(&temp);
+
+        assert_eq!(
+            stored_password(&env_path, "Perso").unwrap().as_deref(),
+            Some("app")
+        );
+    }
+
+    #[test]
+    fn test_stored_password_without_env_file() {
+        let temp = TempDir::new().unwrap();
+
+        assert_eq!(
+            stored_password(&temp.path().join(".env"), "Perso").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_test_connection_with_changed_server_skips_probe() {
+        let temp = TempDir::new().unwrap();
+        let (accounts_path, env_path) = perso_env(&temp);
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = called.clone();
+
+        let reply = test_connection_with(
+            &perso_probe_data("imap.other.example", None),
+            &accounts_path,
+            &env_path,
+            Box::new(move |_, _, _, _| {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(Vec::new())
+            }),
+        );
+
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst), "{reply}");
+        assert!(reply["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("Saisissez le mot de passe")));
+    }
+
+    #[test]
+    fn test_test_connection_with_unchanged_account_uses_stored_password() {
+        let temp = TempDir::new().unwrap();
+        let (accounts_path, env_path) = perso_env(&temp);
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let seen = sent.clone();
+
+        let reply = test_connection_with(
+            &perso_probe_data("imap.example.org", Some("")),
+            &accounts_path,
+            &env_path,
+            Box::new(move |_, _, _, password| {
+                *seen.lock().unwrap() = password.to_string();
+                Ok(vec![ListedFolder {
+                    name: FolderName {
+                        raw: "INBOX".into(),
+                        display: "INBOX".into(),
+                    },
+                    role: FolderRole::Inbox,
+                    depth: 0,
+                }])
+            }),
+        );
+
+        assert_eq!(*sent.lock().unwrap(), "app");
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "action": "test_connection",
+                "ok": true,
+                "folders": [{"name": "INBOX", "role": "inbox", "depth": 0}],
+            })
+        );
+    }
+
+    #[test]
+    fn test_test_connection_with_failure_hides_password() {
+        let temp = TempDir::new().unwrap();
+        let (accounts_path, env_path) = perso_env(&temp);
+
+        let reply = test_connection_with(
+            &perso_probe_data("imap.example.org", Some("s3cret-typed")),
+            &accounts_path,
+            &env_path,
+            Box::new(|_, _, _, password| anyhow::bail!("LOGIN refused ({} chars)", password.len())),
+        );
+
+        assert_eq!(reply["ok"], false);
+        assert!(reply["message"].as_str().is_some_and(|m| !m.is_empty()));
+        assert!(!reply.to_string().contains("s3cret-typed"));
+    }
+
+    #[test]
+    fn test_background_config_job_with_sync_action() {
+        assert!(background_config_job(r#"{"action":"reload"}"#).is_none());
+    }
+
+    #[test]
+    fn test_background_config_job_with_request_id() {
+        let job = background_config_job(
+            r#"{"action":"test_connection","data":{"request_id":7,"account_name":"Perso"}}"#,
+        )
+        .unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&job()).unwrap();
+        assert_eq!(
+            (reply["ok"].clone(), reply["request_id"].clone()),
+            (serde_json::json!(false), serde_json::json!(7))
+        );
+    }
+
+    const TB_PREFS: &str = r#"
+user_pref("mail.server.server1.type", "imap");
+user_pref("mail.server.server1.hostname", "imap.free.fr");
+user_pref("mail.server.server1.userName", "moi@free.fr");
+user_pref("mail.server.server1.name", "Perso");
+user_pref("mail.server.server2.type", "imap");
+user_pref("mail.server.server2.hostname", "imap.gmail.com");
+user_pref("mail.server.server2.userName", "moi@gmail.com");
+user_pref("mail.server.server2.name", "Gmail");
+user_pref("mail.server.server2.authMethod", 10);
+"#;
+
+    fn tb_profile(temp: &tempfile::TempDir) -> ThunderbirdProfile {
+        let path = temp.path().join("profile");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("prefs.js"), TB_PREFS).unwrap();
+        ThunderbirdProfile {
+            name: "default".to_string(),
+            path,
+            is_default: true,
+        }
+    }
+
+    fn tb_accounts_yaml(temp: &tempfile::TempDir) -> std::path::PathBuf {
+        let path = temp.path().join("accounts.yaml");
+        std::fs::write(
+            &path,
+            "accounts:\n  - name: Perso\n    server: imap.free.fr\n    port: 993\n    username: moi@free.fr\n",
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn test_thunderbird_scan_with_profile() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let profile = tb_profile(&temp);
+        let accounts_path = tb_accounts_yaml(&temp);
+
+        let reply = thunderbird_scan_with(Ok(profile.clone()), &accounts_path);
+
+        assert_eq!(reply["action"], "thunderbird_scan");
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["profile"], profile.path.display().to_string());
+        assert_eq!(
+            reply["accounts"],
+            serde_json::json!([
+                {"server_id": "server2", "name": "Gmail", "server": "imap.gmail.com",
+                 "username": "moi@gmail.com", "auth": "oauth2",
+                 "has_saved_password": false, "already_configured": false},
+                {"server_id": "server1", "name": "Perso", "server": "imap.free.fr",
+                 "username": "moi@free.fr", "auth": "password",
+                 "has_saved_password": false, "already_configured": true},
+            ])
+        );
+    }
+
+    #[test]
+    fn test_thunderbird_scan_without_profile() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let reply = thunderbird_scan_with(
+            Err(anyhow::anyhow!("No usable Thunderbird profiles found")),
+            &temp.path().join("accounts.yaml"),
+        );
+
+        assert_eq!(
+            (reply["ok"].clone(), reply.get("accounts").is_none()),
+            (serde_json::json!(false), true)
+        );
+        assert!(reply["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("No usable Thunderbird profiles found")));
+    }
+
+    #[test]
+    fn test_thunderbird_import_with_reports_and_reloaded_accounts() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let accounts_path = tb_accounts_yaml(&temp);
+        let data = serde_json::json!({"server_ids": ["server2"], "primary_password": ""});
+        let mut seen = None;
+
+        let reply = thunderbird_import_with(Some(&data), &accounts_path, |ids, primary| {
+            seen = Some((ids.to_vec(), primary.map(str::to_string)));
+            Ok(vec![ImportReport {
+                name: "Gmail".to_string(),
+                ok: false,
+                message: Some("mot de passe d'application requis".to_string()),
+            }])
+        });
+
+        assert_eq!(seen, Some((vec!["server2".to_string()], None)));
+        assert_eq!(reply["ok"], true);
+        assert_eq!(
+            reply["reports"],
+            serde_json::json!([{"name": "Gmail", "ok": false,
+                                "message": "mot de passe d'application requis"}])
+        );
+        assert_eq!(reply["accounts"][0]["name"], "Perso");
+    }
+
+    #[test]
+    fn test_thunderbird_import_passes_primary_password_without_echo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let accounts_path = tb_accounts_yaml(&temp);
+        let data = serde_json::json!({"server_ids": ["server1"], "primary_password": "pp-s3cret"});
+        let mut seen = None;
+
+        let reply = thunderbird_import_with(Some(&data), &accounts_path, |_, primary| {
+            seen = primary.map(str::to_string);
+            Ok(Vec::new())
+        });
+
+        assert_eq!(seen.as_deref(), Some("pp-s3cret"));
+        assert!(!reply.to_string().contains("pp-s3cret"));
+    }
+
+    #[test]
+    fn test_thunderbird_import_with_primary_password_required() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let accounts_path = tb_accounts_yaml(&temp);
+        let before = std::fs::read_to_string(&accounts_path).unwrap();
+        let data = serde_json::json!({"server_ids": ["server1"]});
+
+        let reply = thunderbird_import_with(Some(&data), &accounts_path, |_, _| {
+            Err(PrimaryPasswordRequired.into())
+        });
+
+        assert_eq!(
+            (
+                reply["ok"].clone(),
+                reply["primary_password_required"].clone()
+            ),
+            (serde_json::json!(false), serde_json::json!(true))
+        );
+        assert!(reply["message"].as_str().is_some_and(|m| !m.is_empty()));
+        assert_eq!(std::fs::read_to_string(&accounts_path).unwrap(), before);
+    }
+
+    #[test]
+    fn test_thunderbird_import_with_other_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let data = serde_json::json!({"server_ids": ["server1"]});
+
+        let reply =
+            thunderbird_import_with(Some(&data), &temp.path().join("accounts.yaml"), |_, _| {
+                Err(anyhow::anyhow!("NSS_Init failed"))
+            });
+
+        assert_eq!(reply["ok"], false);
+        assert!(reply.get("primary_password_required").is_none());
+        assert!(reply["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("NSS_Init failed")));
+    }
+
+    #[test]
+    fn test_thunderbird_import_without_selection() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let data = serde_json::json!({"server_ids": []});
+
+        let reply =
+            thunderbird_import_with(Some(&data), &temp.path().join("accounts.yaml"), |_, _| {
+                panic!("nothing to import")
+            });
+
+        assert_eq!(reply["ok"], false);
+    }
+
+    #[test]
+    fn test_background_config_job_with_thunderbird_actions() {
+        assert!(background_config_job(r#"{"action":"thunderbird_scan"}"#).is_some());
+        assert!(background_config_job(
+            r#"{"action":"thunderbird_import","data":{"server_ids":["server1"]}}"#
+        )
+        .is_some());
     }
 }

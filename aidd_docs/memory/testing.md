@@ -11,12 +11,26 @@
 
 ## Test Coverage
 
-- **735 tests without `tray`, 838 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-10)
-  - `--all-features`: 491 lib unit, 332 `rust_tests.rs`, 14 `imap_integration.rs` (all `#[ignore]`)
-- Not covered automatically: `thunderbird.rs` (needs Thunderbird), tray event loop and windows (needs GUI), updater against GitHub, Gmail deletion
+- **791 tests without `tray`, 921 with `--all-features`** (`cargo test --all-features -- --list`, 2026-11-12)
+  - `--all-features`: 549 lib unit, 1 bin, 350 `rust_tests.rs`, 21 `imap_integration.rs` (19 `#[ignore]`)
+  - `imap_integration.rs` not ignored: `probe_account_on_closed_port_*`, `probe_account_on_silent_server_*` (local `TcpListener`, no Docker)
+- Not covered automatically: `thunderbird.rs` NSS part (`extract_passwords`, `unlock_key_slot`, primary password: needs Thunderbird), tray event loop and windows (needs GUI), updater against GitHub, Gmail deletion
 - `ImapExporter` covered by the Dovecot tests only (export, purge, contextual search, deletion outcomes, server cleanup)
+- Connection probe on Dovecot user `probe`: `probe_account_*` (roles, depths, wrong password), `list_folders_keeps_every_folder_but_special_ones`
+- Folder selection: `export_with_included_folders_*`, `export_with_vanished_included_folder_*` (Dovecot `probe`), `exports_folder` / `included_folders` in `config_tests`, `save_account_*` inline in `tray/ipc.rs`
 - Signature filter + quarantine covered end to end on Dovecot (#19): `export_seed_corpus_*`
 - `tray_actions.rs` pure helpers covered inline under `--features tray`
+- Thunderbird import from Settings: `thunderbird_scan_with`, `thunderbird_import_with` inline in `tray/ipc.rs` (injected profile / import closure)
+  - `test_thunderbird_import_passes_primary_password_without_echo`: reply never carries the primary password
+  - `tray/windows.rs`: `reply_changed_accounts` with `thunderbird_import`, `show_view_script`, single `__INITIAL_VIEW__`
+- Manual Thunderbird import procedure (real profile, `--features tray`):
+  - Thunderbird closed; menu « Importer depuis Thunderbird » → Settings on the import panel
+  - Same menu with Settings already open → window focused, panel shown
+  - Tick one account only → only that account in `accounts.yaml` and `.env`
+  - Configured account greyed and unselectable; Gmail OAuth shows the app-password note
+  - Profile with primary password → field shown; wrong one → « incorrect » alert; nothing written
+  - Thunderbird open during import → NSS error alert, nothing written
+  - Failed account → alert with cause, « Modifier » opens its form, `included_folders: ["INBOX"]`
 
 ## Testing Strategy
 
@@ -40,6 +54,10 @@
   - Inject `window.ipc = { postMessage }` stub recording sent messages
   - Serve over `python -m http.server`: Playwright blocks `file:`
   - Simulate replies with `window.config_result({...})` — takes an object, not a JSON string
+  - Page functions are closure-scoped: drive through DOM clicks and `input` events, only `config_result` is global
+  - Folder picker scenarios: saved selection summary, `request_id` stale answer, creation test-before-save, "Enregistrer quand même"
+  - Also replace `__INITIAL_VIEW__` (`""` or `"thunderbird"`); `window.showThunderbirdImport` is global too
+  - Thunderbird panel scenarios: scan render, import message, `primary_password_required`, mixed reports + « Modifier », empty selection
   - Playwright MCP writes only under the project root (`.playwright-mcp/`): delete it afterwards
 - Python tools: always run `python -m pytest tools/tests`, never bare `pytest` from the repository root
   **Why:** root collection walks `target/` (tens of GB) and `archive/`, takes minutes and ends in collection errors
@@ -66,10 +84,11 @@
 | `quote_link_tests` | `Index::from_dir` (skips `.`/`_` dirs), `link_note`, `link_vault` |
 | `server_cleanup::tests` (inline) | `cleanup_account` refusals, `plan` (Gmail labels), `notes_suffix`, `record_results` |
 | `tray_actions::tests` (inline) | `clean_confirmation_text`, contextual summary, `set_export_dir_in`/`set_notes_dir_in` |
-| `email_export::tests` (inline) | `html_to_markdown` signature `cid:` images (Gmail, Outlook, Thunderbird, look-alike class kept), `extract_body` HTML choice, `extract_attachments`, quarantine (counter, collisions, none without deletion, discard on failed export, `discard_quarantined`, `quarantine_warning`), issue #14 E2E with a 30 KB screenshot |
+| `email_export::tests` (inline) | `html_to_markdown` signature `cid:` images (Gmail, Outlook, Thunderbird, look-alike class kept), `extract_body` HTML choice, `extract_attachments`, quarantine (counter, collisions, none without deletion, discard on failed export, `discard_quarantined`, `quarantine_warning`), issue #14 E2E with a 30 KB screenshot, `describe_connection_error` (Gmail, other server, unreachable, timeout), `folder_role`, `folder_depth` |
+| `thunderbird::tests` (inline) | fake profile in `TempDir` (`FAKE_PREFS` 3 IMAP + 1 local, `FAKE_LOGINS` with OAuth token): `scan_accounts` (order, `AuthKind::OAuth2`, `has_saved_password` ignores `oauth://`, `already_configured` by mailbox, no `logins.json`), `AuthKind::from_pref`, `imap_login_server`, `default_included_folders`, `find_password` (two Gmail, single-entry fallback), `write_passwords_to_env` (two Gmail, no fallback on shared server), `added_accounts`, `import_selected_with` (name collision keeps `.env`, tested + OAuth, OAuth app-password message, `PrimaryPasswordRequired` writes nothing, failed probe → `[INBOX]`), `write_accounts_merged`, `parse_prefs_js` |
 | `tray_actions::tests` (inline, `--features tray`) | `is_excluded_staging_dir` (incl. `_skipped`), `contextual_summary_message`, settings writers |
-| `tray::ipc::tests` (inline, `--features tray`) | `move_account` (up, down case-insensitive, edge no-write, unknown name, bad direction), `move_outcome` (new order, missing direction), `delete_account` |
-| `tray::windows::tests` (inline, `--features tray`) | `allow_navigation`, `escape_json_for_script`, `reply_changed_accounts` (`move_account` ok → true, failed → false) |
+| `tray::ipc::tests` (inline, `--features tray`) | `move_account` (up, down case-insensitive, edge no-write, unknown name, bad direction), `move_outcome` (new order, missing direction), `delete_account`, `stored_password` (application password first, no `.env`), `test_connection_with` (changed server skips probe, unchanged account uses stored password, failure hides password), `background_config_job` (sync action → None, `request_id` echoed) |
+| `tray::windows::tests` (inline, `--features tray`) | `allow_navigation`, `escape_json_for_script`, `reply_changed_accounts` (`move_account` ok → true, failed → false, `test_connection` → false) |
 | `network_tests` | `NetworkConfig::default`, `ProgressIndicator::new`/`update`/`inc` |
 
 ## Test Execution
@@ -102,6 +121,10 @@ EMAIL_TO_MARKDOWN_IMAP_TEST=1 cargo test --test imap_integration -- --ignored --
 - CI job `dovecot` (`.github/workflows/ci.yml`): same three steps, `down -v` always
 - `compose.yaml` seeds one user per test (`contextual`, `purge`, `clean-*`, `batch`); a new destructive test gets its own user
   - `gmail-seed`, `gmail-seed-delete`: Gmail seed corpus only (`/seed/gmail/*.eml`)
+  - `probe`: folders `Sent`, `Trash`, `Projets` (1 message), `INBOX/Factures`; read-only tests
+- `tests/fixtures/imap/dovecot.conf` replaces the image's: named `inbox` namespace with `special_use` `\Sent`, `\Trash`
+  **Why:** the image's namespace is unnamed; a second one from `conf.d` fails with `Duplicate namespace prefix`
+  - Fixture folder names: build children with the separator from `LIST` (`/` here), never hardcode it
 - Dovecot test names never contain `gmail_`: CI runs `--skip gmail_` (real-Gmail tests only)
 - CI job `gmail-destructive`: `workflow_dispatch` only, protected environment, dedicated Gmail account
   - Trigger: `gh workflow run ci.yml --ref main -f run_gmail_destructive=true`

@@ -239,7 +239,12 @@ pub(super) fn create_menu() -> Result<Menu> {
 pub(super) fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResult>) {
     match id {
         menu_ids::IMPORT_THUNDERBIRD => {
-            tray_actions::action_import_thunderbird(result_sender);
+            if let Err(e) = send_command(AppCommand::OpenConfig {
+                sender: result_sender.clone(),
+                initial_view: Some(super::windows::THUNDERBIRD_IMPORT_VIEW),
+            }) {
+                eprintln!("Ouverture de l'import Thunderbird impossible : {:#}", e);
+            }
         }
         menu_ids::CHOOSE_EXPORT_DIR => {
             tray_actions::action_choose_export_dir(result_sender);
@@ -259,6 +264,7 @@ pub(super) fn handle_menu_event(id: &str, result_sender: mpsc::Sender<ActionResu
         menu_ids::OPEN_CONFIG => {
             if let Err(e) = send_command(AppCommand::OpenConfig {
                 sender: result_sender.clone(),
+                initial_view: None,
             }) {
                 eprintln!("Ouverture des paramètres impossible : {:#}", e);
             }
