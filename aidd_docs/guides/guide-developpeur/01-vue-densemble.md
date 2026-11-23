@@ -128,4 +128,4 @@ Plusieurs règles s'appliquent à tout le code.
 
 ## Parcours conseillé
 
-Pour comprendre une note exportée de bout en bout, lisez dans l'ordre le chapitre 3 (export IMAP), le chapitre 4 (corps et format des notes), puis le chapitre 5 (routage). Les chapitres 6 et 7 couvrent ce qui entoure l'export : suppressions côté serveur et interface graphique.
+Pour comprendre une note exportée de bout en bout, lisez dans l'ordre le chapitre 3 (export IMAP), le chapitre 4 (corps et format des notes), puis le chapitre 5 (routage). Les chapitres 6 et 7 couvrent ce qui entoure l'export : suppressions côté serveur et interface graphique. Le chapitre 10 est la référence de la ligne de commande : syntaxe, options et exemples de chaque sous-commande.

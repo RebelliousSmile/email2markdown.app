@@ -42,7 +42,7 @@
     <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Chapeau">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>Ce dernier chapitre indique, pour six évolutions courantes, les endroits exacts à modifier. Chaque liste a été relevée dans le code : elle montre aussi où la même information est répétée, ce qui est le meilleur indicateur du coût réel d’un changement.</Content>
+    <Content>Ce chapitre indique, pour six évolutions courantes, les endroits exacts à modifier. Chaque liste a été relevée dans le code : elle montre aussi où la même information est répétée, ce qui est le meilleur indicateur du coût réel d’un changement.</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

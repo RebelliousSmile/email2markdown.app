@@ -1,6 +1,6 @@
 # Points d'*extension*
 
-Ce dernier chapitre indique, pour six évolutions courantes, les endroits exacts à modifier. Chaque liste a été relevée dans le code : elle montre aussi où la même information est répétée, ce qui est le meilleur indicateur du coût réel d'un changement.
+Ce chapitre indique, pour six évolutions courantes, les endroits exacts à modifier. Chaque liste a été relevée dans le code : elle montre aussi où la même information est répétée, ce qui est le meilleur indicateur du coût réel d'un changement.
 
 ## Ajouter une sous-commande
 

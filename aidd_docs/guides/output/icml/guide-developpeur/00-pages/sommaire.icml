@@ -223,6 +223,24 @@
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-chapitre">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-numéro">
+    <Content>10</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x9;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Référence des commandes</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x9;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
+    <Content>p. 66</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
 </Story>
   
 </Document>

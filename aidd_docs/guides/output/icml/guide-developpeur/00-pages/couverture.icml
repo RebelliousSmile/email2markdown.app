@@ -127,6 +127,12 @@
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-ligne">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>10&#x9;Référence des commandes</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
 </Story>
   
 </Document>
