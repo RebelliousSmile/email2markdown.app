@@ -1,0 +1,40 @@
+{
+  "maquette": "aidd_docs/guides/maquette-doc-pdf",
+  "sourceDir": "aidd_docs/guides",
+  "outputDir": "aidd_docs/guides/output",
+  "pagesFile": "aidd_docs/guides/pages-gabarit.json",
+  "versionFile": "aidd_docs/guides/version.json",
+  "captures": {
+    "command": "pnpm --dir scripts/guides-captures captures",
+    "cwd": "."
+  },
+  "guides": [
+    {
+      "id": "utilisateur",
+      "dir": "guide-utilisateur",
+      "title": "Guide de l’utilisateur",
+      "verb": "Consolider",
+      "type": "Documentation",
+      "accent": "turquoise",
+      "document": "aidd_docs/guides/output/guide-utilisateur.indd"
+    },
+    {
+      "id": "contributeur",
+      "dir": "guide-contributeur",
+      "title": "Guide du contributeur",
+      "verb": "Débloquer",
+      "type": "Documentation",
+      "accent": "orange",
+      "document": "aidd_docs/guides/output/guide-contributeur.indd"
+    },
+    {
+      "id": "developpeur",
+      "dir": "guide-developpeur",
+      "title": "Guide du développeur",
+      "verb": "Maîtriser",
+      "type": "Documentation",
+      "accent": "vert",
+      "document": "aidd_docs/guides/output/guide-developpeur.indd"
+    }
+  ]
+}

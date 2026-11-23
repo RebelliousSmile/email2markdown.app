@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?aid style="50" type="snippet" readerVersion="6.0" featureSet="513" product="8.0(370)" ?>
+<?aid SnippetType="InCopyInterchange"?>
+<Document DOMVersion="8.0" Self="pandoc_doc">
+    <RootCharacterStyleGroup Self="pandoc_character_styles">
+      <CharacterStyle Self="$ID/NormalCharacterStyle" Name="Default" />
+      <CharacterStyle Self="CharacterStyle/Gras" Name="Gras">
+        <Properties>
+          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
+        </Properties>
+      </CharacterStyle>
+      <CharacterStyle Self="CharacterStyle/Encadré-libellé" Name="Encadré-libellé">
+        <Properties>
+          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
+        </Properties>
+      </CharacterStyle>
+      <CharacterStyle Self="CharacterStyle/Code-inline" Name="Code-inline">
+        <Properties>
+          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
+        </Properties>
+      </CharacterStyle>
+    </RootCharacterStyleGroup>
+    <RootParagraphStyleGroup Self="pandoc_paragraph_styles">
+      <ParagraphStyle Self="$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle"
+          SpaceBefore="6" SpaceAfter="6"> <!-- paragraph spacing -->
+        <Properties>
+          <TabList type="list">
+            <ListItem type="record">
+              <Alignment type="enumeration">LeftAlign</Alignment>
+              <AlignmentCharacter type="string">.</AlignmentCharacter>
+              <Leader type="string"></Leader>
+              <Position type="unit">10</Position> <!-- first tab stop -->
+            </ListItem>
+          </TabList>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Intertitre-1" Name="Intertitre-1" PointSize="18">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Courant" Name="Courant">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Liste-num" Name="Liste-num" BulletsAndNumberingListType="NumberedList" NumberingExpression="^#.^t" NumberingLevel="1" LeftIndent="18" FirstLineIndent="-18">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Liste-puce" Name="Liste-puce" BulletsAndNumberingListType="BulletList" LeftIndent="14" FirstLineIndent="-14">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Tableau texte" Name="Tableau texte">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Tableau en-tête" Name="Tableau en-tête">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Encadré-retenir" Name="Encadré-retenir">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+    </RootParagraphStyleGroup>
+    <RootTableStyleGroup Self="pandoc_table_styles">
+      <TableStyle Self="TableStyle/Tableau" Name="Tableau" />
+    </RootTableStyleGroup>
+    <RootCellStyleGroup Self="pandoc_cell_styles">
+      <CellStyle Self="CellStyle/Cellule" Name="Cellule" AppliedParagraphStyle="ParagraphStyle/$ID/[No paragraph style]" />
+    </RootCellStyleGroup>
+    <RootObjectStyleGroup Self="cerascan_object_styles">
+
+    </RootObjectStyleGroup>
+  <Story Self="pandoc_story"
+      TrackChanges="false"
+      StoryTitle=""
+      AppliedTOCStyle="n"
+      AppliedNamedGrid="n" >
+    <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
+
+<!-- body needs to be non-indented, otherwise code blocks are indented too far -->
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Ce qui est à traduire</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="5" ColumnCount="3">
+  <Column Name="0" SingleColumnWidth="116.6993" />
+  <Column Name="1" SingleColumnWidth="125.6748" />
+  <Column Name="2" SingleColumnWidth="117.6259" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Élément</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Où il se trouve</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Remarque</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>README</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>racine du dépôt</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>premier contact des visiteurs, à traduire en priorité</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Guides</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>guide de l’utilisateur, guide du contributeur</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>documents PDF produits à partir de fichiers Markdown</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Fenêtres de l’application</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>fichiers </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>assets/*.html</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>textes écrits directement dans les gabarits</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Menus et messages</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>code source Rust</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>textes écrits directement dans le code</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Messages d’erreur de la ligne de commande</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>code source Rust</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>souvent déjà en anglais</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-retenir">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>À retenir</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> L’application n’a pas encore de système de traduction : les textes de l’interface sont dans le code. Traduire l’interface demande d’abord un travail de préparation côté code, que les mainteneurs doivent cadrer avec vous.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Commencer par un ticket</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Avant de traduire, ouvrez un ticket dans les issues du dépôt (voir le chapitre précédent) :</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-num" NumberingContinue="false">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Indiquez la </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>langue</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> visée et l'</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>élément</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> que vous proposez de traduire.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-num">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Dites si vous traduisez seul ou à plusieurs.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-num">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Attendez la réponse d’un mainteneur : elle précise le format de livraison et évite qu’une autre personne fasse la même chose.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le ticket sert aussi de lieu de suivi : l’avancement, les questions de vocabulaire et les relectures s’y retrouvent.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Bonnes pratiques</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-puce" NumberingContinue="false">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Traduisez le sens, pas les mots.</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Une phrase naturelle vaut mieux qu’un calque.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-puce">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Gardez le vocabulaire cohérent.</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Dressez la liste des termes clés (note, destination, compte, export…) et tenez-vous-y du début à la fin.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-puce">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Ne traduisez pas ce qui est technique.</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Les commandes, les noms d’options (</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>--debug</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>), les noms de fichiers (</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>accounts.yaml</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>), les champs YAML et les chemins restent tels quels.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-puce">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Conservez les noms de l’interface.</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Quand le guide cite un bouton, utilisez le libellé que l’application affiche dans la langue concernée.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-puce">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Respectez le Markdown.</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Titres, listes, tableaux et blocs de code gardent leur structure : seuls les textes changent.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Relecture et maintenance</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Une traduction vit avec le logiciel. À chaque nouvelle version, des textes changent ou apparaissent :</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-puce" NumberingContinue="false">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>relisez le journal des changements pour repérer les ajouts ;</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-puce">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>signalez dans le ticket les passages devenus faux ;</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-puce">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>indiquez la version du logiciel à laquelle correspond votre traduction.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Une traduction qui n’est plus tenue à jour peut induire en erreur. Si vous ne pouvez plus la maintenir, dites-le dans le ticket pour qu’une autre personne reprenne.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+
+  </Story>
+  
+</Document>

@@ -1,0 +1,987 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?aid style="50" type="snippet" readerVersion="6.0" featureSet="513" product="8.0(370)" ?>
+<?aid SnippetType="InCopyInterchange"?>
+<Document DOMVersion="8.0" Self="pandoc_doc">
+    <RootCharacterStyleGroup Self="pandoc_character_styles">
+      <CharacterStyle Self="$ID/NormalCharacterStyle" Name="Default" />
+      <CharacterStyle Self="CharacterStyle/Gras" Name="Gras">
+        <Properties>
+          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
+        </Properties>
+      </CharacterStyle>
+      <CharacterStyle Self="CharacterStyle/Encadré-libellé" Name="Encadré-libellé">
+        <Properties>
+          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
+        </Properties>
+      </CharacterStyle>
+      <CharacterStyle Self="CharacterStyle/Code-inline" Name="Code-inline">
+        <Properties>
+          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
+        </Properties>
+      </CharacterStyle>
+    </RootCharacterStyleGroup>
+    <RootParagraphStyleGroup Self="pandoc_paragraph_styles">
+      <ParagraphStyle Self="$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle"
+          SpaceBefore="6" SpaceAfter="6"> <!-- paragraph spacing -->
+        <Properties>
+          <TabList type="list">
+            <ListItem type="record">
+              <Alignment type="enumeration">LeftAlign</Alignment>
+              <AlignmentCharacter type="string">.</AlignmentCharacter>
+              <Leader type="string"></Leader>
+              <Position type="unit">10</Position> <!-- first tab stop -->
+            </ListItem>
+          </TabList>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Intertitre-1" Name="Intertitre-1" PointSize="18">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Intertitre-2" Name="Intertitre-2" PointSize="14">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Courant" Name="Courant">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Liste-num" Name="Liste-num" BulletsAndNumberingListType="NumberedList" NumberingExpression="^#.^t" NumberingLevel="1" LeftIndent="18" FirstLineIndent="-18">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Tableau texte" Name="Tableau texte">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Tableau en-tête" Name="Tableau en-tête">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Encadré-info" Name="Encadré-info">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Encadré-attention" Name="Encadré-attention">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Capture" Name="Capture">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+    </RootParagraphStyleGroup>
+    <RootTableStyleGroup Self="pandoc_table_styles">
+      <TableStyle Self="TableStyle/Tableau" Name="Tableau" />
+    </RootTableStyleGroup>
+    <RootCellStyleGroup Self="pandoc_cell_styles">
+      <CellStyle Self="CellStyle/Cellule" Name="Cellule" AppliedParagraphStyle="ParagraphStyle/$ID/[No paragraph style]" />
+    </RootCellStyleGroup>
+    <RootObjectStyleGroup Self="cerascan_object_styles">
+      <ObjectStyle Self="ObjectStyle/Capture" Name="Capture" />
+    </RootObjectStyleGroup>
+  <Story Self="pandoc_story"
+      TrackChanges="false"
+      StoryTitle=""
+      AppliedTOCStyle="n"
+      AppliedNamedGrid="n" >
+    <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
+
+<!-- body needs to be non-indented, otherwise code blocks are indented too far -->
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le menu de l’icône</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Un clic droit sur l’icône ouvre le menu. Son contenu dépend de votre configuration.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="5" ColumnCount="2">
+  <Column Name="0" SingleColumnWidth="111.2658" />
+  <Column Name="1" SingleColumnWidth="248.7342" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Entrée</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Rôle</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Export compte</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Sous-menu : un élément par compte configuré ; lance l’export de ce compte</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Reprendre le tri</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Sous-menu par compte : rouvre la revue du classement pour les notes restées en transit</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Nettoyer le serveur</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Sous-menu par compte ; présent seulement si au moins un compte a la suppression activée</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Outils</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Sous-menu de réglages et d’utilitaires (voir ci-dessous)</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Quitter</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Ferme l’application</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le sous-menu </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Outils</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> contient :</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="7" ColumnCount="2">
+  <Column Name="0" SingleColumnWidth="146.2182" />
+  <Column Name="1" SingleColumnWidth="213.7818" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Entrée</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Rôle</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Fix HTML→Markdown</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Par compte : reconvertit les notes issues de messages en HTML</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Import Thunderbird</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Reprend les comptes d’un profil Thunderbird</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Choisir répertoire d’export…</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Définit le dossier de transit des notes</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Choisir répertoire de notes…</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Définit le dossier racine où les notes sont classées</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Gérer les destinations…</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Ouvre la fenêtre de gestion des règles de classement</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:6" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Paramètres…</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:6" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Ouvre la fenêtre de réglages et de comptes</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:7" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Mise à jour…</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:7" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Vérifie les mises à jour (devient « Mise à jour X disponible… » le cas échéant)</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-info">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>Bon à savoir</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Si le fichier des comptes est illisible, le menu affiche à la place des comptes une ligne grisée : « Comptes illisibles — voir Paramètres ». Ouvrez alors </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Outils</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, puis </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Paramètres…</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> pour corriger le problème.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Lancer un export</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Choisissez </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Export compte</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, puis le nom du compte. Le déroulement est le suivant :</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-num" NumberingContinue="false">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>L’application se connecte au serveur avec le mot de passe du fichier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>.env</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-num">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Elle parcourt les dossiers retenus pour ce compte et lit les messages.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-num">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Elle écrit chaque message sous forme de note dans le dossier de transit du compte, avec ses pièces jointes.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-num">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Elle ouvre la fenêtre de revue du classement, qui propose un dossier de destination pour chaque note.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Liste-num">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Après votre validation, les notes sont déplacées vers leur destination.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Un message d’état affiche le résultat de l’opération. Selon le cas, il commence par « Export terminé », « Lot terminé » ou « Export annulé ».</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Capture">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Rectangle AppliedObjectStyle="ObjectStyle/Capture" Self="uec" StrokeWeight="0" ItemTransform="1 0 0 1 180 -93.4615">
+      <Properties>
+        <PathGeometry>
+          <GeometryPathType PathOpen="false">
+            <PathPointArray>
+              <PathPointType Anchor="-180 -93.4615" LeftDirection="-180 -93.4615" RightDirection="-180 -93.4615" />
+              <PathPointType Anchor="-180 93.4615" LeftDirection="-180 93.4615" RightDirection="-180 93.4615" />
+              <PathPointType Anchor="180 93.4615" LeftDirection="180 93.4615" RightDirection="180 93.4615" />
+              <PathPointType Anchor="180 -93.4615" LeftDirection="180 -93.4615" RightDirection="180 -93.4615" />
+            </PathPointArray>
+          </GeometryPathType>
+        </PathGeometry>
+      </Properties>
+      <Image Self="ue6" ItemTransform="0.3462 0 0 0.3462 -180 -93.4615">
+        <Properties>
+          <Profile type="string">
+            $ID/Embedded
+          </Profile>
+          <GraphicBounds Left="0" Top="0" Right="1040" Bottom="540" />
+        </Properties>
+        <Link Self="ueb" LinkResourceURI="file:///C:/Users/fxgui/Documents/Code/Perso/email-to-markdown/app/aidd_docs/guides/guide-utilisateur/images/progression-export.png" />
+      </Image>
+    </Rectangle>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Capture">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Rectangle AppliedObjectStyle="ObjectStyle/Capture" Self="uec" StrokeWeight="0" ItemTransform="1 0 0 1 180 -93.4615">
+      <Properties>
+        <PathGeometry>
+          <GeometryPathType PathOpen="false">
+            <PathPointArray>
+              <PathPointType Anchor="-180 -93.4615" LeftDirection="-180 -93.4615" RightDirection="-180 -93.4615" />
+              <PathPointType Anchor="-180 93.4615" LeftDirection="-180 93.4615" RightDirection="-180 93.4615" />
+              <PathPointType Anchor="180 93.4615" LeftDirection="180 93.4615" RightDirection="180 93.4615" />
+              <PathPointType Anchor="180 -93.4615" LeftDirection="180 -93.4615" RightDirection="180 -93.4615" />
+            </PathPointArray>
+          </GeometryPathType>
+        </PathGeometry>
+      </Properties>
+      <Image Self="ue6" ItemTransform="0.3462 0 0 0.3462 -180 -93.4615">
+        <Properties>
+          <Profile type="string">
+            $ID/Embedded
+          </Profile>
+          <GraphicBounds Left="0" Top="0" Right="1040" Bottom="540" />
+        </Properties>
+        <Link Self="ueb" LinkResourceURI="file:///C:/Users/fxgui/Documents/Code/Perso/email-to-markdown/app/aidd_docs/guides/guide-utilisateur/images/progression-terminee.png" />
+      </Image>
+    </Rectangle>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les messages déjà exportés</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Quand l’option </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Ne pas ré-exporter les emails existants</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> est active, l’application reconnaît un message déjà exporté par sa date, son expéditeur, ses destinataires, l’empreinte de son sujet et son identifiant de message. Un deuxième export du même compte ne recrée donc pas de doublons.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Exporter par lots</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Pour une grande boîte mail, il est confortable de traiter les messages par paquets. Renseignez </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Traiter par lots de</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> dans les réglages, par exemple 200. L’export s’arrête alors après 200 messages, avec le message « Lot terminé » qui vous invite à trier le lot, puis à relancer l’export pour obtenir le suivant. La valeur 0 désactive le découpage.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les images de signature et les erreurs</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les images jugées décoratives (logos de signature) sont mises de côté, dans un sous-dossier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>_skipped</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, lorsque l’option </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Ignorer les images de signature</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> est active. Les messages impossibles à convertir sont placés dans un dossier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>_failed</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>. Ces dossiers spéciaux ne sont jamais proposés au classement.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>La fenêtre de revue du classement</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Après l’export, la fenêtre « Revue du routage — propositions de déplacement » liste les notes avec le dossier proposé par vos règles.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Capture">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Rectangle AppliedObjectStyle="ObjectStyle/Capture" Self="uec" StrokeWeight="0" ItemTransform="1 0 0 1 180 -120">
+      <Properties>
+        <PathGeometry>
+          <GeometryPathType PathOpen="false">
+            <PathPointArray>
+              <PathPointType Anchor="-180 -120" LeftDirection="-180 -120" RightDirection="-180 -120" />
+              <PathPointType Anchor="-180 120" LeftDirection="-180 120" RightDirection="-180 120" />
+              <PathPointType Anchor="180 120" LeftDirection="180 120" RightDirection="180 120" />
+              <PathPointType Anchor="180 -120" LeftDirection="180 -120" RightDirection="180 -120" />
+            </PathPointArray>
+          </GeometryPathType>
+        </PathGeometry>
+      </Properties>
+      <Image Self="ue6" ItemTransform="0.2 0 0 0.2 -180 -120">
+        <Properties>
+          <Profile type="string">
+            $ID/Embedded
+          </Profile>
+          <GraphicBounds Left="0" Top="0" Right="1800" Bottom="1200" />
+        </Properties>
+        <Link Self="ueb" LinkResourceURI="file:///C:/Users/fxgui/Documents/Code/Perso/email-to-markdown/app/aidd_docs/guides/guide-utilisateur/images/revue-routage.png" />
+      </Image>
+    </Rectangle>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="5" ColumnCount="2">
+  <Column Name="0" SingleColumnWidth="98.7459" />
+  <Column Name="1" SingleColumnWidth="261.2541" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Colonne</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Contenu</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Sujet</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>L’objet du message</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Identités</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Les expéditeurs et destinataires</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Date</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>La date du message</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Chemin proposé</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Le dossier de destination suggéré</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Statut</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Un badge : « règle » (une règle a désigné ce dossier), « auto » (chemin proposé d’après le fichier des destinations), « défaut » (destination par défaut) ou « conflit » (plusieurs destinations correspondent)</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le badge « conflit » signale que plusieurs destinations conviennent à la même note. Le dossier retenu est le premier de votre liste ; les autres sont proposées comme alternatives.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Corriger le classement</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Chaque ligne se modifie individuellement : vous pouvez saisir un autre chemin, choisir l’une des alternatives en cas de conflit, ou choisir un dossier existant avec le bouton </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Dossier ▶</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>. Les actions de la barre d’outils agissent sur les lignes cochées :</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="3" ColumnCount="2">
+  <Column Name="0" SingleColumnWidth="198.24" />
+  <Column Name="1" SingleColumnWidth="161.76" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Action</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Effet</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Tout sélectionner</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Coche toutes les lignes</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Chemin en masse (Perso/X/Y)</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content> puis </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Assigner chemin</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Applique le même chemin aux lignes cochées</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+        <Content>Supprimer la sélection</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Écarte les emails cochés sans les classer</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Créer une règle depuis une ligne</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le bouton </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>+ règle</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> transforme le classement d’une note en règle durable : la prochaine fois, un message semblable sera dirigé automatiquement vers ce dossier. Si la nouvelle règle entre en conflit avec une règle existante, une fenêtre vous propose trois choix :</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="3" ColumnCount="2">
+  <Column Name="0" SingleColumnWidth="156.3245" />
+  <Column Name="1" SingleColumnWidth="203.6755" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Choix</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Conséquence</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Garder les deux (le premier de la liste gagne)</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Les deux règles coexistent ; l’ordre du fichier décide</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Déplacer la règle ici</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>La règle quitte son ancienne destination pour rejoindre la nouvelle</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Annuler</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Aucun changement</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Écarter un message</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le bouton </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Supprimer</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> d’une ligne demande confirmation : « Supprimer cet email ? ». Le message précise que l’email ne sera pas classé et que, si votre compte est configuré pour supprimer les emails après export, il sera aussi supprimé de la boîte mail. La note est effacée, et ses pièces jointes sont déplacées dans un dossier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>_deleted</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> plutôt que détruites.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-attention">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>Attention</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Écarter une note ne supprime pas le message du serveur, sauf si la suppression après export est activée pour le compte. Dans ce cas, l’action est irréversible côté serveur.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Valider</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le bouton </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Appliquer</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> déplace les notes vers leur destination (il affiche « Application en cours… » pendant l’opération) ; </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Annuler</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> ferme la fenêtre sans rien déplacer.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Reprendre un tri interrompu</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Si vous avez fermé la fenêtre de revue sans appliquer, ou si un export a été interrompu, les notes restent dans le dossier de transit du compte. Choisissez </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Reprendre le tri</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, puis le compte : l’application rescanne le dossier de transit et rouvre la fenêtre de revue pour les notes encore en attente. S’il n’y en a aucune, elle affiche « Aucun email à trier en attente pour » suivi du nom du compte.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les autres outils</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Fix HTML→Markdown</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Cet outil reprend les notes d’un compte dont le corps était resté au format HTML et les convertit en Markdown. Il affiche un bilan de la forme « Compte : N convertis, N ignorés, N erreurs ». Utilisez-le surtout sur des notes produites par une ancienne version.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Gérer les destinations</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>L’entrée </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Gérer les destinations…</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> ouvre une fenêtre qui permet de consulter et de modifier les dossiers de destination et leurs règles, sans éditer le fichier à la main.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Nettoyer le serveur</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Cette entrée sert à supprimer du serveur des messages déjà archivés. Elle est décrite dans le chapitre « Nettoyage du serveur ».</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les réglages et les fenêtres</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>L’entrée </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Paramètres…</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> ouvre la fenêtre de configuration décrite dans le chapitre sur la configuration des comptes. Les raccourcis </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Choisir répertoire d’export…</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> et </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Choisir répertoire de notes…</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> ouvrent le sélecteur de dossier de Windows. Le premier affiche ensuite le nombre de comptes concernés et le chemin retenu ; le second affiche le chemin défini.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+</Story>
+  
+</Document>

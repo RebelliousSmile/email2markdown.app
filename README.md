@@ -41,6 +41,18 @@ sudo apt-get install build-essential pkg-config libssl-dev libgtk-3-dev \
 
 ---
 
+## Documentation
+
+Trois guides PDF (version 0.29.0), à lire ou à télécharger :
+
+| Guide | Pour qui | PDF |
+|-------|----------|-----|
+| Guide de l’utilisateur | Installer et utiliser l’application au quotidien | [guide-utilisateur-v0.29.0.pdf](aidd_docs/guides/output/pdf/guide-utilisateur-v0.29.0.pdf) |
+| Guide du contributeur | Participer au projet | [guide-contributeur-v0.29.0.pdf](aidd_docs/guides/output/pdf/guide-contributeur-v0.29.0.pdf) |
+| Guide du développeur | Comprendre l’architecture et le code | [guide-developpeur-v0.29.0.pdf](aidd_docs/guides/output/pdf/guide-developpeur-v0.29.0.pdf) |
+
+---
+
 ## Référence des commandes
 
 ### `import` — Importer depuis Thunderbird

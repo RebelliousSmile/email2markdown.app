@@ -1,0 +1,1492 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?aid style="50" type="snippet" readerVersion="6.0" featureSet="513" product="8.0(370)" ?>
+<?aid SnippetType="InCopyInterchange"?>
+<Document DOMVersion="8.0" Self="pandoc_doc">
+    <RootCharacterStyleGroup Self="pandoc_character_styles">
+      <CharacterStyle Self="$ID/NormalCharacterStyle" Name="Default" />
+      <CharacterStyle Self="CharacterStyle/Gras" Name="Gras">
+        <Properties>
+          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
+        </Properties>
+      </CharacterStyle>
+      <CharacterStyle Self="CharacterStyle/Encadré-libellé" Name="Encadré-libellé">
+        <Properties>
+          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
+        </Properties>
+      </CharacterStyle>
+      <CharacterStyle Self="CharacterStyle/Code-inline" Name="Code-inline">
+        <Properties>
+          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
+        </Properties>
+      </CharacterStyle>
+    </RootCharacterStyleGroup>
+    <RootParagraphStyleGroup Self="pandoc_paragraph_styles">
+      <ParagraphStyle Self="$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle"
+          SpaceBefore="6" SpaceAfter="6"> <!-- paragraph spacing -->
+        <Properties>
+          <TabList type="list">
+            <ListItem type="record">
+              <Alignment type="enumeration">LeftAlign</Alignment>
+              <AlignmentCharacter type="string">.</AlignmentCharacter>
+              <Leader type="string"></Leader>
+              <Position type="unit">10</Position> <!-- first tab stop -->
+            </ListItem>
+          </TabList>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Intertitre-1" Name="Intertitre-1" PointSize="18">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Intertitre-2" Name="Intertitre-2" PointSize="14">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Courant" Name="Courant">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Tableau texte" Name="Tableau texte">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Tableau en-tête" Name="Tableau en-tête">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Encadré-info" Name="Encadré-info">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Encadré-attention" Name="Encadré-attention">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Encadré-retenir" Name="Encadré-retenir">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+    </RootParagraphStyleGroup>
+    <RootTableStyleGroup Self="pandoc_table_styles">
+      <TableStyle Self="TableStyle/Tableau" Name="Tableau" />
+    </RootTableStyleGroup>
+    <RootCellStyleGroup Self="pandoc_cell_styles">
+      <CellStyle Self="CellStyle/Cellule" Name="Cellule" AppliedParagraphStyle="ParagraphStyle/$ID/[No paragraph style]" />
+    </RootCellStyleGroup>
+    <RootObjectStyleGroup Self="cerascan_object_styles">
+
+    </RootObjectStyleGroup>
+  <Story Self="pandoc_story"
+      TrackChanges="false"
+      StoryTitle=""
+      AppliedTOCStyle="n"
+      AppliedNamedGrid="n" >
+    <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
+
+<!-- body needs to be non-indented, otherwise code blocks are indented too far -->
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les fichiers et leur rôle</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Tous les réglages se trouvent dans le dossier de configuration de l’application, </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>%APPDATA%\email-to-markdown\</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> sous Windows. Chaque fichier a un rôle précis.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="6" ColumnCount="2">
+  <Column Name="0" SingleColumnWidth="155" />
+  <Column Name="1" SingleColumnWidth="205" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Fichier</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Rôle</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>accounts.yaml</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Informations de connexion : nom du compte, serveur, port, identifiant, dossiers à lire</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>.env</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Mots de passe, un par compte</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>settings.yaml</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Comportement : dossier d’export, profondeur des citations, suppression, découpage en lots…</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>destinations.yaml</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Règles de classement des notes</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>handled_messages.txt</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Registre des messages déjà traités (géré par l’application)</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:6" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>deletions.log</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:6" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Journal des suppressions sur le serveur (géré par l’application)</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les deux derniers fichiers, </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>handled_messages.txt</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> et </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>deletions.log</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, appartiennent à l’application : ne les modifiez pas.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-info">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>Bon à savoir</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Le fichier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>accounts.yaml</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> ne contient jamais de mot de passe. Les mots de passe sont séparés dans le fichier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>.env</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, ce qui permet de partager ou de sauvegarder la liste des comptes sans exposer d’identifiants.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-attention">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>Attention</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Si la fenêtre </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Paramètres…</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> est ouverte pendant que vous modifiez un fichier à la main, cliquez sur son bouton </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Gras">
+    <Content>Recharger</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> avant d’enregistrer, pour qu’elle reprenne votre modification.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>accounts.yaml : les comptes</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Chaque compte est une entrée de la liste </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>accounts</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>. Voici un exemple avec deux comptes :</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>accounts:</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  - name: Gmail</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    server: imap.gmail.com</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    port: 993</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    username: prenom.nom@gmail.com</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    ignored_folders:</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>      - &quot;[Gmail]/Spam&quot;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>      - &quot;[Gmail]/Trash&quot;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>      - &quot;[Gmail]/All Mail&quot;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>      - &quot;[Gmail]/Drafts&quot;</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  - name: Outlook</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    server: outlook.office365.com</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    port: 993</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    username: prenom.nom@outlook.com</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    ignored_folders:</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>      - Junk</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>      - Deleted Items</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="6" ColumnCount="2">
+  <Column Name="0" SingleColumnWidth="131.0737" />
+  <Column Name="1" SingleColumnWidth="228.9263" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Clé</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Signification</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>name</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Nom du compte, au choix, jamais vide. La recherche d’un compte ignore les majuscules</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>server</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Adresse du serveur IMAP</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>port</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Port de connexion, généralement 993 ; la valeur 0 est refusée</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>username</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Identifiant de connexion, souvent l’adresse mail complète</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>included_folders</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Facultatif. Liste des dossiers à lire ; si elle est présente, elle remplace </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>ignored_folders</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:6" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>ignored_folders</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:6" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Liste des dossiers à ne pas lire</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le dossier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>INBOX</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> est reconnu sans tenir compte des majuscules ou minuscules.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>.env : les mots de passe</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le mot de passe de chaque compte est lu dans le fichier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>.env</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, sous un nom de variable dérivé du nom du compte : le nom est mis en majuscules, et les espaces, </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>@</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, points et tirets sont remplacés par des tirets bas. L’application cherche d’abord </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>&lt;NOM&gt;_APPLICATION_PASSWORD</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, puis </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>&lt;NOM&gt;_PASSWORD</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="3" ColumnCount="2">
+  <Column Name="0" SingleColumnWidth="68.88" />
+  <Column Name="1" SingleColumnWidth="291.12" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Nom du compte</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Variables reconnues</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>Gmail</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>GMAIL_APPLICATION_PASSWORD</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>, sinon </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>GMAIL_PASSWORD</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>My Work Account</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>MY_WORK_ACCOUNT_APPLICATION_PASSWORD</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>, sinon </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>MY_WORK_ACCOUNT_PASSWORD</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>perso-2</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>PERSO_2_APPLICATION_PASSWORD</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>, sinon </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>PERSO_2_PASSWORD</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Exemple de fichier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>.env</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> :</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>GMAIL_APPLICATION_PASSWORD=abcdefghijklmnop</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>OUTLOOK_PASSWORD=motdepasse</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-attention">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>Attention</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Gmail refuse le mot de passe habituel du compte pour les applications externes. Il faut créer un « mot de passe d’application » dans les paramètres de sécurité de votre compte Google, et le placer dans la variable </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>GMAIL_APPLICATION_PASSWORD</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>. Ce mot de passe d’application est aussi requis pour la suppression sur le serveur.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les valeurs qui contiennent un saut de ligne ou un caractère nul sont refusées lors de l’enregistrement. Sous Linux et macOS, le fichier est créé lisible par son seul propriétaire.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>settings.yaml : les réglages</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Le fichier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>settings.yaml</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> décrit le comportement commun à tous les comptes, avec la possibilité de le surcharger compte par compte. S’il n’existe pas, les valeurs par défaut s’appliquent. S’il existe mais qu’il est invalide, l’application le signale par un message de la forme « Lecture de … impossible : … » et ne le modifie pas.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>export_base_dir: C:/Users/Prenom/Documents/Emails</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>notes_dir: C:/Users/Prenom/Documents/Notes</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>date_layout: year_month</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>destination_max_depth: 2</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>defaults:</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  quote_depth: 1</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  skip_existing: true</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  collect_contacts: false</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  skip_signature_images: true</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  delete_after_export: false</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  cleanup_empty_dirs: true</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  batch_size: 0</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>accounts:</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  Gmail:</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    folder_name: gmail</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    quote_depth: 2</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les clés générales</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="5" ColumnCount="3">
+  <Column Name="0" SingleColumnWidth="128.9618" />
+  <Column Name="1" SingleColumnWidth="109.9481" />
+  <Column Name="2" SingleColumnWidth="121.0901" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Clé</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Rôle</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Valeur par défaut</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>export_base_dir</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Dossier de transit : chaque compte y reçoit un sous-dossier</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Aucune : à renseigner</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>notes_dir</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Dossier racine où les notes sont classées</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Aucune</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>destinations_file</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Chemin du fichier de règles</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>destinations.yaml</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content> dans le dossier de configuration</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>date_layout</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Sous-dossiers datés : </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>none</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>, </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>year</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>, </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>year_month</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content> ou </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>year_month_day</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>year_month</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>destination_max_depth</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Nombre de niveaux autorisés sous la branche d’une destination</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>2</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>La valeur 0 pour </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>destination_max_depth</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> est refusée : « destination_max_depth doit valoir au moins 1 ».</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-2">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les comportements par compte</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Ces clés se placent soit dans </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>defaults</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> (pour tous les comptes), soit dans l’entrée d’un compte sous </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>accounts</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> (pour ce compte seulement). Une valeur propre au compte l’emporte sur </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>defaults</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, qui l’emporte à son tour sur la valeur de repli.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="8" ColumnCount="3">
+  <Column Name="0" SingleColumnWidth="148.6769" />
+  <Column Name="1" SingleColumnWidth="151.7231" />
+  <Column Name="2" SingleColumnWidth="59.6" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Clé</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Effet</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Repli</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>folder_name</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Nom du sous-dossier de transit (par compte uniquement)</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Nom du compte</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>quote_depth</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Nombre de niveaux de citations conservés dans le corps</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>1</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>skip_existing</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Ne pas ré-exporter un message déjà exporté</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>oui</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>collect_contacts</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Constituer un fichier CSV des contacts rencontrés</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>non</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>skip_signature_images</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Ignorer les images de signature et logos</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:5" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>non</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:6" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>delete_after_export</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:6" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Supprimer du serveur les messages archivés</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:6" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>non</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:7" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>cleanup_empty_dirs</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:7" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Supprimer les dossiers vides après chaque export</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:7" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>oui</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:8" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>batch_size</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:8" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Nombre de messages par export ; 0 signifie tout d’un coup</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="2:8" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>0</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-info">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>Bon à savoir</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Le fichier d’exemple fourni avec l’application active </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>skip_signature_images</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>. Si vous créez votre configuration vous-même et ne renseignez pas cette clé, les images de signature ne sont pas ignorées. Précisez toujours la valeur voulue.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-attention">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>Attention</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>delete_after_export: true</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> supprime des messages du serveur, sans retour possible. Lisez le chapitre « Nettoyage du serveur » avant de l’activer.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>destinations.yaml : les règles de classement</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Les destinations sont décrites dans le fichier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>destinations.yaml</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> du dossier de configuration. Le principe du tri est présenté dans le chapitre « Destinations et tri » ; voici le format du fichier.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>destinations:</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  - path: Perso/Banque</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    note: relevés et factures bancaires</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    rules:</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>      - domain: ubs.ch</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>      - subject: facture</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  - path: Pro/Clients/Dupont</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    rules:</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>      - correspondent: marie.dupont@exemple.org</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>  - path: Perso/Messy/Emails</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x2028;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>    default: true</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<Table AppliedTableStyle="TableStyle/Tableau" HeaderRowCount="1" BodyRowCount="4" ColumnCount="2">
+  <Column Name="0" SingleColumnWidth="75.0824" />
+  <Column Name="1" SingleColumnWidth="284.9176" />
+  <Cell Name="0:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Clé</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:0" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau en-tête">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Rôle</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>path</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:1" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Chemin de la destination, relatif au dossier de notes</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>note</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:2" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Description libre, pour vous y retrouver</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>rules</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:3" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Liste de règles ; une seule suffit à désigner la destination</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="0:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>default</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+  <Cell Name="1:4" AppliedCellStyle="CellStyle/Cellule">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Tableau texte">
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>Si </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+        <Content>true</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+        <Content>, la destination reçoit les notes qu’aucune règle ne désigne</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Cell>
+</Table>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Une seule destination peut être marquée </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>default: true</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>. Les noms de règles du fichier (</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>domain</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>from</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>correspondent</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>subject</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>account</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>) sont ceux décrits dans le chapitre « Destinations et tri », qui détaille aussi leur priorité, les règles de forme des chemins et la profondeur maximale.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-retenir">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>À retenir</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> L’ordre des destinations dans le fichier a de l’importance : la première destination dont une règle correspond l’emporte. Mettez les règles les plus précises en premier, et les plus générales en dernier.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Si le fichier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>destinations.yaml</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> est absent, l’application le signale par un avertissement et dirige toutes les notes vers la destination par défaut.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Sauvegarder et déplacer sa configuration</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>Pour reprendre votre configuration sur un autre ordinateur, copiez le dossier de configuration. Les chemins de </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>settings.yaml</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> (</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>export_base_dir</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>, </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>notes_dir</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>) sont à adapter à la nouvelle machine.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Encadré-attention">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
+    <Content>Attention</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> Le fichier </Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
+    <Content>.env</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content> contient vos mots de passe en clair : ne le copiez que sur un support de confiance, et ne le placez jamais dans un dépôt partagé ni dans une synchronisation publique.</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+
+  </Story>
+  
+</Document>

@@ -1,0 +1,35 @@
+{
+  "commun": {
+    "miseAJour": "1er janvier 2026"
+  },
+  "guide-specimen": {
+    "sousTitre": "Un texte neutre qui exerce chaque style de la maquette.",
+    "fin": {
+      "titre": "Une question sur ce spécimen ?",
+      "accroche": "Texte d’invitation fictif, pour exercer la page de fin.",
+      "cartes": [
+        { "label": "E-mail", "valeur": "contact@exemple.fr", "note": "Adresse fictive" },
+        { "label": "Téléphone", "valeur": "01 23 45 67 89", "note": "Jours et horaires fictifs" },
+        { "label": "Nom", "valeur": "Prénom Nom", "note": "Contact fictif" }
+      ],
+      "colonnes": [
+        {
+          "titre": "Pour être aidé vite",
+          "lignes": [
+            "1. Notez le nom du document concerné.",
+            "2. Joignez une capture de la page.",
+            "3. Indiquez le chapitre où vous êtes bloqué."
+          ]
+        },
+        {
+          "titre": "Avant de nous écrire",
+          "lignes": [
+            "1. Relisez le chapitre concerné.",
+            "2. Rechargez le document.",
+            "3. Si rien ne change, écrivez-nous."
+          ]
+        }
+      ]
+    }
+  }
+}

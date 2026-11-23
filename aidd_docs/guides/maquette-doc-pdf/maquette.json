@@ -1,0 +1,1460 @@
+{
+  "format": 1,
+  "nom": "email-to-markdown",
+  "langue": "French",
+  "logo": "logo.svg",
+  "page": {
+    "largeurMm": 210,
+    "hauteurMm": 297,
+    "fondPerduMm": 3,
+    "marges": {
+      "hautMm": 12.7,
+      "basMm": 12.7,
+      "interieureMm": 20.6,
+      "exterieureMm": 12.7
+    },
+    "colonnes": {
+      "texteMm": 130.7,
+      "gouttiereMm": 6.3,
+      "marginaleMm": 39.7
+    }
+  },
+  "entetePied": {
+    "enteteHaut": 14,
+    "enteteHauteur": 16,
+    "filetY": 34,
+    "pointilleTrait": 1.5,
+    "pointilleBlanc": 1.5,
+    "filetEpaisseur": 0.75,
+    "piedHauteur": 16,
+    "piedTexte": "François-Xavier Guillois · email-to-markdown",
+    "piedLargeur": 300,
+    "coinMm": 17,
+    "folioLargeur": 30,
+    "bandePiedMm": 66
+  },
+  "couleurs": {
+    "Turquoise vif": [
+      52,
+      184,
+      154
+    ],
+    "Turquoise texte": [
+      27,
+      122,
+      101
+    ],
+    "Turquoise fond": [
+      227,
+      243,
+      238
+    ],
+    "Orange vif": [
+      232,
+      155,
+      60
+    ],
+    "Orange texte": [
+      165,
+      87,
+      21
+    ],
+    "Orange fond": [
+      251,
+      236,
+      216
+    ],
+    "Vert vif": [
+      144,
+      196,
+      114
+    ],
+    "Vert texte": [
+      78,
+      118,
+      56
+    ],
+    "Vert fond": [
+      234,
+      242,
+      224
+    ],
+    "Anthracite foncé": [
+      42,
+      42,
+      44
+    ],
+    "Anthracite": [
+      58,
+      58,
+      60
+    ],
+    "Papier chaud": [
+      243,
+      238,
+      226
+    ],
+    "Papier de page": [
+      251,
+      248,
+      241
+    ],
+    "Attention fond": [
+      253,
+      243,
+      231
+    ]
+  },
+  "axes": {
+    "defaut": "turquoise",
+    "noms": {
+      "turquoise": "Turquoise",
+      "orange": "Orange",
+      "vert": "Vert"
+    },
+    "tons": {
+      "Axe vif": "vif",
+      "Axe texte": "texte",
+      "Axe fond": "fond"
+    }
+  },
+  "polices": {
+    "titre": "Quicksand",
+    "texte": "Proza Libre",
+    "code": "JetBrains Mono",
+    "puce": "Segoe UI Symbol"
+  },
+  "styles": {
+    "paragraph": [
+      {
+        "name": "Titre-chapitre",
+        "usage": "titre du chapitre",
+        "pandoc": [
+          "Header1"
+        ],
+        "attributes": {
+          "PointSize": "24"
+        }
+      },
+      {
+        "name": "Surtitre",
+        "usage": "mention « Chapitre » au-dessus du numéro, posée par l'export",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Numéro-chapitre",
+        "usage": "numéro du chapitre, posé par l'export d'après le nom du fichier",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Chapeau",
+        "usage": "premier paragraphe du chapitre",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Sommaire-titre",
+        "usage": "intitulé « Dans ce chapitre », posé par l'export quand le chapitre a deux sections ou plus",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Sommaire-général",
+        "usage": "libellé « Sommaire » du sommaire général du guide, sur la page de couverture, posé par l'export (à ne pas confondre avec « Sommaire-titre »)",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Sommaire-ligne",
+        "usage": "une ligne du sommaire de la page de couverture (numéro, tabulation, titre), posée par l'export",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Sommaire-chapitre",
+        "usage": "une ligne du sommaire de la page de sommaire (numéro, tabulation, titre, tabulation, « p. … »), posée par l'export",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Sommaire-section",
+        "usage": "une section du sommaire d'ouverture (numéro « 2.1 », tabulation, titre, tabulation, « p. … »), posée par l'export",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Numéro-section",
+        "usage": "numéro « N.M » de la section, rendu par l'export dans son fichier de marge",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Intertitre-1",
+        "usage": "titre de section",
+        "pandoc": [
+          "Header2"
+        ],
+        "attributes": {
+          "PointSize": "18"
+        }
+      },
+      {
+        "name": "Intertitre-2",
+        "usage": "titre de sous-section",
+        "pandoc": [
+          "Header3"
+        ],
+        "attributes": {
+          "PointSize": "14"
+        }
+      },
+      {
+        "name": "Courant",
+        "usage": "paragraphe courant",
+        "pandoc": [
+          "Paragraph"
+        ],
+        "attributes": {}
+      },
+      {
+        "name": "Liste-num",
+        "usage": "étape d'une procédure",
+        "pandoc": [
+          "NumList",
+          "NumList > first",
+          "NumList > Paragraph",
+          "NumList > first > Paragraph"
+        ],
+        "attributes": {
+          "BulletsAndNumberingListType": "NumberedList",
+          "NumberingExpression": "^#.^t",
+          "NumberingLevel": "1",
+          "LeftIndent": "18",
+          "FirstLineIndent": "-18"
+        }
+      },
+      {
+        "name": "Liste-num-suite",
+        "usage": "paragraphe qui prolonge une étape, sans numéro",
+        "pandoc": [
+          "NumList > subParagraph > Paragraph"
+        ],
+        "attributes": {
+          "LeftIndent": "18"
+        }
+      },
+      {
+        "name": "Liste-puce",
+        "usage": "élément de liste",
+        "pandoc": [
+          "BulList",
+          "BulList > first"
+        ],
+        "attributes": {
+          "BulletsAndNumberingListType": "BulletList",
+          "LeftIndent": "14",
+          "FirstLineIndent": "-14"
+        }
+      },
+      {
+        "name": "Liste-puce-2",
+        "usage": "élément de liste à l'intérieur d'une étape",
+        "pandoc": [
+          "NumList > BulList",
+          "NumList > BulList > first"
+        ],
+        "attributes": {
+          "BulletsAndNumberingListType": "BulletList",
+          "LeftIndent": "32",
+          "FirstLineIndent": "-14"
+        }
+      },
+      {
+        "name": "Tableau texte",
+        "usage": "cellule d'un tableau",
+        "pandoc": [
+          "TablePar",
+          "NumList > TablePar"
+        ],
+        "attributes": {}
+      },
+      {
+        "name": "Tableau en-tête",
+        "usage": "cellule d'en-tête d'un tableau",
+        "pandoc": [
+          "TablePar > TableHeader",
+          "NumList > TablePar > TableHeader"
+        ],
+        "attributes": {}
+      },
+      {
+        "name": "Encadré-info",
+        "usage": "citation « > **Bon à savoir** … » : information utile",
+        "pandoc": [
+          "Blockquote > Paragraph"
+        ],
+        "attributes": {}
+      },
+      {
+        "name": "Encadré-attention",
+        "usage": "citation « > **Attention** … » : point qui peut mal tourner",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Encadré-retenir",
+        "usage": "citation « > **À retenir** … » : synthèse de fin de chapitre",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Note-renvoi",
+        "usage": "citation « > **Renvoi** … » : renvoi vers un autre chapitre ou guide",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Capture",
+        "usage": "paragraphe qui porte une capture d'écran ancrée",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Titre-couverture",
+        "usage": "titre du document sur la couverture, posé par l'export de la couverture",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Légende",
+        "usage": "légende des pages de couverture et de fin, posée dans les cadres du gabarit",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Titre-courant",
+        "usage": "texte unique des pieds de page et titres courants d'en-tête, dans `00-pages/`, `common/` et les dossiers de chapitre seulement",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Bandeau-titre",
+        "usage": "titre du bandeau orange de la page de fin (couleur du papier), dans `00-pages/fin-bandeau.icml` seulement",
+        "pandoc": [],
+        "attributes": {
+          "FillColor": "Color/Paper"
+        }
+      },
+      {
+        "name": "Bandeau-texte",
+        "usage": "accroche du bandeau orange de la page de fin (couleur du papier), dans `00-pages/fin-bandeau.icml` seulement",
+        "pandoc": [],
+        "attributes": {
+          "FillColor": "Color/Paper"
+        }
+      },
+      {
+        "name": "Type-document",
+        "usage": "pastille « type de document » de la couverture (anthracite, centrée), dans `common/type-document.icml` seulement",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Carte-valeur",
+        "usage": "valeur d'une carte de contact de la page de fin, dans `00-pages/fin-carte-N.icml` seulement",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Mentions",
+        "usage": "pied anthracite de la page de fin (couleur du papier), dans `common/fin-mentions.icml` seulement",
+        "pandoc": [],
+        "attributes": {
+          "FillColor": "Color/Paper",
+          "PointSize": "9"
+        }
+      },
+      {
+        "name": "Mentions-marque",
+        "usage": "phrase de marque du pied anthracite de la page de fin (couleur du papier, plus grande que « Mentions »), dans `common/fin-mentions.icml` seulement",
+        "pandoc": [],
+        "attributes": {
+          "FillColor": "Color/Paper",
+          "PointSize": "16"
+        }
+      },
+      {
+        "name": "En-tête-chapitre",
+        "usage": "numéro du chapitre dans l'en-tête de la page courante (couleur d'accent), dans le dossier du chapitre seulement",
+        "pandoc": [],
+        "attributes": {}
+      }
+    ],
+    "character": [
+      {
+        "name": "Gras",
+        "usage": "libellé à repérer",
+        "pandoc": [
+          "Bold"
+        ],
+        "attributes": {}
+      },
+      {
+        "name": "Italique",
+        "usage": "mise en valeur",
+        "pandoc": [
+          "Italic"
+        ],
+        "attributes": {}
+      },
+      {
+        "name": "Accent",
+        "usage": "mot mis en valeur dans un titre (*mot* dans un titre), posé par l'export",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Sommaire-numéro",
+        "usage": "numéro de section du sommaire d'ouverture, posé par l'export",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Sommaire-page",
+        "usage": "« p. … » du sommaire d'ouverture, à remplacer par la page (table des matières), posé par l'export",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Puce",
+        "usage": "triangle ▶ devant l'intitulé « Dans ce chapitre », posé par l'export",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Encadré-libellé",
+        "usage": "libellé en gras qui ouvre un encadré, posé par l'export",
+        "pandoc": [],
+        "attributes": {}
+      },
+      {
+        "name": "Code-inline",
+        "usage": "nom de champ, valeur saisie",
+        "pandoc": [
+          "Code"
+        ],
+        "attributes": {}
+      },
+      {
+        "name": "Renvoi",
+        "usage": "texte d'un lien vers un autre chapitre ou guide",
+        "pandoc": [
+          "Link"
+        ],
+        "attributes": {}
+      }
+    ],
+    "table": [
+      {
+        "name": "Tableau",
+        "usage": "tableau",
+        "pandoc": [
+          "Table"
+        ],
+        "attributes": {}
+      }
+    ],
+    "cell": [
+      {
+        "name": "Cellule",
+        "usage": "cellule de tableau",
+        "pandoc": [
+          "Cell"
+        ],
+        "attributes": {}
+      }
+    ],
+    "object": [
+      {
+        "name": "Capture",
+        "usage": "cadre d'une capture d'écran ancrée",
+        "pandoc": [],
+        "attributes": {}
+      }
+    ]
+  },
+  "formats": {
+    "paragraph": {
+      "Titre-couverture": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 45,
+        "leading": 45,
+        "tracking": -25,
+        "fill": "Anthracite foncé",
+        "hyphenate": false
+      },
+      "Titre-chapitre": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 34,
+        "leading": 36,
+        "tracking": -15,
+        "fill": "Anthracite foncé",
+        "hyphenate": false,
+        "keepNext": true,
+        "attrs": {
+          "RuleBelowOn": "true",
+          "RuleBelowColor": "Color/Axe%20vif",
+          "RuleBelowLineWeight": "3",
+          "RuleBelowOffset": "10",
+          "RuleBelowWidth": "ColumnWidth",
+          "SpaceAfter": "14"
+        }
+      },
+      "Numéro-chapitre": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 150,
+        "leading": 120,
+        "skew": 12,
+        "fill": "Axe vif",
+        "hyphenate": false
+      },
+      "Intertitre-1": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 22.5,
+        "leading": 25,
+        "tracking": -10,
+        "fill": "Anthracite foncé",
+        "hyphenate": false,
+        "keepNext": true,
+        "keepLines": true,
+        "attrs": {
+          "SpaceBefore": "20",
+          "SpaceAfter": "8"
+        }
+      },
+      "Intertitre-2": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 15,
+        "leading": 18,
+        "fill": "Axe texte",
+        "hyphenate": false,
+        "keepNext": true,
+        "keepLines": true,
+        "bullet": {
+          "char": 9654,
+          "style": "Puce"
+        },
+        "attrs": {
+          "LeftIndent": "16",
+          "FirstLineIndent": "-16",
+          "SpaceBefore": "12",
+          "SpaceAfter": "5"
+        }
+      },
+      "Surtitre": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 9,
+        "leading": 12,
+        "caps": true,
+        "tracking": 120,
+        "fill": "Axe texte",
+        "hyphenate": false
+      },
+      "Chapeau": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 13.5,
+        "leading": 20,
+        "fill": "Anthracite",
+        "attrs": {
+          "SpaceAfter": "14"
+        }
+      },
+      "Sommaire-général": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 9,
+        "leading": 12,
+        "caps": true,
+        "tracking": 120,
+        "fill": "Axe texte",
+        "hyphenate": false,
+        "keepNext": true,
+        "attrs": {
+          "RuleAboveOn": "true",
+          "RuleAboveColor": "Color/Anthracite",
+          "RuleAboveLineWeight": "1.5",
+          "RuleAboveOffset": "0",
+          "RuleAboveWidth": "ColumnWidth",
+          "SpaceBefore": "16",
+          "SpaceAfter": "6"
+        }
+      },
+      "Sommaire-titre": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 9,
+        "leading": 12,
+        "caps": true,
+        "tracking": 120,
+        "fill": "Axe texte",
+        "hyphenate": false,
+        "keepNext": true,
+        "attrs": {
+          "RuleAboveOn": "true",
+          "RuleAboveColor": "Color/Anthracite",
+          "RuleAboveLineWeight": "1.5",
+          "RuleAboveOffset": "0",
+          "RuleAboveWidth": "ColumnWidth",
+          "SpaceBefore": "16",
+          "SpaceAfter": "6"
+        }
+      },
+      "Sommaire-ligne": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 11,
+        "leading": 17,
+        "fill": "Anthracite",
+        "hyphenate": false,
+        "attrs": {
+          "LeftIndent": "30",
+          "FirstLineIndent": "-30",
+          "SpaceAfter": "1"
+        }
+      },
+      "Sommaire-chapitre": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 11.5,
+        "leading": 30,
+        "fill": "Anthracite foncé",
+        "hyphenate": false,
+        "tabs": [
+          {
+            "align": "LeftAlign",
+            "position": 44
+          },
+          {
+            "align": "RightAlign",
+            "position": "@largeurUtile"
+          }
+        ],
+        "attrs": {
+          "RuleBelowOn": "true",
+          "RuleBelowColor": "Color/Anthracite",
+          "RuleBelowLineWeight": "0.5",
+          "RuleBelowOffset": "9",
+          "RuleBelowWidth": "ColumnWidth"
+        }
+      },
+      "Sommaire-section": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 11,
+        "leading": 35,
+        "fill": "Anthracite foncé",
+        "hyphenate": false,
+        "tabs": [
+          {
+            "align": "LeftAlign",
+            "position": 36
+          },
+          {
+            "align": "RightAlign",
+            "position": 388
+          }
+        ],
+        "attrs": {
+          "RuleBelowOn": "true",
+          "RuleBelowColor": "Color/Anthracite",
+          "RuleBelowLineWeight": "0.5",
+          "RuleBelowOffset": "10",
+          "RuleBelowWidth": "ColumnWidth"
+        }
+      },
+      "Numéro-section": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 33,
+        "leading": 36,
+        "skew": 12,
+        "fill": "Axe vif",
+        "hyphenate": false,
+        "keepNext": true,
+        "attrs": {
+          "SpaceBefore": "20"
+        }
+      },
+      "Courant": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 12,
+        "leading": 19,
+        "fill": "Anthracite",
+        "hyphenate": true,
+        "attrs": {
+          "Justification": "LeftAlign",
+          "SpaceAfter": "7"
+        }
+      },
+      "Encadré-info": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 11,
+        "leading": 17,
+        "fill": "Anthracite",
+        "hyphenate": false,
+        "shading": "Paper",
+        "attrs": {
+          "RuleAboveOn": "true",
+          "RuleAboveColor": "Color/Axe%20vif",
+          "RuleAboveLineWeight": "1.5",
+          "RuleAboveOffset": "0",
+          "RuleAboveWidth": "ColumnWidth",
+          "LeftIndent": "8",
+          "RightIndent": "8",
+          "SpaceBefore": "10",
+          "SpaceAfter": "10"
+        }
+      },
+      "Encadré-attention": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 11,
+        "leading": 17,
+        "fill": "Anthracite",
+        "hyphenate": false,
+        "shading": "Attention fond",
+        "attrs": {
+          "RuleAboveOn": "true",
+          "RuleAboveColor": "Color/Orange%20vif",
+          "RuleAboveLineWeight": "1.5",
+          "RuleAboveOffset": "0",
+          "RuleAboveWidth": "ColumnWidth",
+          "LeftIndent": "8",
+          "RightIndent": "8",
+          "SpaceBefore": "10",
+          "SpaceAfter": "10"
+        }
+      },
+      "Encadré-retenir": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 11,
+        "leading": 17,
+        "fill": "Anthracite",
+        "hyphenate": false,
+        "shading": "Papier chaud",
+        "attrs": {
+          "RuleAboveOn": "true",
+          "RuleAboveColor": "Color/Anthracite",
+          "RuleAboveLineWeight": "1.5",
+          "RuleAboveOffset": "0",
+          "RuleAboveWidth": "ColumnWidth",
+          "LeftIndent": "8",
+          "RightIndent": "8",
+          "SpaceBefore": "10",
+          "SpaceAfter": "10"
+        }
+      },
+      "Note-renvoi": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 10.5,
+        "leading": 16,
+        "fill": "Anthracite",
+        "hyphenate": false,
+        "attrs": {
+          "RuleAboveOn": "true",
+          "RuleAboveColor": "Color/Axe%20vif",
+          "RuleAboveLineWeight": "1.5",
+          "RuleAboveOffset": "0",
+          "RuleAboveWidth": "ColumnWidth",
+          "SpaceBefore": "8",
+          "SpaceAfter": "8"
+        }
+      },
+      "Liste-num": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 12,
+        "leading": 18.5,
+        "fill": "Anthracite",
+        "numbering": {
+          "style": "Numéro-liste"
+        },
+        "attrs": {
+          "SpaceAfter": "3"
+        }
+      },
+      "Liste-num-suite": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 12,
+        "leading": 18.5,
+        "fill": "Anthracite",
+        "attrs": {
+          "SpaceAfter": "3"
+        }
+      },
+      "Liste-puce": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 12,
+        "leading": 18.5,
+        "fill": "Anthracite",
+        "bullet": {
+          "char": 9654,
+          "style": "Puce"
+        },
+        "attrs": {
+          "SpaceAfter": "3"
+        }
+      },
+      "Liste-puce-2": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 12,
+        "leading": 18.5,
+        "fill": "Anthracite",
+        "bullet": {
+          "char": 9654,
+          "style": "Puce"
+        },
+        "attrs": {
+          "SpaceAfter": "3"
+        }
+      },
+      "Tableau texte": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 10,
+        "leading": 14,
+        "fill": "Anthracite"
+      },
+      "Type-document": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 8,
+        "leading": 12,
+        "caps": true,
+        "tracking": 120,
+        "fill": "Anthracite foncé",
+        "hyphenate": false,
+        "attrs": {
+          "Justification": "CenterAlign"
+        }
+      },
+      "Carte-valeur": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 10,
+        "leading": 14,
+        "fill": "Anthracite foncé",
+        "hyphenate": false
+      },
+      "Tableau en-tête": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 10,
+        "leading": 14,
+        "fill": "Anthracite foncé",
+        "hyphenate": false
+      },
+      "Capture": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 12,
+        "leading": "Auto",
+        "fill": "Anthracite",
+        "attrs": {
+          "SpaceBefore": "7",
+          "SpaceAfter": "7"
+        }
+      },
+      "Légende": {
+        "font": "@titre",
+        "fontStyle": "Medium",
+        "size": 9,
+        "leading": 13.5,
+        "fill": "Anthracite"
+      },
+      "Code": {
+        "font": "@code",
+        "fontStyle": "Regular",
+        "size": 10,
+        "leading": 15,
+        "fill": "Anthracite",
+        "hyphenate": false,
+        "shading": "Papier chaud"
+      },
+      "Titre-courant": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 9,
+        "leading": 12,
+        "caps": true,
+        "tracking": 100,
+        "fill": "Anthracite foncé",
+        "hyphenate": false
+      },
+      "Bandeau-titre": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 22.5,
+        "leading": 25,
+        "tracking": -10,
+        "fill": "Paper",
+        "hyphenate": false,
+        "keepNext": true,
+        "attrs": {
+          "SpaceAfter": "8"
+        }
+      },
+      "Bandeau-texte": {
+        "font": "@texte",
+        "fontStyle": "Regular",
+        "size": 12,
+        "leading": 19,
+        "fill": "Paper",
+        "hyphenate": false
+      },
+      "Mentions-marque": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 16,
+        "leading": 21,
+        "fill": "Paper",
+        "hyphenate": false,
+        "attrs": {
+          "SpaceAfter": "10"
+        }
+      },
+      "Mentions": {
+        "font": "@titre",
+        "fontStyle": "Medium",
+        "size": 9,
+        "leading": 13.5,
+        "fill": "Paper",
+        "hyphenate": false
+      },
+      "En-tête-chapitre": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 9,
+        "leading": 12,
+        "caps": true,
+        "tracking": 100,
+        "fill": "Axe texte",
+        "hyphenate": false
+      },
+      "Folio": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 11,
+        "leading": 12,
+        "caps": true,
+        "tracking": 100,
+        "fill": "Anthracite foncé",
+        "hyphenate": false
+      }
+    },
+    "character": {
+      "Gras": {
+        "fontStyle": "Bold"
+      },
+      "Italique": {
+        "fontStyle": "Italic"
+      },
+      "Code-inline": {
+        "font": "@code",
+        "fontStyle": "Regular",
+        "size": 10.5
+      },
+      "Renvoi": {
+        "fill": "Axe texte"
+      },
+      "Accent": {
+        "font": "@titre",
+        "fontStyle": "SemiBold",
+        "skew": 12,
+        "fill": "Axe texte"
+      },
+      "Encadré-libellé": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "caps": true,
+        "tracking": 80,
+        "fill": "Axe texte"
+      },
+      "Légende-numéro": {
+        "font": "@titre",
+        "fontStyle": "Bold"
+      },
+      "Sommaire-numéro": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "size": 17,
+        "skew": 12,
+        "fill": "Axe texte"
+      },
+      "Sommaire-page": {
+        "font": "@titre",
+        "fontStyle": "Medium",
+        "size": 8,
+        "fill": "Anthracite"
+      },
+      "Puce": {
+        "font": "@puce",
+        "fontStyle": "Regular",
+        "fill": "Axe vif"
+      },
+      "Numéro-liste": {
+        "font": "@titre",
+        "fontStyle": "Bold",
+        "fill": "Axe vif"
+      }
+    },
+    "table": {
+      "Tableau": {
+        "attrs": {
+          "TopBorderStrokeWeight": "1.5",
+          "TopBorderStrokeColor": "Color/Anthracite",
+          "BottomBorderStrokeWeight": "1.5",
+          "BottomBorderStrokeColor": "Color/Anthracite",
+          "LeftBorderStrokeWeight": "0",
+          "RightBorderStrokeWeight": "0",
+          "AlternatingFillsType": "AlternatingRows",
+          "StartRowFillColor": "Swatch/None",
+          "StartRowFillCount": "1",
+          "EndRowFillColor": "Color/Papier%20chaud",
+          "EndRowFillCount": "1"
+        }
+      }
+    },
+    "cell": {
+      "Cellule": {
+        "attrs": {
+          "AppliedParagraphStyle": "ParagraphStyle/Tableau%20texte",
+          "TopInset": "3",
+          "BottomInset": "3",
+          "LeftInset": "5",
+          "RightInset": "5",
+          "TopEdgeStrokeWeight": "0.5",
+          "TopEdgeStrokeColor": "Color/Axe%20vif",
+          "BottomEdgeStrokeWeight": "0.5",
+          "BottomEdgeStrokeColor": "Color/Axe%20vif",
+          "LeftEdgeStrokeWeight": "0",
+          "RightEdgeStrokeWeight": "0"
+        }
+      }
+    },
+    "object": {
+      "Capture": {
+        "attrs": {
+          "FillColor": "Swatch/None",
+          "EnableFill": "true",
+          "StrokeColor": "Color/Anthracite",
+          "StrokeWeight": "1.5",
+          "EnableStrokeAndCornerOptions": "true"
+        }
+      }
+    }
+  },
+  "charteSeule": {
+    "paragraph": [
+      "Titre-couverture",
+      "Légende",
+      "Code",
+      "Titre-courant",
+      "Folio"
+    ],
+    "character": [
+      "Légende-numéro",
+      "Numéro-liste"
+    ],
+    "table": [],
+    "cell": [],
+    "object": []
+  },
+  "commun": {
+    "pied": "François-Xavier Guillois · email-to-markdown",
+    "mentions": [
+      "Vos e-mails, en notes Markdown.",
+      "Logiciel libre sous licence MIT · github.com/RebelliousSmile/email2markdown.app"
+    ]
+  },
+  "textes": {
+    "miseAJour": "Dernière mise à jour :",
+    "sousTitreDefaut": "Sous-titre du document à renseigner.",
+    "mentionsDefaut": [
+      "Phrase de marque à renseigner.",
+      "Mentions légales de la micro-entreprise à renseigner."
+    ],
+    "contactDefaut": {
+      "titre": "Une question sur ce document ?",
+      "accroche": "Une phrase d’invitation à renseigner.",
+      "cartes": [
+        {
+          "label": "E-mail",
+          "valeur": "À renseigner",
+          "note": "Adresse du contact"
+        },
+        {
+          "label": "Téléphone",
+          "valeur": "À renseigner",
+          "note": "Jours et horaires de réponse"
+        },
+        {
+          "label": "Nom",
+          "valeur": "À renseigner",
+          "note": "Interlocuteur du lecteur"
+        }
+      ]
+    },
+    "sommaire": "Sommaire",
+    "pageSommaire": "p. …",
+    "pageSommairePrefixe": "p. ",
+    "verbeDefaut": "Maîtriser",
+    "libelleGuideDefaut": "Guide",
+    "signature": "François-Xavier Guillois · email-to-markdown",
+    "marque": [
+      {
+        "mot": "consolider",
+        "suite": " · guide de l’utilisateur"
+      },
+      {
+        "mot": "débloquer",
+        "suite": " · guide du contributeur"
+      },
+      {
+        "mot": "maîtriser",
+        "suite": " · guide du développeur"
+      }
+    ],
+    "chapitre": {
+      "surtitre": "Chapitre",
+      "numeroDefaut": "01",
+      "titreDefaut": "Titre du chapitre",
+      "chapeau": "Chapeau du chapitre : deux ou trois phrases qui disent ce que le lecteur saura faire à la fin.",
+      "dansCeChapitre": "Dans ce chapitre",
+      "sections": [
+        "Préparer le fichier",
+        "Envoyer le fichier",
+        "Lire le résultat",
+        "Vérifier le catalogue"
+      ]
+    },
+    "reperes": {
+      "couvertureSommaire": "01 Placer ici 00-pages/couverture.icml",
+      "conseilsTitre": "Conseils",
+      "conseilsCorps": "Placer ici 00-pages/fin-conseils.icml (deux colonnes de conseils)."
+    },
+    "noteRenvoi": "Renvoi",
+    "pagesExemple": [
+      {
+        "section": "1.1",
+        "rubrique": "Mise en route",
+        "renvoi": "Les 23 titres de colonne sont listés dans le chapitre sur le format du fichier.",
+        "blocs": [
+          {
+            "style": "Intertitre-1",
+            "texte": "Préparer le fichier"
+          },
+          {
+            "style": "Courant",
+            "texte": "Le fichier du catalogue est un tableur enregistré au format CSV. Chaque ligne décrit une référence, chaque colonne porte un titre fixe : l’ordre des colonnes est libre, leurs titres ne le sont pas."
+          },
+          {
+            "style": "Courant",
+            "texte": "Avant l’envoi, ouvrez le fichier et vérifiez que les prix et les dimensions sont renseignés."
+          },
+          {
+            "style": "Liste-puce",
+            "texte": "Enregistrer le tableur en CSV, séparateur point-virgule."
+          },
+          {
+            "style": "Liste-puce",
+            "texte": "Conserver les 23 titres de colonne, sans en ajouter ni en retirer."
+          },
+          {
+            "style": "Liste-puce",
+            "texte": "Laisser vide une cellule sans valeur plutôt que d’y écrire un zéro."
+          },
+          {
+            "style": "Encadré-info",
+            "libelle": "Bon à savoir",
+            "texte": "un fichier refusé n’efface jamais le catalogue en ligne : rien n’est modifié tant que l’import n’a pas réussi."
+          }
+        ]
+      },
+      {
+        "section": "1.2",
+        "rubrique": "Import",
+        "blocs": [
+          {
+            "style": "Intertitre-1",
+            "texte": "Envoyer le fichier"
+          },
+          {
+            "style": "Courant",
+            "texte": "Depuis l’espace partenaire, déposez le fichier dans la zone d’import. La validation démarre aussitôt et affiche le résultat ligne par ligne."
+          },
+          {
+            "style": "Liste-num",
+            "texte": "Cliquer sur « Choisir un fichier » et sélectionner le CSV."
+          },
+          {
+            "style": "Liste-num",
+            "texte": "Attendre la fin de la validation."
+          },
+          {
+            "style": "Liste-num",
+            "texte": "Lire les avertissements, puis cliquer sur « Importer »."
+          },
+          {
+            "style": "Courant",
+            "texte": "L’import remplace le catalogue précédent : les références absentes du nouveau fichier sont retirées."
+          },
+          {
+            "style": "Encadré-attention",
+            "libelle": "Attention",
+            "texte": "un fichier partiel vide la partie manquante du catalogue. Importez toujours le tarif complet."
+          }
+        ]
+      },
+      {
+        "section": "1.3",
+        "rubrique": "Résultat",
+        "renvoi": "Voir aussi le chapitre suivant pour générer les QR codes.",
+        "blocs": [
+          {
+            "style": "Intertitre-1",
+            "texte": "Lire le résultat"
+          },
+          {
+            "style": "Intertitre-2",
+            "texte": "Les avertissements"
+          },
+          {
+            "style": "Courant",
+            "texte": "Un avertissement signale un point à corriger sans bloquer l’import. Le message nomme la colonne concernée et indique la correction à faire dans le fichier."
+          },
+          {
+            "style": "Intertitre-2",
+            "texte": "Les erreurs"
+          },
+          {
+            "style": "Courant",
+            "texte": "Une erreur bloque l’import : le fichier doit être corrigé puis envoyé de nouveau."
+          },
+          {
+            "style": "Encadré-retenir",
+            "libelle": "À retenir",
+            "texte": "le partenaire corrige seul son fichier ; rien n’est nettoyé automatiquement."
+          }
+        ]
+      },
+      {
+        "section": "1.4",
+        "rubrique": "Contrôle",
+        "blocs": [
+          {
+            "style": "Intertitre-1",
+            "texte": "Vérifier le catalogue"
+          },
+          {
+            "style": "Courant",
+            "texte": "Une fois l’import terminé, ouvrez la page du catalogue et contrôlez quelques références : le prix, les dimensions et la photo doivent correspondre au tarif."
+          },
+          {
+            "style": "Liste-puce",
+            "texte": "Rechercher une référence par son code."
+          },
+          {
+            "style": "Liste-puce",
+            "texte": "Ouvrir sa fiche et comparer avec le tableur."
+          },
+          {
+            "style": "Courant",
+            "texte": "Si un écart persiste, corrigez le fichier et relancez l’import."
+          },
+          {
+            "style": "Encadré-info",
+            "libelle": "Bon à savoir",
+            "texte": "le catalogue affiché peut mettre quelques minutes à suivre l’import."
+          }
+        ]
+      }
+    ]
+  },
+  "nuances": {
+    "sombre": "Anthracite foncé",
+    "texte": "Anthracite",
+    "papier": "Paper",
+    "papierPage": "Papier de page",
+    "orange": "Orange vif",
+    "turquoise": "Turquoise vif",
+    "vert": "Vert vif",
+    "axeVif": "Axe vif",
+    "axeFond": "Axe fond",
+    "axeTexte": "Axe texte",
+    "flanc": [
+      [
+        "Axe vif",
+        100
+      ],
+      [
+        "Axe fond",
+        100
+      ],
+      [
+        "Axe vif",
+        55
+      ],
+      [
+        "Axe texte",
+        100
+      ],
+      [
+        "Axe fond",
+        100
+      ],
+      [
+        "Axe vif",
+        30
+      ],
+      [
+        "Axe fond",
+        60
+      ]
+    ]
+  },
+  "gabarits": [
+    {
+      "nom": "A-Courante",
+      "prefixe": "A",
+      "base": "Courante",
+      "pages": 2,
+      "role": "courante"
+    },
+    {
+      "nom": "B-Chapitre",
+      "prefixe": "B",
+      "base": "Chapitre",
+      "pages": 1,
+      "role": "chapitre"
+    },
+    {
+      "nom": "C-Couverture",
+      "prefixe": "C",
+      "base": "Couverture",
+      "pages": 1,
+      "role": "couverture"
+    },
+    {
+      "nom": "D-Fin",
+      "prefixe": "D",
+      "base": "Fin",
+      "pages": 1,
+      "role": "fin"
+    }
+  ],
+  "cadres": {
+    "calque": {
+      "id": "Layer/Calque1",
+      "nom": "Calque 1"
+    },
+    "pages": {
+      "couverture": "Page-C",
+      "sommaire": "Page-Sommaire",
+      "textePrefixe": "Page-Texte-",
+      "fin": "Page-D"
+    }
+  },
+  "variables": [
+    {
+      "nom": "Titre du document",
+      "type": "texte",
+      "contenu": "Titre du document"
+    },
+    {
+      "nom": "Version",
+      "type": "texte",
+      "contenu": "v1.0"
+    },
+    {
+      "nom": "Chapitre",
+      "type": "texte",
+      "contenu": "Chapitre 00"
+    },
+    {
+      "nom": "Titre du chapitre",
+      "type": "style",
+      "style": "Titre-chapitre"
+    }
+  ],
+  "composition": {
+    "gabaritCorps": "Courante",
+    "ouverture": [
+      {
+        "cadre": "chapitre-surtitre",
+        "fichier": "ouverture-surtitre.icml"
+      },
+      {
+        "cadre": "chapitre-numero",
+        "fichier": "ouverture-numero.icml"
+      },
+      {
+        "cadre": "chapitre-titre",
+        "fichier": "ouverture-titre.icml"
+      },
+      {
+        "cadre": "chapitre-chapeau",
+        "fichier": "ouverture-chapeau.icml",
+        "facultatif": true
+      },
+      {
+        "cadre": "chapitre-sommaire",
+        "fichier": "ouverture-sommaire.icml",
+        "facultatif": true
+      }
+    ],
+    "satellites": [
+      "marginale-gauche",
+      "marginale-droite",
+      "renvoi-gauche",
+      "renvoi-droite"
+    ],
+    "entetes": [
+      {
+        "cadre": "en-tete-droite-chapitre",
+        "fichier": "en-tete-chapitre.icml"
+      },
+      {
+        "cadre": "en-tete-droite-titre",
+        "fichier": "en-tete-titre-chapitre.icml"
+      }
+    ],
+    "reglages": {
+      "echelleTexteMin": 0.6,
+      "pasReduction": 0.94,
+      "reserveBas": 28,
+      "ecartTitre": 8,
+      "hauteurCapitales": 0.7,
+      "decalageCadreNumero": -5.2,
+      "toleranceGeometrie": 0.5,
+      "pasRemonteeMarge": 4,
+      "lignesMinSousIntertitre": 3
+    }
+  }
+}

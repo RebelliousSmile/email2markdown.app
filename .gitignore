@@ -57,3 +57,14 @@ CONTRIBUTING.md
 migrate-docs.prompt.md
 # </AIDD>
 .aidd/cache/
+
+node_modules/
+
+# Guides de documentation : sources, maquette, ICML/IDML de construction et PDF publiés (liés depuis le README)
+!aidd_docs/
+aidd_docs/*
+!aidd_docs/guides/
+aidd_docs/guides/_archive/
+aidd_docs/guides/output/*.indd
+aidd_docs/guides/output/pdf-essai/
+aidd_docs/guides/maquette-doc-pdf/maquette-doc-pdf/

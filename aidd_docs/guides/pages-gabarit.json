@@ -1,0 +1,309 @@
+{
+  "commun": {
+    "pied": "François-Xavier Guillois · email-to-markdown",
+    "miseAJour": "20 novembre 2026"
+  },
+  "guide-utilisateur": {
+    "sousTitre": "Installer email-to-markdown et l’utiliser au quotidien depuis la zone de notification, puis aller plus loin avec les fichiers de configuration et la ligne de commande.",
+    "fin": {
+      "titre": "Un blocage à l’usage ?",
+      "accroche": "Le dépôt du projet reçoit les signalements : décrivez ce que vous faisiez et ce que l’application a répondu.",
+      "cartes": [
+        {
+          "label": "Dépôt",
+          "valeur": "RebelliousSmile/email2markdown.app",
+          "note": "Signalements sur GitHub"
+        },
+        {
+          "label": "Version",
+          "valeur": "0.29.0",
+          "note": "Version décrite par ce guide"
+        },
+        {
+          "label": "Licence",
+          "valeur": "MIT",
+          "note": "Libre d’usage et de modification"
+        }
+      ],
+      "colonnes": [
+        {
+          "titre": "Pour être aidé vite",
+          "lignes": [
+            "1. Notez la version de l’application et la commande lancée.",
+            "2. Copiez le message d’erreur affiché, tel quel.",
+            "3. Précisez le compte concerné, sans jamais transmettre son mot de passe."
+          ]
+        },
+        {
+          "titre": "Avant de signaler",
+          "lignes": [
+            "1. Relisez le chapitre Dépannage de ce guide.",
+            "2. Testez la connexion du compte depuis la fenêtre des paramètres.",
+            "3. Relancez l’opération : un échec réseau passager se répète rarement."
+          ]
+        }
+      ]
+    },
+    "pages": {
+      "1": 3,
+      "2": 9,
+      "3": 14,
+      "4": 21,
+      "5": 28,
+      "6": 34,
+      "7": 40,
+      "8": 46,
+      "9": 53,
+      "10": 62,
+      "1.1": 4,
+      "1.2": 4,
+      "1.3": 6,
+      "1.4": 6,
+      "1.5": 7,
+      "1.6": 8,
+      "1.7": 8,
+      "2.1": 10,
+      "2.2": 10,
+      "2.3": 11,
+      "2.4": 11,
+      "2.5": 13,
+      "3.1": 15,
+      "3.2": 15,
+      "3.3": 16,
+      "3.4": 19,
+      "4.1": 22,
+      "4.2": 22,
+      "4.3": 24,
+      "4.4": 26,
+      "4.5": 26,
+      "4.6": 27,
+      "5.1": 29,
+      "5.2": 30,
+      "5.3": 31,
+      "5.4": 33,
+      "5.5": 33,
+      "6.1": 35,
+      "6.2": 35,
+      "6.3": 36,
+      "6.4": 37,
+      "6.5": 37,
+      "6.6": 38,
+      "6.7": 38,
+      "6.8": 39,
+      "7.1": 41,
+      "7.2": 41,
+      "7.3": 43,
+      "7.4": 43,
+      "7.5": 45,
+      "7.6": 45,
+      "8.1": 47,
+      "8.2": 47,
+      "8.3": 48,
+      "8.4": 49,
+      "8.5": 51,
+      "8.6": 52,
+      "9.1": 54,
+      "9.2": 54,
+      "9.3": 55,
+      "9.4": 57,
+      "9.5": 58,
+      "9.6": 59,
+      "9.7": 59,
+      "9.8": 60,
+      "9.9": 61,
+      "9.10": 61,
+      "10.1": 63,
+      "10.2": 64,
+      "10.3": 65,
+      "10.4": 66,
+      "10.5": 66,
+      "10.6": 67,
+      "10.7": 67,
+      "10.8": 68,
+      "10.9": 69,
+      "10.10": 69,
+      "10.11": 70,
+      "10.12": 70,
+      "10.13": 70
+    }
+  },
+  "guide-contributeur": {
+    "sousTitre": "Faire un don, signaler un bug, traduire et faire connaître email-to-markdown : quatre façons d’aider le projet sans écrire de code.",
+    "fin": {
+      "titre": "Une envie d’aider ?",
+      "accroche": "Le plus simple est d’ouvrir une issue sur le dépôt : dites ce que vous souhaitez faire, un mainteneur vous répond.",
+      "cartes": [
+        {
+          "label": "Dépôt",
+          "valeur": "RebelliousSmile/email2markdown.app",
+          "note": "Issues sur GitHub"
+        },
+        {
+          "label": "Version",
+          "valeur": "0.29.0",
+          "note": "Version décrite par ce guide"
+        },
+        {
+          "label": "Licence",
+          "valeur": "MIT",
+          "note": "Libre d’usage et de modification"
+        }
+      ],
+      "colonnes": [
+        {
+          "titre": "Pour un signalement utile",
+          "lignes": [
+            "1. Notez la version et le système utilisés.",
+            "2. Copiez le message d’erreur tel quel.",
+            "3. Retirez mots de passe et adresses personnelles."
+          ]
+        },
+        {
+          "titre": "Pour proposer son aide",
+          "lignes": [
+            "1. Cherchez d’abord un ticket existant.",
+            "2. Dites la langue ou le sujet que vous prenez.",
+            "3. Attendez la réponse d’un mainteneur."
+          ]
+        }
+      ]
+    },
+    "pages": {
+      "1": 3,
+      "2": 6,
+      "3": 10,
+      "4": 13,
+      "1.1": 4,
+      "1.2": 4,
+      "1.3": 4,
+      "1.4": 4,
+      "1.5": 5,
+      "2.1": 7,
+      "2.2": 7,
+      "2.3": 7,
+      "2.4": 8,
+      "2.5": 8,
+      "2.6": 8,
+      "2.7": 9,
+      "3.1": 11,
+      "3.2": 11,
+      "3.3": 11,
+      "3.4": 12,
+      "3.5": 12,
+      "4.1": 14,
+      "4.2": 14,
+      "4.3": 14,
+      "4.4": 14,
+      "4.5": 15,
+      "4.6": 15
+    }
+  },
+  "guide-developpeur": {
+    "sousTitre": "Comprendre l’architecture, les flux et les points d’extension d’email-to-markdown.",
+    "fin": {
+      "titre": "Une zone du code reste floue ?",
+      "accroche": "Partez du module concerné et de ses tests : ils décrivent le comportement attendu avant le code.",
+      "cartes": [
+        {
+          "label": "Dépôt",
+          "valeur": "RebelliousSmile/email2markdown.app",
+          "note": "Code source et historique"
+        },
+        {
+          "label": "Version",
+          "valeur": "0.29.0",
+          "note": "Version décrite par ce guide"
+        },
+        {
+          "label": "Langage",
+          "valeur": "Rust",
+          "note": "Édition 2021, feature tray optionnelle"
+        }
+      ],
+      "colonnes": [
+        {
+          "titre": "Pour se repérer vite",
+          "lignes": [
+            "1. Lisez lib.rs : il liste les modules et leur rôle.",
+            "2. Suivez le flux d’un message, de l’export à la note.",
+            "3. Cherchez le test du module avant d’en modifier le code."
+          ]
+        },
+        {
+          "titre": "Avant de modifier",
+          "lignes": [
+            "1. Vérifiez si la logique existe déjà ailleurs.",
+            "2. Ajoutez un test qui échoue, puis le correctif.",
+            "3. Mettez à jour la documentation si un comportement change."
+          ]
+        }
+      ]
+    },
+    "pages": {
+      "1": 3,
+      "2": 10,
+      "3": 17,
+      "4": 24,
+      "5": 31,
+      "6": 37,
+      "7": 44,
+      "8": 52,
+      "9": 58,
+      "1.1": 4,
+      "1.2": 5,
+      "1.3": 6,
+      "1.4": 8,
+      "1.5": 9,
+      "2.1": 11,
+      "2.2": 11,
+      "2.3": 12,
+      "2.4": 14,
+      "2.5": 14,
+      "3.1": 18,
+      "3.2": 18,
+      "3.3": 19,
+      "3.4": 19,
+      "3.5": 20,
+      "3.6": 22,
+      "3.7": 22,
+      "3.8": 22,
+      "4.1": 25,
+      "4.2": 25,
+      "4.3": 26,
+      "4.4": 27,
+      "4.5": 27,
+      "4.6": 30,
+      "5.1": 32,
+      "5.2": 33,
+      "5.3": 34,
+      "5.4": 35,
+      "5.5": 36,
+      "6.1": 38,
+      "6.2": 38,
+      "6.3": 39,
+      "6.4": 40,
+      "6.5": 41,
+      "6.6": 41,
+      "6.7": 43,
+      "7.1": 45,
+      "7.2": 45,
+      "7.3": 45,
+      "7.4": 46,
+      "7.5": 47,
+      "7.6": 48,
+      "7.7": 49,
+      "7.8": 50,
+      "7.9": 50,
+      "8.1": 53,
+      "8.2": 54,
+      "8.3": 56,
+      "9.1": 59,
+      "9.2": 60,
+      "9.3": 61,
+      "9.4": 62,
+      "9.5": 63,
+      "9.6": 64,
+      "9.7": 65
+    }
+  }
+}

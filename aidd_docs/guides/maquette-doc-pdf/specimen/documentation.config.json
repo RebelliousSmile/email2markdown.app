@@ -1,0 +1,18 @@
+{
+  "maquette": "..",
+  "sourceDir": ".",
+  "outputDir": "output",
+  "pagesFile": "pages-gabarit.json",
+  "versionFile": "version.json",
+  "guides": [
+    {
+      "id": "specimen",
+      "dir": "guide-specimen",
+      "title": "Spécimen de calage",
+      "verb": "Caler",
+      "type": "Spécimen",
+      "accent": "turquoise",
+      "document": "output/indd/specimen.indd"
+    }
+  ]
+}
