@@ -1,30 +1,82 @@
 # Email to Markdown Exporter
 
-Outil Rust pour exporter vos emails IMAP vers des fichiers Markdown avec métadonnées YAML, puis les ranger automatiquement dans votre arborescence « second cerveau ».
+> *Exporte vos boîtes IMAP en Markdown à métadonnées YAML et range les notes dans votre arborescence, plutôt que de les laisser dans un client mail.*
 
-## Installation
+Application Rust en ligne de commande, avec une icône de barre système en option (feature `tray`). Trois guides PDF l'accompagnent : [utilisateur](aidd_docs/guides/output/pdf/guide-utilisateur-v0.29.0.pdf), [contributeur](aidd_docs/guides/output/pdf/guide-contributeur-v0.29.0.pdf) et [développeur](aidd_docs/guides/output/pdf/guide-developpeur-v0.29.0.pdf).
+
+- [État du projet](#état-du-projet)
+- [Aperçu](#aperçu)
+- [Prérequis](#prérequis)
+- [Démarrage rapide](#démarrage-rapide)
+- [Documentation](#documentation)
+- [Référence des commandes](#référence-des-commandes)
+- [Configuration](#configuration)
+- [Structure des exports](#structure-des-exports)
+- [Dépannage](#dépannage)
+- [Contribuer](#contribuer) · [Licence](#licence)
+
+## État du projet
+
+**Statut : 🧰 Beta.** Version 0.29.0, sous SemVer, pas encore de 1.0.
+
+- *Ça marche aujourd'hui :* export IMAP vers Markdown ; import des comptes Thunderbird ; routage déterministe par `destinations.yaml` ; fenêtre de revue du routage dans la barre système ; recherche contextuelle depuis un dossier ; audit en lecture seule des messages restés sur le serveur
+- *Pas encore :* connexion OAuth2 (un compte Gmail demande un mot de passe d'application)
+
+| Plateforme | État | Note |
+|---|---|---|
+| Windows | ✅ Build et tests en CI, binaire de release | — |
+| macOS | ✅ Build et tests en CI, binaire de release | — |
+| Linux | ✅ Build et tests en CI (Ubuntu 24.04), binaire de release | Dépendances GTK et WebKit pour la barre système |
+
+## Aperçu
+
+Après chaque export, la fenêtre de revue propose un chemin de rangement par email. Vous le gardez, le corrigez ou l'ignorez, et rien ne bouge avant d'avoir cliqué **Appliquer**.
+
+<img src="aidd_docs/guides/guide-utilisateur/images/revue-routage.png" alt="Fenêtre de revue du routage : quatre emails avec leur chemin proposé, par exemple Perso/Banque, et le statut auto ou défaut" width="720">
+
+Depuis un dossier de vos notes, l'export contextuel retrouve les messages d'un correspondant et ne convertit que ceux que vous cochez.
+
+<img src="aidd_docs/guides/guide-utilisateur/images/export-contextuel.png" alt="Export contextuel : liste des messages d'une boîte aux lettres, filtrée par les règles du dossier, avec les cases à cocher et le bouton Convertir" width="720">
+
+Les captures montrent des données fictives. Le [guide de l'utilisateur](aidd_docs/guides/output/pdf/guide-utilisateur-v0.29.0.pdf) détaille les autres écrans.
+
+## Prérequis
+
+- Binaire précompilé : aucun prérequis
+- Compilation depuis les sources : Rust 1.93.0, épinglé dans `rust-toolchain.toml` (aucune version inférieure n'a été essayée)
+- Accès IMAP activé sur le serveur email
+- Gmail avec 2FA : [mot de passe spécifique à l'application](https://support.google.com/accounts/answer/185833)
+- Pour `--extract-passwords` : Thunderbird installé et **fermé**
+
+## Démarrage rapide
+
+### Binaire précompilé
+
+Téléchargez le binaire de votre système sur la [page des releases](https://github.com/RebelliousSmile/email2markdown.app/releases) : `email-to-markdown-<version>-windows-x86_64.exe`, `email-to-markdown-<version>-macos-native` ou `email-to-markdown-<version>-linux-x86_64`. Un fichier `SHA256SUMS` accompagne chaque release. Ces binaires incluent la barre système.
+
+### Depuis les sources
 
 ```bash
 # Installer Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Compiler en mode release (optimisé)
+# Compiler en mode release
 cargo build --release
 
-# Compiler avec les fenêtres et intégrations gestionnaire de fichiers
+# Compiler avec la barre système et les fenêtres
 cargo build --release --features tray
 ```
 
-**Linux** — dépendances système requises pour la GUI :
+**Linux** — dépendances système requises pour la barre système et les fenêtres :
 ```bash
 sudo apt-get install build-essential pkg-config libssl-dev libgtk-3-dev \
   libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
 ```
 
-## Configuration rapide
+### Première configuration
 
 ```bash
-# 1. Importer automatiquement les comptes depuis Thunderbird (recommandé)
+# 1. Importer automatiquement les comptes depuis Thunderbird
 ./target/release/email-to-markdown import --extract-passwords
 
 # 2. Choisir le répertoire d'export et le répertoire de notes dans settings.yaml
@@ -32,6 +84,9 @@ sudo apt-get install build-essential pkg-config libssl-dev libgtk-3-dev \
 
 # 3. Définir votre arborescence de rangement dans destinations.yaml
 #    (à la main, ou via `dest add` / `dest suggest` — voir section Destinations)
+
+# 4. Vérifier que les comptes sont vus
+./target/release/email-to-markdown export --list-accounts
 ```
 
 > Les fichiers de configuration sont stockés dans le répertoire système :
@@ -150,7 +205,7 @@ email-to-markdown export [OPTIONS]
 | `--account <NOM>` | Exporte uniquement le(s) compte(s) indiqué(s) (séparés par virgule) |
 | `--config <CHEMIN>` | Fichier de configuration (défaut : répertoire de config système) |
 | `--debug` | Active le mode verbeux (sortie IMAP brute) |
-| `--delete-after-export` | Supprime les emails du serveur après export (dangereux !) |
+| `--delete-after-export` | Supprime les emails du serveur après export (voir [Garde-fou de suppression](#garde-fou-de-suppression)) |
 
 **Exemples :**
 
@@ -233,6 +288,52 @@ portant une preuve Markdown locale complète sont supprimés du serveur.
 Le dossier doit être un répertoire local existant, non symbolique, situé sous
 `notes_dir` et correspondre exactement à une destination configurée. L’application refuse tout autre
 chemin avant toute connexion IMAP.
+
+---
+
+### `audit-server` — Recenser les messages restés sur le serveur
+
+Recensement en lecture seule : pour chaque message encore présent sur le serveur d'un compte, la commande indique pourquoi (traité avec ou sans preuve, rangé en note, jamais exporté). Rien n'est modifié.
+
+```bash
+email-to-markdown audit-server Gmail
+email-to-markdown audit-server Gmail --folder INBOX --details
+```
+
+| Option | Description |
+|--------|-------------|
+| `--folder <DOSSIER>` | N'audite que ce dossier (nom affiché ou nom IMAP brut) |
+| `--details` | Liste chaque message, pas seulement les totaux |
+| `--uid <UID>` | Compare l'identité d'un message lue en RFC822 et dans son bloc d'en-têtes (exige `--folder`) |
+| `--config <CHEMIN>` | Fichier de configuration (défaut : répertoire de config système) |
+
+### `link-quotes` — Remplacer les citations par des liens
+
+Remplace, dans un coffre existant, les messages cités par des wikilinks vers leurs notes. Sans option, la commande ne fait qu'un essai : elle liste ce qui serait lié et pourquoi le reste reste du texte.
+
+```bash
+# Essai à blanc
+email-to-markdown link-quotes /chemin/vers/le/coffre
+
+# Réécriture, avec copie préalable de chaque note hors du coffre
+email-to-markdown link-quotes /chemin/vers/le/coffre --apply --backup /chemin/hors/coffre
+```
+
+`--apply` exige `--backup` : le dossier reçoit une copie de chaque note avant sa réécriture.
+
+### `repair-attachments` — Réparer d'anciens chemins de pièces jointes
+
+Pour les notes exportées avec l'ancien schéma centralisé (`<compte>/attachments/<dossier>/`) puis déplacées : la commande range les pièces jointes à côté de leur note et ramène le frontmatter à des noms de fichier seuls.
+
+```bash
+email-to-markdown repair-attachments --account Gmail --dry-run
+```
+
+| Option | Description |
+|--------|-------------|
+| `-a, --account <NOM>` | Compte dont le dossier de pièces jointes sert de source |
+| `--dry-run` | Affiche les changements sans les appliquer |
+| `-c, --config <CHEMIN>` | Fichier de configuration (défaut : répertoire de config système) |
 
 ---
 
@@ -409,7 +510,7 @@ Fichier YAML décrivant les chemins valides de votre second cerveau et les règl
 
 ```yaml
 destinations:
-  # Chemin seul — simple option de classement (apparaît dans l'autocomplétion de la revue)
+  # Chemin seul — option de classement (apparaît dans l'autocomplétion de la revue)
   - path: Perso/Famille
 
   # Chemin avec règles — correspondance déterministe (sans IA)
@@ -447,7 +548,7 @@ La première règle qui correspond l'emporte. Le premier segment du chemin (`Per
 #### Gérer les destinations en ligne de commande — `dest`
 
 ```bash
-# Éditeur interactif guidé (sans sous-commande) — recommandé
+# Éditeur interactif guidé (sans sous-commande)
 email-to-markdown dest
 
 # Lister les destinations et repérer les anomalies
@@ -514,16 +615,9 @@ notes_dir/                  ← second cerveau, destination finale
 
 ---
 
-## Prérequis
-
-- Rust 1.70+
-- Accès IMAP activé sur le serveur email
-- Pour Gmail avec 2FA : [mot de passe spécifique à l'application](https://support.google.com/accounts/answer/185833)
-- Pour `--extract-passwords` : Thunderbird installé et **fermé**
-
----
-
 ## Dépannage
+
+Les problèmes liés à l'environnement de développement ou au système (compilation Windows, icône de barre système, certificats TLS) sont dans [TROUBLESHOOTING.md](TROUBLESHOOTING.md). Pour l'application elle-même :
 
 **Mot de passe non trouvé** : Vérifiez que la variable `NOM_PASSWORD` dans `.env` correspond exactement au `name` du compte dans `accounts.yaml`.
 
@@ -549,4 +643,4 @@ Les contributions sont les bienvenues ! Consultez [CONTRIBUTING.md](CONTRIBUTING
 
 ## Licence
 
-MIT
+MIT — voir [LICENSE](LICENSE).
