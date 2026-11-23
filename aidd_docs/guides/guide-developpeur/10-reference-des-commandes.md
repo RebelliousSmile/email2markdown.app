@@ -10,7 +10,7 @@ Le binaire s'appelle `email-to-markdown`. Il charge d'abord le fichier `.env` du
 `email-to-markdown --help`\
 `email-to-markdown export --help`
 
-`--help` s'applique à toutes les sous-commandes. Plusieurs d'entre elles acceptent `-c, --config <CHEMIN>` pour désigner un autre fichier de configuration ; sans cette option, elles lisent le répertoire de configuration du système (chapitre 2).
+`--help` s'applique à toutes les sous-commandes. Plusieurs d'entre elles acceptent `-c, --config <CHEMIN>` pour désigner un autre fichier de configuration ; sans cette option, elles lisent le répertoire de configuration du système (chapitres 2 et 11).
 
 | Sous-commande | Rôle | Section |
 | --- | --- | --- |

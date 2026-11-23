@@ -133,6 +133,18 @@
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-ligne">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>11&#x9;Référence de la configuration</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-ligne">
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>12&#x9;Structure des exports et dépannage</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
 </Story>
   
 </Document>

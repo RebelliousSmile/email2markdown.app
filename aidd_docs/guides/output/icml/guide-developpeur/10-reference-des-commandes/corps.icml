@@ -135,7 +135,7 @@
     <Content>-c, --config &lt;CHEMIN&gt;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content> pour désigner un autre fichier de configuration ; sans cette option, elles lisent le répertoire de configuration du système (chapitre 2).</Content>
+    <Content> pour désigner un autre fichier de configuration ; sans cette option, elles lisent le répertoire de configuration du système (chapitres 2 et 11).</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
