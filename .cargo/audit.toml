@@ -22,4 +22,8 @@ ignore = [
     # release. cargo audit ignores this ID for every rand version: on each
     # Cargo.lock update, check that rand 0.8 / 0.9 are at their fixed releases.
     "RUSTSEC-2026-0097",
+    # chrono, unmaintained (notice of 2026-09-14): a direct dependency, also
+    # required by imap 3.0.0-alpha.15, so no update here removes it. Leaving it
+    # needs a date-crate migration plus a new imap release; not a vulnerability.
+    "RUSTSEC-2026-0543",
 ]
