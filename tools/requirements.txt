@@ -1,8 +1,0 @@
-python-frontmatter
-PyYAML
-scikit-learn
-ollama
-jinja2
-
-# dev
-pytest>=7

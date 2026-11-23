@@ -59,8 +59,6 @@
   - Also replace `__INITIAL_VIEW__` (`""` or `"thunderbird"`); `window.showThunderbirdImport` is global too
   - Thunderbird panel scenarios: scan render, import message, `primary_password_required`, mixed reports + « Modifier », empty selection
   - Playwright MCP writes only under the project root (`.playwright-mcp/`): delete it afterwards
-- Python tools: always run `python -m pytest tools/tests`, never bare `pytest` from the repository root
-  **Why:** root collection walks `target/` (tens of GB) and `archive/`, takes minutes and ends in collection errors
 
 ## Test Modules
 

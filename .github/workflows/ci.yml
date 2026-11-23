@@ -60,19 +60,6 @@ jobs:
       # tolerates it with a reason.
       - run: cargo audit -D warnings
 
-  tools:
-    name: Ubuntu — Python tools
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Install Python dependencies
-        run: |
-          python3 -m venv .venv
-          .venv/bin/python -m pip install -r tools/requirements.txt
-      # Always pass the test directory: collecting from the repository root
-      # walks target/ and every other directory, which takes minutes.
-      - run: .venv/bin/python -m pytest tools/tests
-
   dovecot:
     name: Ubuntu — destructive Dovecot fixture
     runs-on: ubuntu-24.04
