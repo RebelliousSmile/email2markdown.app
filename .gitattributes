@@ -1,2 +1,5 @@
 # Gmail seed corpus: CRLF bytes compared to the generator output, never normalized.
 tests/fixtures/imap/seed/gmail/*.eml -text
+
+# Guides: sorties du moteur doc-pdf (EOL mélangés), comparées octet pour octet, jamais normalisées.
+aidd_docs/guides/output/** -text
