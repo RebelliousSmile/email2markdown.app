@@ -85,6 +85,8 @@ Le dossier `tools/` contient une chaîne de traitement indépendante qui travail
 
 > **Attention** : le code Rust n'appelle jamais ces scripts, et ils n'appellent jamais le binaire. Le seul lien est le **format de fichier** des notes. Si vous changez ce format, les deux côtés doivent évoluer ensemble.
 
+> **Bon à savoir** : ces scripts ne font plus partie du périmètre de l'application. Le routage est entièrement déterministe, par `destinations.yaml`, avec une option assistée désactivée par défaut. Le journal des modifications les dit archivés dans un dépôt séparé, mais le dossier `tools/` est toujours présent ici.
+
 ### Organisation
 
 | Dossier | Contenu |

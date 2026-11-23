@@ -77,7 +77,7 @@
     <Content>&#x9;Ajouter une sous-commande&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 59</Content>
+    <Content>p. 60</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
@@ -89,7 +89,7 @@
     <Content>&#x9;Ajouter une étape de nettoyage du corps&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 60</Content>
+    <Content>p. 61</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
@@ -101,7 +101,7 @@
     <Content>&#x9;Ajouter un réglage de comportement&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 61</Content>
+    <Content>p. 62</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
@@ -113,7 +113,7 @@
     <Content>&#x9;Ajouter un type de règle de destination&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 62</Content>
+    <Content>p. 63</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
@@ -125,7 +125,7 @@
     <Content>&#x9;Ajouter une destination ou une variante d’arborescence&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 63</Content>
+    <Content>p. 64</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
@@ -137,7 +137,7 @@
     <Content>&#x9;Ajouter une entrée au menu de l’icône&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 64</Content>
+    <Content>p. 65</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
@@ -149,7 +149,7 @@
     <Content>&#x9;Vérifier avant de livrer&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 65</Content>
+    <Content>p. 66</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

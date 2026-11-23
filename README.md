@@ -4,25 +4,13 @@
 
 Application Rust en ligne de commande, avec une icône de barre système en option (feature `tray`). Trois guides PDF l'accompagnent : [utilisateur](aidd_docs/guides/output/pdf/guide-utilisateur-v0.29.0.pdf), [contributeur](aidd_docs/guides/output/pdf/guide-contributeur-v0.29.0.pdf) et [développeur](aidd_docs/guides/output/pdf/guide-developpeur-v0.29.0.pdf).
 
-- [État du projet](#état-du-projet)
 - [Aperçu](#aperçu)
+- [Télécharger](#télécharger)
+- [État du projet](#état-du-projet)
 - [Prérequis](#prérequis)
 - [Démarrage rapide](#démarrage-rapide)
 - [Documentation](#documentation)
 - [Contribuer](#contribuer) · [Licence](#licence)
-
-## État du projet
-
-**Statut : 🧰 Beta.** Version 0.29.0, sous SemVer, pas encore de 1.0.
-
-- *Ça marche aujourd'hui :* export IMAP vers Markdown ; import des comptes Thunderbird ; routage déterministe par `destinations.yaml` ; fenêtre de revue du routage dans la barre système ; recherche contextuelle depuis un dossier ; audit en lecture seule des messages restés sur le serveur
-- *Pas encore :* connexion OAuth2 (un compte Gmail demande un mot de passe d'application)
-
-| Plateforme | État | Note |
-|---|---|---|
-| Windows | ✅ Build et tests en CI, binaire de release | — |
-| macOS | ✅ Build et tests en CI, binaire de release | — |
-| Linux | ✅ Build et tests en CI (Ubuntu 24.04), binaire de release | Dépendances GTK et WebKit pour la barre système |
 
 ## Aperçu
 
@@ -36,6 +24,25 @@ Depuis un dossier de vos notes, l'export contextuel retrouve les messages d'un c
 
 Les captures montrent des données fictives. Le [guide de l'utilisateur](aidd_docs/guides/output/pdf/guide-utilisateur-v0.29.0.pdf) détaille les autres écrans.
 
+## Télécharger
+
+Choisissez votre système : aucun prérequis, la barre système est incluse.
+
+| Système | Téléchargement | Fichier |
+|---|---|---|
+| [![Windows](https://img.shields.io/badge/Windows-0078D4?style=for-the-badge&logo=windows11&logoColor=white)](https://github.com/RebelliousSmile/email2markdown.app/releases/download/v0.29.0/email-to-markdown-v0.29.0-windows-x86_64.exe) | [Télécharger pour Windows](https://github.com/RebelliousSmile/email2markdown.app/releases/download/v0.29.0/email-to-markdown-v0.29.0-windows-x86_64.exe) | `email-to-markdown-v0.29.0-windows-x86_64.exe` |
+| [![macOS](https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/RebelliousSmile/email2markdown.app/releases/download/v0.28.1/email-to-markdown-v0.28.1-macos-native) | [Télécharger pour macOS](https://github.com/RebelliousSmile/email2markdown.app/releases/download/v0.28.1/email-to-markdown-v0.28.1-macos-native) | `email-to-markdown-v0.28.1-macos-native` (la 0.29.0 n'a pas de binaire macOS) |
+| [![Linux](https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/RebelliousSmile/email2markdown.app/releases/download/v0.29.0/email-to-markdown-v0.29.0-linux-x86_64) | [Télécharger pour Linux](https://github.com/RebelliousSmile/email2markdown.app/releases/download/v0.29.0/email-to-markdown-v0.29.0-linux-x86_64) | `email-to-markdown-v0.29.0-linux-x86_64` (GTK et WebKit requis pour la barre système) |
+
+Un fichier [`SHA256SUMS`](https://github.com/RebelliousSmile/email2markdown.app/releases/download/v0.29.0/SHA256SUMS) accompagne chaque release, et les [autres versions](https://github.com/RebelliousSmile/email2markdown.app/releases) sont sur la page des releases.
+
+## État du projet
+
+**Statut : 🧰 Beta.** Version 0.29.0, sous SemVer, pas encore de 1.0. Build et tests en CI sur Windows, macOS et Linux (Ubuntu 24.04).
+
+- *Ça marche aujourd'hui :* export IMAP vers Markdown ; import des comptes Thunderbird ; routage déterministe par `destinations.yaml` ; fenêtre de revue du routage dans la barre système ; recherche contextuelle depuis un dossier ; audit en lecture seule des messages restés sur le serveur
+- *Pas encore :* connexion OAuth2 (un compte Gmail demande un mot de passe d'application)
+
 ## Prérequis
 
 - Binaire précompilé : aucun prérequis
@@ -46,9 +53,7 @@ Les captures montrent des données fictives. Le [guide de l'utilisateur](aidd_do
 
 ## Démarrage rapide
 
-### Binaire précompilé
-
-Téléchargez le binaire de votre système sur la [page des releases](https://github.com/RebelliousSmile/email2markdown.app/releases) : `email-to-markdown-<version>-windows-x86_64.exe`, `email-to-markdown-<version>-macos-native` ou `email-to-markdown-<version>-linux-x86_64`. Un fichier `SHA256SUMS` accompagne chaque release. Ces binaires incluent la barre système.
+Le binaire téléchargé ci-dessus s'utilise tel quel. Les commandes de « Première configuration » écrivent le chemin d'une compilation locale (`./target/release/email-to-markdown`) : avec le binaire téléchargé, remplacez-le par son chemin.
 
 ### Depuis les sources
 
@@ -103,12 +108,6 @@ Trois guides PDF (version 0.29.0), à lire ou à télécharger :
 | Guide du développeur | Comprendre l’architecture et le code ; référence des commandes, de la configuration et du dépannage (chapitres 10 à 12) | [guide-developpeur-v0.29.0.pdf](aidd_docs/guides/output/pdf/guide-developpeur-v0.29.0.pdf) |
 
 Les problèmes de compilation ou de système (linker Windows, icône de barre système, certificats TLS) sont dans [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-
----
-
-## Note sur l'outillage Python
-
-Les scripts Python d'analyse (`tools/`) qui existaient dans les versions précédentes ont été archivés dans un dépôt séparé et ne font plus partie du périmètre de cette application. Le routage est désormais entièrement déterministe via `destinations.yaml`, avec une option IA désactivée par défaut.
 
 ---
 
