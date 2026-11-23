@@ -98,8 +98,6 @@ Le corps de la note commence par un bloc de code dont la langue est `email` et d
 
 À la lecture, `block_source` retrouve le premier bloc `email` ; `read_header`, `read_body` et `note_header_field(s)` y reviennent quand l'en-tête YAML est absent, ce qui garde les anciennes notes lisibles.
 
-> **Renvoi** : le dépôt contient un miroir Python de ce format, `tools/src/email_block.py` (chapitre 8).
-
 ### Les sections de médias
 
 `body_media(body)` extrait du corps les images et les liens (`BodyMedia`), après avoir converti les liens de style référence en liens en ligne par `inline_references`. Une image `data:` est exclue ; les liens doivent être distants (`http` ou `https`) et sont dédoublonnés par cible.

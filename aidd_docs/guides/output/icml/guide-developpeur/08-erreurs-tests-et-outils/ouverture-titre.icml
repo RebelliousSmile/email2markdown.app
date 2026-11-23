@@ -47,10 +47,10 @@
     <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Titre-chapitre">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>Erreurs, tests et outils </Content>
+    <Content>Erreurs et </Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Accent">
-    <Content>Python</Content>
+    <Content>tests</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

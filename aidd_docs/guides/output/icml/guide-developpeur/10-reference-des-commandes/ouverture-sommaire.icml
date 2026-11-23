@@ -77,13 +77,25 @@
     <Content>&#x9;Principes généraux&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 68</Content>
+    <Content>p. 66</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-section">
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-numéro">
     <Content>10.2</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
+    <Content>&#x9;Compiler et démarrer&#x9;</Content>
+  </CharacterStyleRange>
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
+    <Content>p. 66</Content>
+  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-section">
+  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-numéro">
+    <Content>10.3</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
     <Content>&#x9;import&#x9;</Content>
@@ -95,19 +107,19 @@
 <Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-section">
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-numéro">
-    <Content>10.3</Content>
+    <Content>10.4</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
     <Content>&#x9;export&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 69</Content>
+    <Content>p. 68</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-section">
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-numéro">
-    <Content>10.4</Content>
+    <Content>10.5</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
     <Content>&#x9;dest&#x9;</Content>
@@ -119,25 +131,25 @@
 <Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-section">
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-numéro">
-    <Content>10.5</Content>
+    <Content>10.6</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
     <Content>&#x9;Les commandes de maintenance&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 72</Content>
+    <Content>p. 71</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-section">
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-numéro">
-    <Content>10.6</Content>
+    <Content>10.7</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
     <Content>&#x9;contextual et tray&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 73</Content>
+    <Content>p. 72</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

@@ -195,7 +195,7 @@
     <Content>&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>Erreurs, tests et outils Python</Content>
+    <Content>Erreurs et tests</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
     <Content>&#x9;</Content>
@@ -219,7 +219,7 @@
     <Content>&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 59</Content>
+    <Content>p. 57</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
@@ -237,7 +237,7 @@
     <Content>&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 67</Content>
+    <Content>p. 65</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
@@ -255,7 +255,7 @@
     <Content>&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 75</Content>
+    <Content>p. 74</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
@@ -273,7 +273,7 @@
     <Content>&#x9;</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 82</Content>
+    <Content>p. 81</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

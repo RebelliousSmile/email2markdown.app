@@ -47,7 +47,7 @@
     <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Numéro-section">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>10.6</Content>
+    <Content>10.7</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

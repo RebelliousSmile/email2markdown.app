@@ -47,13 +47,13 @@
     <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Numéro-section">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>10.4</Content>
+    <Content>10.6</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Surtitre">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>dest</Content>
+    <Content>Les commandes de maintenance</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

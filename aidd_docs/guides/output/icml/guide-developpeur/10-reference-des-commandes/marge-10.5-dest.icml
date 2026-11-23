@@ -47,13 +47,13 @@
     <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Numéro-section">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>10.2</Content>
+    <Content>10.5</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Surtitre">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>import</Content>
+    <Content>dest</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

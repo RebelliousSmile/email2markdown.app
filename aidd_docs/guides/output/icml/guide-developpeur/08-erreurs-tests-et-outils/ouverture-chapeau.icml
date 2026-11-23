@@ -4,11 +4,6 @@
 <Document DOMVersion="8.0" Self="pandoc_doc">
     <RootCharacterStyleGroup Self="pandoc_character_styles">
       <CharacterStyle Self="$ID/NormalCharacterStyle" Name="Default" />
-      <CharacterStyle Self="CharacterStyle/Code-inline" Name="Code-inline">
-        <Properties>
-          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
-        </Properties>
-      </CharacterStyle>
     </RootCharacterStyleGroup>
     <RootParagraphStyleGroup Self="pandoc_paragraph_styles">
       <ParagraphStyle Self="$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle"
@@ -47,13 +42,7 @@
     <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Chapeau">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>Ce chapitre rassemble ce qui entoure le code métier : la politique d’erreurs, l’organisation des tests, et le dossier </Content>
-  </CharacterStyleRange>
-  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
-    <Content>tools/</Content>
-  </CharacterStyleRange>
-  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>, un ensemble de scripts Python indépendant du binaire.</Content>
+    <Content>Ce chapitre rassemble ce qui entoure le code métier : la politique d’erreurs et l’organisation des tests.</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

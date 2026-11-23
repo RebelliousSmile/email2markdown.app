@@ -93,18 +93,6 @@
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
-<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-section">
-  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-numéro">
-    <Content>8.3</Content>
-  </CharacterStyleRange>
-  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>&#x9;Les outils Python&#x9;</Content>
-  </CharacterStyleRange>
-  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Sommaire-page">
-    <Content>p. 56</Content>
-  </CharacterStyleRange>
-</ParagraphStyleRange>
-<Br />
 </Story>
   
 </Document>

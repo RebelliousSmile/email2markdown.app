@@ -1,6 +1,6 @@
-# Erreurs, tests et outils *Python*
+# Erreurs et *tests*
 
-Ce chapitre rassemble ce qui entoure le code métier : la politique d'erreurs, l'organisation des tests, et le dossier `tools/`, un ensemble de scripts Python indépendant du binaire.
+Ce chapitre rassemble ce qui entoure le code métier : la politique d'erreurs et l'organisation des tests.
 
 ## La politique d'erreurs
 
@@ -78,45 +78,3 @@ Utilisez les commandes de `cargo`, y compris avec la fonctionnalité `tray` pour
 `EMAIL_TO_MARKDOWN_IMAP_TEST=1 cargo test --test imap_integration -- --ignored --skip gmail_ --test-threads=1`
 
 La dernière commande lance les tests IMAP réels et suppose que le conteneur décrit par `tests/fixtures/imap/compose.yaml` est démarré. Les tests qui touchent à un vrai compte Gmail exigent en plus `EMAIL_TO_MARKDOWN_GMAIL_DESTRUCTIVE_TEST=1` et un compte de test isolé.
-
-## Les outils Python
-
-Le dossier `tools/` contient une chaîne de traitement indépendante qui travaille sur les notes déjà exportées.
-
-> **Attention** : le code Rust n'appelle jamais ces scripts, et ils n'appellent jamais le binaire. Le seul lien est le **format de fichier** des notes. Si vous changez ce format, les deux côtés doivent évoluer ensemble.
-
-> **Bon à savoir** : ces scripts ne font plus partie du périmètre de l'application. Le routage est entièrement déterministe, par `destinations.yaml`, avec une option assistée désactivée par défaut. Le journal des modifications les dit archivés dans un dépôt séparé, mais le dossier `tools/` est toujours présent ici.
-
-### Organisation
-
-| Dossier | Contenu |
-| --- | --- |
-| `tools/src/` | bibliothèque : analyse (`parser.py`, `email_block.py`), déduplication, regroupement, catégorisation, archivage, classification de dossiers, résumés, appel à un modèle de langage (`llm.py`) |
-| `tools/scripts/` | scripts exécutables : `classify.py`, `deduplicate_labels.py`, `group_notes.py`, `reorganize.py`, `summarize.py`, `apply_template.py`, `validate_format.py` |
-| `tools/templates/` | modèles de documents (`activity.md`, `contact_list.md`, `meeting_recap.md`, `sent_digest.md`) |
-| `tools/data/` | corpus et modèle appris (`corpus.jsonl`, `known_classes.json`, `model.pkl`, `vectorizer.pkl`) |
-| `tools/config/` | `config.yaml` et son modèle `config.yaml.example` |
-| `tools/tests/` | tests `pytest` |
-
-Les dépendances sont dans `tools/requirements.txt` : `python-frontmatter`, `PyYAML`, `scikit-learn`, `ollama`, `jinja2` et `pytest`.
-
-### Le lien avec le format Rust
-
-Deux modules Python reproduisent le format défini en Rust.
-
-- `tools/src/email_block.py` est le miroir de `email_block.rs` : il sépare le bloc ` ```email ` du reste de la note (`split_block`, `with_block`) et définit les clés d'en-tête (`HEADER_KEYS`). Les valeurs de l'en-tête YAML l'emportent sur celles du bloc, comme dans le code Rust.
-- `tools/src/parser.py` expose `parse_email` et `EmailData`, et valide `email_type` contre `VALID_EMAIL_TYPES` (`direct`, `group`, `mailing_list`).
-
-> **Bon à savoir** : `VALID_EMAIL_TYPES` ne contient pas `newsletter` ni `unknown`, alors que `EmailType` côté Rust les produit. Avant de dépendre de cette validation pour une note de type newsletter, vérifiez le comportement réel du script.
-
-La déduplication utilise le couple `subject_hash` et expéditeur, deux champs que l'export écrit précisément pour cela.
-
-La classification de dossiers (`folder_classifier.py`) propose un chemin par apprentissage (`propose_path`), enregistre les choix de l'utilisateur (`record_decision`) et peut reconstruire le modèle depuis le corpus (`rebuild_model_from_corpus`). Elle est indépendante des règles de `destinations.yaml` : les deux systèmes de tri ne partagent ni code ni fichier.
-
-### Tester les outils
-
-Les tests Python se lancent depuis la racine du dépôt :
-
-`python -m pytest tools/tests`
-
-Ils couvrent le bloc `email` (`test_email_block.py`) et le démarrage à froid de la classification (`test_folder_classifier_coldstart.py`).

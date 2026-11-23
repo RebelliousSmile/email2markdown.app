@@ -25,6 +25,34 @@ Le binaire s'appelle `email-to-markdown`. Il charge d'abord le fichier `.env` du
 
 > **Renvoi** : le chapitre 1 relie chaque sous-commande à la fonction qu'elle appelle ; le chapitre 9 explique comment en ajouter une.
 
+## Compiler et démarrer
+
+Le binaire précompilé de la page des releases s'utilise tel quel : passez directement à la première configuration. Compilez seulement pour modifier le code ou pour une plateforme sans binaire.
+
+### Compiler depuis les sources
+
+La version de Rust est épinglée dans `rust-toolchain.toml` (1.93.0, avec `clippy`) ; `rustup` l'installe tout seul au premier appel de `cargo`. Aucune version inférieure n'a été essayée. Sous Linux et macOS, `rustup` s'installe par la commande suivante.
+
+`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+Deux compilations sont possibles. Le binaire se trouve ensuite dans `target/release/` (`email-to-markdown.exe` sous Windows).
+
+| Commande | Résultat |
+| --- | --- |
+| `cargo build --release` | ligne de commande seule |
+| `cargo build --release --features tray` | ajoute l'icône de notification et les fenêtres |
+
+Sous Linux, la fonctionnalité `tray` demande des paquets système, ceux qu'installe la CI sous Ubuntu 24.04 : `build-essential`, `pkg-config`, `libssl-dev`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev` et `libxdo-dev`, à installer par `sudo apt-get install`. Le chapitre 1 décrit la fonctionnalité `tray`, et les pannes de compilation sous Windows sont dans `TROUBLESHOOTING.md`.
+
+### Première configuration
+
+Avant de commencer, activez l'accès IMAP sur le serveur de messagerie. Un compte Gmail protégé par une double authentification demande un mot de passe d'application. Les commandes ci-dessous appellent `email-to-markdown` ; après une compilation locale, écrivez `./target/release/email-to-markdown`.
+
+1. Importez les comptes de Thunderbird, qui doit être fermé : `email-to-markdown import --extract-passwords`.
+2. Renseignez `export_base_dir` et `notes_dir` dans `settings.yaml` (chapitre 11).
+3. Définissez l'arborescence de rangement dans `destinations.yaml`, à la main ou par `dest add` et `dest suggest`.
+4. Vérifiez que les comptes sont vus : `email-to-markdown export --list-accounts`.
+
 ## `import`
 
 `import` génère `accounts.yaml`, qui ne contient que les paramètres de connexion, dans le répertoire de configuration du système.
@@ -86,7 +114,7 @@ Quelques exemples :
 `email-to-markdown export --config /chemin/vers/accounts.yaml`\
 `email-to-markdown export --account Gmail --delete-after-export`
 
-> **Renvoi** : le chapitre 3 suit l'export de la ligne de commande jusqu'à l'écriture du fichier ; le chapitre 4 décrit le format de la note.
+> **Renvoi** : chapitre 3 pour le trajet de l'export, chapitre 4 pour le format de la note.
 
 ## `dest`
 

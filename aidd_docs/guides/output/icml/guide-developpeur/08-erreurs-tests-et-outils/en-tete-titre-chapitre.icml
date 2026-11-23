@@ -47,7 +47,7 @@
     <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Titre-courant" Justification="RightAlign">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>Erreurs, tests et outils Python </Content>
+    <Content>Erreurs et tests </Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Puce">
     <Content>▶</Content>

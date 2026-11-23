@@ -1563,7 +1563,7 @@
 <Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>Pour comprendre une note exportée de bout en bout, lisez dans l’ordre le chapitre 3 (export IMAP), le chapitre 4 (corps et format des notes), puis le chapitre 5 (routage). Les chapitres 6 et 7 couvrent ce qui entoure l’export : suppressions côté serveur et interface graphique. Le chapitre 10 est la référence de la ligne de commande : syntaxe, options et exemples de chaque sous-commande. Le chapitre 11 est la référence de la configuration : les options de chaque fichier et les changements qu’elles opèrent. Le chapitre 12 indique où atterrissent les fichiers d’un export et ce qu’il faut vérifier en cas de panne.</Content>
+    <Content>Pour comprendre une note exportée de bout en bout, lisez dans l’ordre le chapitre 3 (export IMAP), le chapitre 4 (corps et format des notes), puis le chapitre 5 (routage). Les chapitres 6 et 7 couvrent ce qui entoure l’export : suppressions côté serveur et interface graphique. Le chapitre 10 explique comment compiler et configurer pour la première fois, puis sert de référence à la ligne de commande : syntaxe, options et exemples de chaque sous-commande. Le chapitre 11 est la référence de la configuration : les options de chaque fichier et les changements qu’elles opèrent. Le chapitre 12 indique où atterrissent les fichiers d’un export et ce qu’il faut vérifier en cas de panne.</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 

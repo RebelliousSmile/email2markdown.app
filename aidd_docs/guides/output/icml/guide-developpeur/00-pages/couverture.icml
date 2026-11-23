@@ -117,7 +117,7 @@
 <Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Sommaire-ligne">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>08&#x9;Erreurs, tests et outils Python</Content>
+    <Content>08&#x9;Erreurs et tests</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

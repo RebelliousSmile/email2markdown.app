@@ -48,8 +48,6 @@ Les étapes vivent dans `cleaner::clean`, fonction de six blocs numérotés. Pou
 
 > **À retenir** : l'ordre se décide par un test réaliste, pas par le plan. Les étapes 2 et 3 ont été inversées par rapport au plan initial parce que seule l'exécution sur des liens sociaux empilés a révélé l'interaction. Si votre étape modifie les sauts de ligne ou les parenthèses, vérifiez-la avant et après `extract_social_footer` et `reattach_urls`, puis documentez l'écart en commentaire à côté de l'appel.
 
-Si votre étape change la structure d'une note déjà lue par les outils Python (par exemple une nouvelle section), mettez aussi à jour `tools/src/email_block.py` ou l'analyseur concerné.
-
 ## Ajouter un réglage de comportement
 
 Prenons un réglage par compte, comme `quote_depth`. La règle de types impose `Option<T>` dans la configuration et une valeur concrète dans le runtime.

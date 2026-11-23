@@ -4,16 +4,6 @@
 <Document DOMVersion="8.0" Self="pandoc_doc">
     <RootCharacterStyleGroup Self="pandoc_character_styles">
       <CharacterStyle Self="$ID/NormalCharacterStyle" Name="Default" />
-      <CharacterStyle Self="CharacterStyle/Encadré-libellé" Name="Encadré-libellé">
-        <Properties>
-          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
-        </Properties>
-      </CharacterStyle>
-      <CharacterStyle Self="CharacterStyle/Code-inline" Name="Code-inline">
-        <Properties>
-          <BasedOn type="object">$ID/NormalCharacterStyle</BasedOn>
-        </Properties>
-      </CharacterStyle>
     </RootCharacterStyleGroup>
     <RootParagraphStyleGroup Self="pandoc_paragraph_styles">
       <ParagraphStyle Self="$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle"
@@ -29,7 +19,12 @@
           </TabList>
         </Properties>
       </ParagraphStyle>
-      <ParagraphStyle Self="ParagraphStyle/Note-renvoi" Name="Note-renvoi">
+      <ParagraphStyle Self="ParagraphStyle/Surtitre" Name="Surtitre">
+        <Properties>
+          <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
+        </Properties>
+      </ParagraphStyle>
+      <ParagraphStyle Self="ParagraphStyle/Numéro-section" Name="Numéro-section">
         <Properties>
           <BasedOn type="object">$ID/NormalParagraphStyle</BasedOn>
         </Properties>
@@ -50,18 +45,15 @@
       AppliedTOCStyle="n"
       AppliedNamedGrid="n" >
     <StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" />
-<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Note-renvoi">
-  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Encadré-libellé">
-    <Content>Renvoi</Content>
-  </CharacterStyleRange>
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Numéro-section">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content> : le dépôt contient un miroir Python de ce format, </Content>
+    <Content>10.2</Content>
   </CharacterStyleRange>
-  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
-    <Content>tools/src/email_block.py</Content>
-  </CharacterStyleRange>
+</ParagraphStyleRange>
+<Br />
+<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Surtitre">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content> (chapitre 8).</Content>
+    <Content>Compiler et démarrer</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />

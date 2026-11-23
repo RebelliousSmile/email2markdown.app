@@ -45,55 +45,15 @@ Un fichier [`SHA256SUMS`](https://github.com/RebelliousSmile/email2markdown.app/
 
 ## Prérequis
 
-- Binaire précompilé : aucun prérequis
-- Compilation depuis les sources : Rust 1.93.0, épinglé dans `rust-toolchain.toml` (aucune version inférieure n'a été essayée)
 - Accès IMAP activé sur le serveur email
 - Gmail avec 2FA : [mot de passe spécifique à l'application](https://support.google.com/accounts/answer/185833)
-- Pour `--extract-passwords` : Thunderbird installé et **fermé**
+- Aucun autre prérequis avec le binaire précompilé
 
 ## Démarrage rapide
 
-Le binaire téléchargé ci-dessus s'utilise tel quel. Les commandes de « Première configuration » écrivent le chemin d'une compilation locale (`./target/release/email-to-markdown`) : avec le binaire téléchargé, remplacez-le par son chemin.
+Téléchargez le binaire de votre système ci-dessus, puis suivez le [guide de l'utilisateur](aidd_docs/guides/output/pdf/guide-utilisateur-v0.29.0.pdf) : installation, ajout des comptes et premier export.
 
-### Depuis les sources
-
-```bash
-# Installer Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Compiler en mode release
-cargo build --release
-
-# Compiler avec la barre système et les fenêtres
-cargo build --release --features tray
-```
-
-**Linux** — dépendances système requises pour la barre système et les fenêtres :
-```bash
-sudo apt-get install build-essential pkg-config libssl-dev libgtk-3-dev \
-  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
-```
-
-### Première configuration
-
-```bash
-# 1. Importer automatiquement les comptes depuis Thunderbird
-./target/release/email-to-markdown import --extract-passwords
-
-# 2. Choisir le répertoire d'export et le répertoire de notes dans settings.yaml
-# Voir le chapitre 11 du guide du développeur (référence de la configuration)
-
-# 3. Définir votre arborescence de rangement dans destinations.yaml
-#    (à la main, ou via `dest add` / `dest suggest` — voir les chapitres 10 et 11 du guide du développeur)
-
-# 4. Vérifier que les comptes sont vus
-./target/release/email-to-markdown export --list-accounts
-```
-
-> Les fichiers de configuration sont stockés dans le répertoire système :
-> - **Windows** : `%APPDATA%\email-to-markdown\`
-> - **macOS** : `~/Library/Application Support/email-to-markdown/`
-> - **Linux** : `~/.config/email-to-markdown/`
+Compiler depuis les sources, importer les comptes de Thunderbird en ligne de commande et configurer les fichiers se trouvent dans le [guide du développeur](aidd_docs/guides/output/pdf/guide-developpeur-v0.29.0.pdf) (chapitres 10 et 11).
 
 ---
 
@@ -105,7 +65,7 @@ Trois guides PDF (version 0.29.0), à lire ou à télécharger :
 |-------|----------|-----|
 | Guide de l’utilisateur | Installer et utiliser l’application au quotidien, dépannage compris | [guide-utilisateur-v0.29.0.pdf](aidd_docs/guides/output/pdf/guide-utilisateur-v0.29.0.pdf) |
 | Guide du contributeur | Participer au projet | [guide-contributeur-v0.29.0.pdf](aidd_docs/guides/output/pdf/guide-contributeur-v0.29.0.pdf) |
-| Guide du développeur | Comprendre l’architecture et le code ; référence des commandes, de la configuration et du dépannage (chapitres 10 à 12) | [guide-developpeur-v0.29.0.pdf](aidd_docs/guides/output/pdf/guide-developpeur-v0.29.0.pdf) |
+| Guide du développeur | Comprendre l’architecture et le code ; compilation, référence des commandes, de la configuration et du dépannage (chapitres 10 à 12) | [guide-developpeur-v0.29.0.pdf](aidd_docs/guides/output/pdf/guide-developpeur-v0.29.0.pdf) |
 
 Les problèmes de compilation ou de système (linker Windows, icône de barre système, certificats TLS) sont dans [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 

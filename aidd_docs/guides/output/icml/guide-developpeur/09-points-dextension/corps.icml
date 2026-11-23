@@ -483,18 +483,6 @@
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
-<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Courant">
-  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content>Si votre étape change la structure d’une note déjà lue par les outils Python (par exemple une nouvelle section), mettez aussi à jour </Content>
-  </CharacterStyleRange>
-  <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Code-inline">
-    <Content>tools/src/email_block.py</Content>
-  </CharacterStyleRange>
-  <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content> ou l’analyseur concerné.</Content>
-  </CharacterStyleRange>
-</ParagraphStyleRange>
-<Br />
 <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Intertitre-1">
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
     <Content>Ajouter un réglage de comportement</Content>

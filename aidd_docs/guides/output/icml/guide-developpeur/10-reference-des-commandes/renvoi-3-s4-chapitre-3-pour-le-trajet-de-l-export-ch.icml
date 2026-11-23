@@ -50,7 +50,7 @@
     <Content>Renvoi</Content>
   </CharacterStyleRange>
   <CharacterStyleRange AppliedCharacterStyle="$ID/NormalCharacterStyle">
-    <Content> : le chapitre 3 suit l’export de la ligne de commande jusqu’à l’écriture du fichier ; le chapitre 4 décrit le format de la note.</Content>
+    <Content> : chapitre 3 pour le trajet de l’export, chapitre 4 pour le format de la note.</Content>
   </CharacterStyleRange>
 </ParagraphStyleRange>
 <Br />
